@@ -1,0 +1,36 @@
+# C++ Backend Dependencies for ML-EDSL Phase 4+
+# This file documents system-level dependencies for the MLIR backend
+
+# Python packages (also listed in requirements.txt)
+pybind11>=2.10.0
+numpy>=1.20.0
+pytest>=6.0.0
+
+# System Dependencies (install via package manager):
+
+# Ubuntu/Debian:
+# sudo apt update
+# sudo apt install cmake build-essential
+# sudo apt install llvm-18-dev mlir-18-tools libmlir-18-dev
+# OR for latest: sudo apt install llvm-dev mlir-tools libmlir-dev
+
+# macOS:
+# brew install cmake llvm@18
+# OR for latest: brew install cmake llvm
+
+# Fedora/CentOS/RHEL:
+# sudo dnf install cmake gcc-c++
+# sudo dnf install llvm-devel mlir-devel
+
+# Minimum Required Versions:
+# - CMake >= 3.20
+# - LLVM/MLIR >= 18 (Phase 4 tested with LLVM 18)
+# - C++17 compatible compiler (GCC 9+, Clang 10+, MSVC 2019+)
+# - Python >= 3.8
+
+# Build Process:
+# 1. Install system dependencies above
+# 2. pip install -r requirements.txt
+# 3. mkdir build && cd build
+# 4. cmake .. && make
+# 5. cd .. && python -m pytest tests/ -v
