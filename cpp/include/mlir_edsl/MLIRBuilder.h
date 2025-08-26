@@ -8,6 +8,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 namespace mlir_edsl {
 
@@ -34,12 +35,23 @@ public:
     
     // Function generation
     void createFunction(const std::string& name, mlir::Value result);
+
+    void createFunctionWithParamsSetup(
+        const std::vector<std::pair<std::string, std::string>>& params
+    );
+    
+    void finalizeFunctionWithParams(
+        const std::string& name,
+        mlir::Value result
+    );
     
     // Get generated MLIR as string
     std::string getMLIRString();
     
     // Get generated LLVM IR as string
     std::string getLLVMIRString();
+
+    mlir::Value getParameter(const std::string& name);
     
     // Reset the builder for a new function
     void reset();
@@ -59,6 +71,8 @@ private:
     // Type promotion helpers
     std::pair<mlir::Value, mlir::Value> promoteTypes(mlir::Value lhs, mlir::Value rhs);
     mlir::Type getPromotedType(mlir::Type lhs, mlir::Type rhs) const;
+
+    std::unordered_map<std::string, mlir::Value> parameterMap;
 };
 
 } // namespace mlir_edsl

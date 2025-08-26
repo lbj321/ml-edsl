@@ -37,6 +37,12 @@ PYBIND11_MODULE(_mlir_backend, m) {
              "Create division operation")
         .def("create_function", &mlir_edsl::MLIRBuilder::createFunction,
              "Create function with given name and result value")
+        .def("create_function_with_params_setup", &mlir_edsl::MLIRBuilder::createFunctionWithParamsSetup,
+             "Set up function parameters without finalizing")
+        .def("finalize_function_with_params", &mlir_edsl::MLIRBuilder::finalizeFunctionWithParams,
+             "Finalize function with parameters")
+        .def("get_parameter", &mlir_edsl::MLIRBuilder::getParameter,
+             "Get parameter by name")
         .def("get_mlir_string", &mlir_edsl::MLIRBuilder::getMLIRString,
              "Get generated MLIR as string")
         .def("get_llvm_ir_string", &mlir_edsl::MLIRBuilder::getLLVMIRString,
@@ -52,13 +58,17 @@ PYBIND11_MODULE(_mlir_backend, m) {
              "Compile LLVM IR string to executable function",
              py::return_value_policy::reference)
         .def("call_int32_function", &mlir_edsl::MLIRExecutor::callInt32Function,
-             "Execute compiled function returning int32")
+             "Execute compiled function returning int32",
+             py::arg("funcPtr"), py::arg("intArgs") = std::vector<int32_t>(), py::arg("floatArgs") = std::vector<float>())
         .def("call_float_function", &mlir_edsl::MLIRExecutor::callFloatFunction,
-             "Execute compiled function returning float")
+             "Execute compiled function returning float",
+             py::arg("funcPtr"), py::arg("intArgs") = std::vector<int32_t>(), py::arg("floatArgs") = std::vector<float>())
         .def("is_initialized", &mlir_edsl::MLIRExecutor::isInitialized,
              "Check if executor is initialized")
         .def("get_last_error", &mlir_edsl::MLIRExecutor::getLastError,
              "Get last error message")
+        .def("clear", &mlir_edsl::MLIRExecutor::clear,
+             "Clear JIT engine")
         .def("set_optimization_level", [](mlir_edsl::MLIRExecutor& self, int level) {
             mlir_edsl::MLIRExecutor::OptLevel opt;
             if (level == 0) opt = mlir_edsl::MLIRExecutor::OptLevel::O0;

@@ -9,13 +9,13 @@ def test_ml_function_jit_execution():
     def add_example():
         return add(4, 6)
     
-    # Test JIT execution
-    result = add_example.execute()
+    # Test direct function call (JIT execution)
+    result = add_example()
     assert result == 10
     
-    # Test that regular call still works (prints MLIR)
-    ast_result = add_example()
-    assert hasattr(ast_result, 'op')  # AST BinaryOp object
+    # Test that execute() method also works
+    result2 = add_example.execute()
+    assert result2 == 10
 
 def test_ml_function_float_jit():
     """Test JIT execution with float operations"""
@@ -24,7 +24,7 @@ def test_ml_function_float_jit():
     def float_mul():
         return mul(2.5, 4.0)
     
-    result = float_mul.execute()
+    result = float_mul()
     assert abs(result - 10.0) < 1e-6
 
 def test_ml_function_subtraction_jit():
@@ -34,7 +34,7 @@ def test_ml_function_subtraction_jit():
     def sub_example():
         return sub(20, 8)
     
-    result = sub_example.execute()
+    result = sub_example()
     assert result == 12
 
 def test_ml_function_division_jit():
@@ -44,7 +44,7 @@ def test_ml_function_division_jit():
     def div_example():
         return div(15.0, 3.0)
     
-    result = div_example.execute()
+    result = div_example()
     assert abs(result - 5.0) < 1e-6
 
 def test_ml_function_complex_expression():
@@ -56,5 +56,5 @@ def test_ml_function_complex_expression():
         b = mul(2, 3)
         return sub(a, b)
     
-    result = complex_example.execute()
+    result = complex_example()
     assert result == 9  # (10 + 5) - (2 * 3) = 15 - 6 = 9

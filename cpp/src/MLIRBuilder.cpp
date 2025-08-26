@@ -124,6 +124,7 @@ void MLIRBuilder::createFunction(const std::string& name, mlir::Value result) {
     builder->create<mlir::func::ReturnOp>(builder->getUnknownLoc(), result);
 }
 
+
 std::string MLIRBuilder::getMLIRString() {
     std::string result;
     llvm::raw_string_ostream stream(result);
@@ -180,6 +181,79 @@ mlir::Type MLIRBuilder::getPromotedType(mlir::Type lhs, mlir::Type rhs) const {
         return getFloatType();
     }
     return getIntegerType();
+}
+
+mlir::Value MLIRBuilder::getParameter(const std::string& name) {
+    auto it = parameterMap.find(name);
+    if (it != parameterMap.end()) {
+        return it->second;
+    }
+    throw std::runtime_error("Parameter not found: " + name);
+}
+
+void MLIRBuilder::createFunctionWithParamsSetup(
+    const std::vector<std::pair<std::string, std::string>>& params) {
+        
+    if (!currentFunction) {
+        std::cerr << "Error: No current function!\n";
+        return;
+    }
+
+    std::cerr << "MLIRBuilder: Setting up function with " 
+              << params.size() << " parameters\n";
+
+
+    parameterMap.clear();
+
+    std::vector<mlir::Type> paramTypes;
+    for (const auto& [paramName, typeStr] : params) {
+        mlir::Type paramType;
+        if (typeStr == "i32") {
+            paramType = builder->getI32Type();
+        } else if (typeStr == "f32") {
+            paramType = builder->getF32Type();
+        } else {
+            throw std::runtime_error("Unsupported parameter type: " + typeStr);
+        }
+        paramTypes.push_back(paramType);
+    }
+
+    // Clear the current function's entry block and set up parameters
+    auto& entryBlock = currentFunction.front();
+    entryBlock.clear();
+
+    for(size_t i = 0; i < params.size(); i++) {
+        entryBlock.addArgument(paramTypes[i], builder->getUnknownLoc());
+    }
+
+    for (size_t i = 0; i < params.size(); i++) {
+        parameterMap[params[i].first] = entryBlock.getArgument(i);
+    }
+
+    builder->setInsertionPointToStart(&entryBlock);
+}
+
+void MLIRBuilder::finalizeFunctionWithParams(
+    const std::string& name,
+    mlir::Value result) {
+    
+    std::cerr << "MLIRBuilder: Finalizing function " << name << "\n";
+    
+    // Get argument types from the entry block
+    auto& entryBlock = currentFunction.front();
+    std::vector<mlir::Type> argTypes;
+    for (auto arg : entryBlock.getArguments()) {
+        argTypes.push_back(arg.getType());
+    }
+    
+    // Set function name and type with correct argument types
+    currentFunction.setName(name);
+    currentFunction.setFunctionType(
+        builder->getFunctionType(argTypes, {result.getType()})
+    );
+    
+    builder->setInsertionPointToEnd(&entryBlock);
+    builder->create<mlir::func::ReturnOp>(builder->getUnknownLoc(), result);
 }
 
 } // namespace mlir_edsl

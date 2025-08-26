@@ -2,7 +2,9 @@
 
 from abc import ABC, abstractmethod
 from typing import Union, TYPE_CHECKING
-from ._mlir_backend import MLIRBuilder
+
+if TYPE_CHECKING:
+    from ._mlir_backend import MLIRBuilder
 
 
 
@@ -61,3 +63,12 @@ class BinaryOp(Value):
             return builder.build_div(lhs_val, rhs_val)
         else:
             raise NotImplementedError(f"Operation '{self.op}' not valid")
+
+class Parameter(Value):
+    def __init__(self, name: str, value: Union[int, float]):
+        self.name = name
+        self.value = value
+        self.type = "i32" if isinstance(value, int) else "f32"
+
+    def to_mlir(self, builder: 'MLIRBuilder'):
+        pass

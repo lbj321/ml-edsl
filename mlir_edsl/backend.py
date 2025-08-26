@@ -1,6 +1,6 @@
 """C++ MLIR backend integration"""
 from typing import Union
-from .ast import Value, BinaryOp, Constant
+from .ast import Value, BinaryOp, Constant, Parameter
 
 try:
     from . import _mlir_backend
@@ -41,6 +41,10 @@ class CppMLIRBuilder:
         value_type = "i32" if isinstance(value, int) else "f32"
         return MLIRValue(cpp_value, self, value_type)  # Pass self, not self.builder
     
+    def get_parameter(self, name: str, param_type: str) -> MLIRValue:
+        cpp_value = self.builder.get_parameter(name)
+        return MLIRValue(cpp_value, self, param_type)
+    
     def add(self, left: MLIRValue, right: MLIRValue) -> MLIRValue:
         """Create addition operation"""
         cpp_result = self.builder.build_add(left.cpp_value, right.cpp_value)
@@ -72,14 +76,36 @@ class CppMLIRBuilder:
         self.reset()  # Auto-reset for next function
         return mlir_output
     
-    def execute_function(self, name: str, result: Union[MLIRValue, Value]) -> Union[int, float]:
+    def create_function_with_params_setup(self, param_list: list):
+        """Set up function parameters without finalizing"""
+        self.builder.create_function_with_params_setup(param_list)
+    
+    def finalize_function_with_params(self, name: str, result: MLIRValue):
+        """Finalize function with parameters"""
+        self.builder.finalize_function_with_params(name, result.cpp_value)
+    
+    def _infer_result_type(self, ast_node: Value) -> str:
+        """Infer the result type from AST node without building MLIR"""
+        if isinstance(ast_node, Constant):
+            return "i32" if isinstance(ast_node.value, int) else "f32"
+        elif isinstance(ast_node, Parameter):
+            return ast_node.type
+        elif isinstance(ast_node, BinaryOp):
+            # For binary ops, promote to float if either operand is float
+            left_type = self._infer_result_type(ast_node.left)
+            right_type = self._infer_result_type(ast_node.right)
+            return "f32" if left_type == "f32" or right_type == "f32" else "i32"
+        else:
+            return "i32"  # default
+
+    def execute_function(self, name: str, result: Union[MLIRValue, Value], 
+                        int_args: list = None, float_args: list = None) -> Union[int, float]:
         """Create function, compile with JIT, and execute it"""
-        # Convert AST to MLIRValue if needed
-        if not isinstance(result, MLIRValue):
-            result = self.convert_ast_to_mlir_value(result)
-        
-        self.builder.create_function(name, result.cpp_value)
+
         llvm_ir = self.builder.get_llvm_ir_string()
+        
+        # Clear JIT to avoid symbol collisions
+        self.executor.clear()
         
         # Compile and execute
         func_ptr = self.executor.compile_function(llvm_ir, name)
@@ -87,13 +113,23 @@ class CppMLIRBuilder:
             error = self.executor.get_last_error()
             raise RuntimeError(f"JIT compilation failed: {error}")
         
-        # Call function based on return type
-        if result.type == "i32":
-            return self.executor.call_int32_function(func_ptr)
-        elif result.type == "f32":
-            return self.executor.call_float_function(func_ptr)
+        # Get result type without rebuilding MLIR
+        if isinstance(result, MLIRValue):
+            result_type = result.type
         else:
-            raise RuntimeError(f"Unsupported return type: {result.type}")
+            result_type = self._infer_result_type(result)
+        
+        # Prepare parameter lists (default to empty if None)
+        int_args = int_args or []
+        float_args = float_args or []
+        
+        # Call function based on return type
+        if result_type == "i32":
+            return self.executor.call_int32_function(func_ptr, int_args, float_args)
+        elif result_type == "f32":
+            return self.executor.call_float_function(func_ptr, int_args, float_args)
+        else:
+            raise RuntimeError(f"Unsupported return type: {result_type}")
         
         # Note: We don't reset here since the function might be called multiple times
     
@@ -113,6 +149,8 @@ class CppMLIRBuilder:
         """Convert AST node to MLIRValue for C++ backend"""
         if isinstance(ast_node, Constant):
             return self.constant(ast_node.value)
+        elif isinstance(ast_node, Parameter):
+            return self.get_parameter(ast_node.name, ast_node.type)
         elif isinstance(ast_node, BinaryOp):
             left_mlir = self.convert_ast_to_mlir_value(ast_node.left)
             right_mlir = self.convert_ast_to_mlir_value(ast_node.right)
@@ -137,8 +175,6 @@ def get_backend():
     if HAS_CPP_BACKEND:
         if _global_builder is None:
             _global_builder = CppMLIRBuilder()
-        else:
-            _global_builder.reset()  # Always reset when retrieved
         return _global_builder
     else:
         return None
