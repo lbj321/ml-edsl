@@ -1,78 +1,85 @@
 #pragma once
 
-#include "mlir/IR/Builders.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/MLIRContext.h"
-#include "mlir/IR/Value.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include <memory>
 #include <string>
 #include <unordered_map>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Value.h"
+
 namespace mlir_edsl {
 
 class MLIRBuilder {
-public:
+   public:
     MLIRBuilder();
     ~MLIRBuilder();
 
     // Initialize a new MLIR module
     void initializeModule();
-    
+
     // Create constants
     mlir::Value buildConstant(int32_t value);
     mlir::Value buildConstant(float value);
-    
+
     // Create binary operations
     mlir::Value buildAdd(mlir::Value lhs, mlir::Value rhs);
     mlir::Value buildSub(mlir::Value lhs, mlir::Value rhs);
     mlir::Value buildMul(mlir::Value lhs, mlir::Value rhs);
     mlir::Value buildDiv(mlir::Value lhs, mlir::Value rhs);
-    
+
     // Type conversion
     mlir::Value convertIntToFloat(mlir::Value intValue);
-    
+
+    mlir::Value buildCompare(const std::string& predicate, mlir::Value lhs, mlir::Value rhs);
+    mlir::Value buildIf(mlir::Value condition, mlir::Value thenValue, mlir::Value elseValue);
+
     // Function generation
     void createFunction(const std::string& name, mlir::Value result);
 
     void createFunctionWithParamsSetup(
-        const std::vector<std::pair<std::string, std::string>>& params
-    );
-    
-    void finalizeFunctionWithParams(
-        const std::string& name,
-        mlir::Value result
-    );
-    
+        const std::vector<std::pair<std::string, std::string>>& params);
+
+    void finalizeFunctionWithParams(const std::string& name,
+                                    mlir::Value result);
+
     // Get generated MLIR as string
     std::string getMLIRString();
-    
+
     // Get generated LLVM IR as string
     std::string getLLVMIRString();
 
     mlir::Value getParameter(const std::string& name);
-    
+
     // Reset the builder for a new function
     void reset();
 
-private:
+
+   private:
     std::unique_ptr<mlir::MLIRContext> context;
     std::unique_ptr<mlir::OpBuilder> builder;
     mlir::ModuleOp module;
     mlir::func::FuncOp currentFunction;
-    
+
     // Helper methods
     mlir::Type getIntegerType() const;
     mlir::Type getFloatType() const;
+    mlir::Type getBoolType() const;
     bool isIntegerType(mlir::Type type) const;
     bool isFloatType(mlir::Type type) const;
-    
+
+    mlir::arith::CmpIPredicate getIntegerPredicate(const std::string& pred) const;
+    mlir::arith::CmpFPredicate getFloatPredicate(const std::string& pred) const;
+
     // Type promotion helpers
-    std::pair<mlir::Value, mlir::Value> promoteTypes(mlir::Value lhs, mlir::Value rhs);
+    std::pair<mlir::Value, mlir::Value> promoteTypes(mlir::Value lhs,
+                                                     mlir::Value rhs);
     mlir::Type getPromotedType(mlir::Type lhs, mlir::Type rhs) const;
 
     std::unordered_map<std::string, mlir::Value> parameterMap;
 };
 
-} // namespace mlir_edsl
+}  // namespace mlir_edsl

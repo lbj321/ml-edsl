@@ -1,21 +1,25 @@
 #include "mlir_edsl/MLIRBuilder.h"
-#include "mlir_edsl/MLIRLowering.h"
-#include "mlir/IR/Builders.h"
-#include "mlir/IR/BuiltinTypes.h"
+
+#include <iostream>
+#include <sstream>
+
+#include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "llvm/Support/raw_ostream.h"
-#include <sstream>
-#include <iostream>
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir_edsl/MLIRLowering.h"
 
 namespace mlir_edsl {
 
 MLIRBuilder::MLIRBuilder() {
     context = std::make_unique<mlir::MLIRContext>();
-    
+
     context->getOrLoadDialect<mlir::arith::ArithDialect>();
     context->getOrLoadDialect<mlir::func::FuncDialect>();
-    
+    context->getOrLoadDialect<mlir::scf::SCFDialect>();
+
     builder = std::make_unique<mlir::OpBuilder>(context.get());
 }
 
@@ -37,7 +41,7 @@ void MLIRBuilder::initializeModule() {
     auto funcType = builder->getFunctionType({}, {});
     currentFunction = builder->create<mlir::func::FuncOp>(
         builder->getUnknownLoc(), "temp_function", funcType);
-    
+
     auto* entryBlock = currentFunction.addEntryBlock();
     builder->setInsertionPointToStart(entryBlock);
 }
@@ -63,10 +67,11 @@ mlir::Value MLIRBuilder::buildAdd(mlir::Value lhs, mlir::Value rhs) {
     auto [promotedLhs, promotedRhs] = promoteTypes(lhs, rhs);
 
     if (isIntegerType(promotedLhs.getType())) {
-        return builder->create<mlir::arith::AddIOp>(loc, promotedLhs, promotedRhs);
+        return builder->create<mlir::arith::AddIOp>(loc, promotedLhs,
+                                                    promotedRhs);
     }
 
-    return builder->create<mlir::arith::AddFOp>(loc, promotedLhs, promotedRhs);    
+    return builder->create<mlir::arith::AddFOp>(loc, promotedLhs, promotedRhs);
 }
 
 mlir::Value MLIRBuilder::buildSub(mlir::Value lhs, mlir::Value rhs) {
@@ -74,10 +79,11 @@ mlir::Value MLIRBuilder::buildSub(mlir::Value lhs, mlir::Value rhs) {
     auto [promotedLhs, promotedRhs] = promoteTypes(lhs, rhs);
 
     if (isIntegerType(promotedLhs.getType())) {
-        return builder->create<mlir::arith::SubIOp>(loc, promotedLhs, promotedRhs);
+        return builder->create<mlir::arith::SubIOp>(loc, promotedLhs,
+                                                    promotedRhs);
     }
 
-    return builder->create<mlir::arith::SubFOp>(loc, promotedLhs, promotedRhs);    
+    return builder->create<mlir::arith::SubFOp>(loc, promotedLhs, promotedRhs);
 }
 
 mlir::Value MLIRBuilder::buildMul(mlir::Value lhs, mlir::Value rhs) {
@@ -85,10 +91,11 @@ mlir::Value MLIRBuilder::buildMul(mlir::Value lhs, mlir::Value rhs) {
     auto [promotedLhs, promotedRhs] = promoteTypes(lhs, rhs);
 
     if (isIntegerType(promotedLhs.getType())) {
-        return builder->create<mlir::arith::MulIOp>(loc, promotedLhs, promotedRhs);
+        return builder->create<mlir::arith::MulIOp>(loc, promotedLhs,
+                                                    promotedRhs);
     }
 
-    return builder->create<mlir::arith::MulFOp>(loc, promotedLhs, promotedRhs);    
+    return builder->create<mlir::arith::MulFOp>(loc, promotedLhs, promotedRhs);
 }
 
 mlir::Value MLIRBuilder::buildDiv(mlir::Value lhs, mlir::Value rhs) {
@@ -96,10 +103,11 @@ mlir::Value MLIRBuilder::buildDiv(mlir::Value lhs, mlir::Value rhs) {
     auto [promotedLhs, promotedRhs] = promoteTypes(lhs, rhs);
 
     if (isIntegerType(promotedLhs.getType())) {
-        return builder->create<mlir::arith::DivSIOp>(loc, promotedLhs, promotedRhs);
+        return builder->create<mlir::arith::DivSIOp>(loc, promotedLhs,
+                                                     promotedRhs);
     }
 
-    return builder->create<mlir::arith::DivFOp>(loc, promotedLhs, promotedRhs);    
+    return builder->create<mlir::arith::DivFOp>(loc, promotedLhs, promotedRhs);
 }
 
 mlir::Value MLIRBuilder::convertIntToFloat(mlir::Value intValue) {
@@ -108,22 +116,98 @@ mlir::Value MLIRBuilder::convertIntToFloat(mlir::Value intValue) {
     return builder->create<mlir::arith::SIToFPOp>(loc, floatType, intValue);
 }
 
+mlir::arith::CmpIPredicate MLIRBuilder::getIntegerPredicate(
+    const std::string& pred) const {
+    // Map string to integer predicate enum
+    if (pred == "sgt") {
+        return mlir::arith::CmpIPredicate::sgt;  // signed greater than
+    } else if (pred == "slt") {
+        return mlir::arith::CmpIPredicate::slt;  // signed less than
+    } else if (pred == "eq") {
+        return mlir::arith::CmpIPredicate::eq;  // equal
+    } else if (pred == "ne") {
+        return mlir::arith::CmpIPredicate::ne;  // not equal
+    } else if (pred == "sge") {
+        return mlir::arith::CmpIPredicate::sge;  // signed greater or equal
+    } else if (pred == "sle") {
+        return mlir::arith::CmpIPredicate::sle;  // signed less or equal
+    } else {
+        throw std::runtime_error("Unsupported integer predicate: " + pred);
+    }
+}
+
+mlir::arith::CmpFPredicate MLIRBuilder::getFloatPredicate(
+    const std::string& pred) const {
+    // Map string to float predicate enum
+    if (pred == "ogt") {
+        return mlir::arith::CmpFPredicate::OGT;  // ordered greater than
+    } else if (pred == "olt") {
+        return mlir::arith::CmpFPredicate::OLT;  // ordered less than
+    } else if (pred == "oeq") {
+        return mlir::arith::CmpFPredicate::OEQ;  // ordered equal
+    } else if (pred == "one") {
+        return mlir::arith::CmpFPredicate::ONE;  // ordered not equal
+    } else if (pred == "oge") {
+        return mlir::arith::CmpFPredicate::OGE;  // ordered greater or equal
+    } else if (pred == "ole") {
+        return mlir::arith::CmpFPredicate::OLE;  // ordered less or equal
+    } else {
+        throw std::runtime_error("Unsupported float predicate: " + pred);
+    }
+}
+
+mlir::Value MLIRBuilder::buildCompare(const std::string& predicate,
+                                      mlir::Value lhs, mlir::Value rhs) {
+    auto loc = builder->getUnknownLoc();
+    auto [promotedLhs, promotedRhs] = promoteTypes(lhs, rhs);
+
+    if (isIntegerType(promotedLhs.getType())) {
+        auto pred = getIntegerPredicate(predicate);
+        return builder->create<mlir::arith::CmpIOp>(loc, pred, promotedLhs,
+                                                    promotedRhs);
+    }
+
+    auto pred = getFloatPredicate(predicate);
+    return builder->create<mlir::arith::CmpFOp>(loc, pred, promotedLhs,
+                                                promotedRhs);
+}
+
+mlir::Value MLIRBuilder::buildIf(mlir::Value condition, mlir::Value thenValue,
+                                 mlir::Value elseValue) {
+    auto loc = builder->getUnknownLoc();
+    auto resultType = thenValue.getType();
+
+    auto ifOp = builder->create<mlir::scf::IfOp>(loc, resultType, condition,
+                                                 /*withElseRegion*/ true);
+
+    auto* thenBlock = &ifOp.getThenRegion().front();
+    builder->setInsertionPointToStart(thenBlock);
+    builder->create<mlir::scf::YieldOp>(loc, thenValue);
+
+    auto* elseBlock = &ifOp.getElseRegion().front();
+    builder->setInsertionPointToStart(elseBlock);
+    builder->create<mlir::scf::YieldOp>(loc, elseValue);
+
+    builder->setInsertionPointAfter(ifOp);
+    return ifOp.getResult(0);
+}
+
 void MLIRBuilder::createFunction(const std::string& name, mlir::Value result) {
     std::cerr << "MLIRBuilder: Creating function " << name << "\n";
-    
+
     if (!currentFunction) {
         std::cerr << "Error: No current function!\n";
         return;
     }
-    
+
     currentFunction.setName(name);
-    currentFunction.setFunctionType(builder->getFunctionType({}, {result.getType()}));
-    
+    currentFunction.setFunctionType(
+        builder->getFunctionType({}, {result.getType()}));
+
     auto& entryBlock = currentFunction.front();
     builder->setInsertionPointToEnd(&entryBlock);
     builder->create<mlir::func::ReturnOp>(builder->getUnknownLoc(), result);
 }
-
 
 std::string MLIRBuilder::getMLIRString() {
     std::string result;
@@ -140,17 +224,13 @@ std::string MLIRBuilder::getLLVMIRString() {
     return lowering.lowerToLLVMIR(module);
 }
 
-void MLIRBuilder::reset() {
-    initializeModule();
-}
+void MLIRBuilder::reset() { initializeModule(); }
 
-mlir::Type MLIRBuilder::getIntegerType() const {
-    return builder->getI32Type();
-}
+mlir::Type MLIRBuilder::getIntegerType() const { return builder->getI32Type(); }
 
-mlir::Type MLIRBuilder::getFloatType() const {
-    return builder->getF32Type();
-}
+mlir::Type MLIRBuilder::getFloatType() const { return builder->getF32Type(); }
+
+mlir::Type MLIRBuilder::getBoolType() const { return builder->getI1Type(); }
 
 bool MLIRBuilder::isIntegerType(mlir::Type type) const {
     return mlir::isa<mlir::IntegerType>(type);
@@ -160,7 +240,8 @@ bool MLIRBuilder::isFloatType(mlir::Type type) const {
     return mlir::isa<mlir::FloatType>(type);
 }
 
-std::pair<mlir::Value, mlir::Value> MLIRBuilder::promoteTypes(mlir::Value lhs, mlir::Value rhs) {
+std::pair<mlir::Value, mlir::Value> MLIRBuilder::promoteTypes(mlir::Value lhs,
+                                                              mlir::Value rhs) {
     mlir::Type lhsType = lhs.getType();
     mlir::Type rhsType = rhs.getType();
     mlir::Type promotedType = getPromotedType(lhsType, rhsType);
@@ -193,15 +274,13 @@ mlir::Value MLIRBuilder::getParameter(const std::string& name) {
 
 void MLIRBuilder::createFunctionWithParamsSetup(
     const std::vector<std::pair<std::string, std::string>>& params) {
-        
     if (!currentFunction) {
         std::cerr << "Error: No current function!\n";
         return;
     }
 
-    std::cerr << "MLIRBuilder: Setting up function with " 
-              << params.size() << " parameters\n";
-
+    std::cerr << "MLIRBuilder: Setting up function with " << params.size()
+              << " parameters\n";
 
     parameterMap.clear();
 
@@ -222,7 +301,7 @@ void MLIRBuilder::createFunctionWithParamsSetup(
     auto& entryBlock = currentFunction.front();
     entryBlock.clear();
 
-    for(size_t i = 0; i < params.size(); i++) {
+    for (size_t i = 0; i < params.size(); i++) {
         entryBlock.addArgument(paramTypes[i], builder->getUnknownLoc());
     }
 
@@ -233,27 +312,24 @@ void MLIRBuilder::createFunctionWithParamsSetup(
     builder->setInsertionPointToStart(&entryBlock);
 }
 
-void MLIRBuilder::finalizeFunctionWithParams(
-    const std::string& name,
-    mlir::Value result) {
-    
+void MLIRBuilder::finalizeFunctionWithParams(const std::string& name,
+                                             mlir::Value result) {
     std::cerr << "MLIRBuilder: Finalizing function " << name << "\n";
-    
+
     // Get argument types from the entry block
     auto& entryBlock = currentFunction.front();
     std::vector<mlir::Type> argTypes;
     for (auto arg : entryBlock.getArguments()) {
         argTypes.push_back(arg.getType());
     }
-    
+
     // Set function name and type with correct argument types
     currentFunction.setName(name);
     currentFunction.setFunctionType(
-        builder->getFunctionType(argTypes, {result.getType()})
-    );
-    
+        builder->getFunctionType(argTypes, {result.getType()}));
+
     builder->setInsertionPointToEnd(&entryBlock);
     builder->create<mlir::func::ReturnOp>(builder->getUnknownLoc(), result);
 }
 
-} // namespace mlir_edsl
+}  // namespace mlir_edsl
