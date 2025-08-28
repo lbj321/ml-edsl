@@ -1,6 +1,6 @@
 """C++ MLIR backend integration"""
 from typing import Union
-from .ast import Value, BinaryOp, Constant, Parameter
+from .ast import Value, BinaryOp, Constant, Parameter, CompareOp, IfOp
 
 try:
     from . import _mlir_backend
@@ -69,12 +69,14 @@ class CppMLIRBuilder:
         result_type = "f32" if left.type == "f32" or right.type == "f32" else "i32"
         return MLIRValue(cpp_result, self, result_type)  # Pass self, not self.builder
     
-    def create_function(self, name: str, result: MLIRValue) -> str:
-        """Create a function and return MLIR string"""
-        self.builder.create_function(name, result.cpp_value)
-        mlir_output = self.builder.get_mlir_string()
-        self.reset()  # Auto-reset for next function
-        return mlir_output
+    def compare(self, predicate: str, left: MLIRValue, right:MLIRValue) -> MLIRValue:
+        cpp_result = self.builder.build_compare(predicate, left.cpp_value, right.cpp_value)
+        return MLIRValue(cpp_result, self, "i1")
+    
+    def if_else(self, condition: MLIRValue, then_value: MLIRValue, else_value: MLIRValue) -> MLIRValue:
+        cpp_result = self.builder.build_if(condition.cpp_value, then_value.cpp_value, else_value.cpp_value)
+        result_type = then_value.type
+        return MLIRValue(cpp_result, self, result_type)
     
     def create_function_with_params_setup(self, param_list: list):
         """Set up function parameters without finalizing"""
@@ -83,6 +85,11 @@ class CppMLIRBuilder:
     def finalize_function_with_params(self, name: str, result: MLIRValue):
         """Finalize function with parameters"""
         self.builder.finalize_function_with_params(name, result.cpp_value)
+    
+    def get_parameter(self, name: str, param_type: str = "i32") -> MLIRValue:
+        """Get a function parameter by name"""
+        cpp_value = self.builder.get_parameter(name)
+        return MLIRValue(cpp_value, self, param_type)
     
     def _infer_result_type(self, ast_node: Value) -> str:
         """Infer the result type from AST node without building MLIR"""
@@ -165,6 +172,15 @@ class CppMLIRBuilder:
                 return self.div(left_mlir, right_mlir)
             else:
                 raise ValueError(f"Unsupported operation: {ast_node.op}")
+        elif isinstance(ast_node, CompareOp):
+            left_mlir = self.convert_ast_to_mlir_value(ast_node.left)
+            right_mlir = self.convert_ast_to_mlir_value(ast_node.right)
+            return self.compare(ast_node.predicate, left_mlir, right_mlir)
+        elif isinstance(ast_node, IfOp):
+            cond_mlir = self.convert_ast_to_mlir_value(ast_node.condition)
+            then_mlir = self.convert_ast_to_mlir_value(ast_node.then_value)
+            else_mlir = self.convert_ast_to_mlir_value(ast_node.else_value)
+            return self.if_else(cond_mlir, then_mlir, else_mlir)
         else:
             raise ValueError(f"Unsupported AST node type: {type(ast_node)}")
 

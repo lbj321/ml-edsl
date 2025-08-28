@@ -192,22 +192,6 @@ mlir::Value MLIRBuilder::buildIf(mlir::Value condition, mlir::Value thenValue,
     return ifOp.getResult(0);
 }
 
-void MLIRBuilder::createFunction(const std::string& name, mlir::Value result) {
-    std::cerr << "MLIRBuilder: Creating function " << name << "\n";
-
-    if (!currentFunction) {
-        std::cerr << "Error: No current function!\n";
-        return;
-    }
-
-    currentFunction.setName(name);
-    currentFunction.setFunctionType(
-        builder->getFunctionType({}, {result.getType()}));
-
-    auto& entryBlock = currentFunction.front();
-    builder->setInsertionPointToEnd(&entryBlock);
-    builder->create<mlir::func::ReturnOp>(builder->getUnknownLoc(), result);
-}
 
 std::string MLIRBuilder::getMLIRString() {
     std::string result;
@@ -297,19 +281,24 @@ void MLIRBuilder::createFunctionWithParamsSetup(
         paramTypes.push_back(paramType);
     }
 
-    // Clear the current function's entry block and set up parameters
+    // Set up parameters for the function
     auto& entryBlock = currentFunction.front();
-    entryBlock.clear();
+    
+    // Only clear and rebuild the block if we have parameters
+    if (!params.empty()) {
+        entryBlock.clear();
+        
+        for (size_t i = 0; i < params.size(); i++) {
+            entryBlock.addArgument(paramTypes[i], builder->getUnknownLoc());
+        }
 
-    for (size_t i = 0; i < params.size(); i++) {
-        entryBlock.addArgument(paramTypes[i], builder->getUnknownLoc());
+        for (size_t i = 0; i < params.size(); i++) {
+            parameterMap[params[i].first] = entryBlock.getArgument(i);
+        }
+        
+        builder->setInsertionPointToStart(&entryBlock);
     }
-
-    for (size_t i = 0; i < params.size(); i++) {
-        parameterMap[params[i].first] = entryBlock.getArgument(i);
-    }
-
-    builder->setInsertionPointToStart(&entryBlock);
+    // For parameterless functions, leave existing operations intact
 }
 
 void MLIRBuilder::finalizeFunctionWithParams(const std::string& name,

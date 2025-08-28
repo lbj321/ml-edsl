@@ -8,8 +8,12 @@
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Transform/Transforms/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
@@ -39,6 +43,8 @@ void MLIRLowering::registerRequiredDialects() {
 void MLIRLowering::registerRequiredDialects(mlir::MLIRContext* context) {
     context->getOrLoadDialect<mlir::arith::ArithDialect>();
     context->getOrLoadDialect<mlir::func::FuncDialect>();
+    context->getOrLoadDialect<mlir::scf::SCFDialect>();
+    context->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
     context->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
 
     // Register LLVM translation interfaces
@@ -52,7 +58,12 @@ void MLIRLowering::setupLoweringPipeline() {
 }
 
 void MLIRLowering::addConversionPasses() {
+    // First lower SCF to ControlFlow dialect
+    passManager.addPass(mlir::createSCFToControlFlowPass());
+    
+    // Then lower everything to LLVM
     passManager.addPass(mlir::createArithToLLVMConversionPass());
+    passManager.addPass(mlir::createConvertControlFlowToLLVMPass());
     passManager.addPass(mlir::createConvertFuncToLLVMPass());
     passManager.addPass(mlir::createReconcileUnrealizedCastsPass());
 }

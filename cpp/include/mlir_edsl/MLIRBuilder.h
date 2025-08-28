@@ -38,8 +38,6 @@ class MLIRBuilder {
     mlir::Value buildIf(mlir::Value condition, mlir::Value thenValue, mlir::Value elseValue);
 
     // Function generation
-    void createFunction(const std::string& name, mlir::Value result);
-
     void createFunctionWithParamsSetup(
         const std::vector<std::pair<std::string, std::string>>& params);
 

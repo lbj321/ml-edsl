@@ -21,7 +21,8 @@ def benchmark_optimization(optimization_level, iterations=10000):
     mul_result = builder.build_mul(add_result, sub_result)  # 15 * 5 = 75
     div_result = builder.build_div(mul_result, c2)  # 75 / 2 = 37
     
-    builder.create_function('complex_fn', div_result)
+    builder.create_function_with_params_setup([])
+    builder.finalize_function_with_params('complex_fn', div_result)
     llvm_ir = builder.get_llvm_ir_string()
     
     # Setup executor with specified optimization level
@@ -90,7 +91,8 @@ def test_optimization_correctness():
     add_result = builder.build_add(mul_result, c3)  # 10.0 + 1.5 = 11.5  
     sub_result = builder.build_sub(add_result, c4)  # 11.5 - 0.5 = 11.0
     
-    builder.create_function('float_fn', sub_result)
+    builder.create_function_with_params_setup([])
+    builder.finalize_function_with_params('float_fn', sub_result)
     llvm_ir = builder.get_llvm_ir_string()
     
     # Test each optimization level gives same result
@@ -114,7 +116,8 @@ def test_optimization_simple_constant_folding():
     c2 = builder.build_constant(6) 
     result = builder.build_add(c1, c2)
     
-    builder.create_function('const_fold_fn', result)
+    builder.create_function_with_params_setup([])
+    builder.finalize_function_with_params('const_fold_fn', result)
     llvm_ir = builder.get_llvm_ir_string()
     
     print(f"\nOriginal LLVM IR:\n{llvm_ir}")

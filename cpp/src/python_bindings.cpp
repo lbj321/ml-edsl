@@ -35,8 +35,10 @@ PYBIND11_MODULE(_mlir_backend, m) {
              "Create multiplication operation")
         .def("build_div", &mlir_edsl::MLIRBuilder::buildDiv,
              "Create division operation")
-        .def("create_function", &mlir_edsl::MLIRBuilder::createFunction,
-             "Create function with given name and result value")
+        .def("build_compare", &mlir_edsl::MLIRBuilder::buildCompare,
+             "Create comparison operation")
+        .def("build_if", &mlir_edsl::MLIRBuilder::buildIf,
+             "Create if-else conditional operation")
         .def("create_function_with_params_setup", &mlir_edsl::MLIRBuilder::createFunctionWithParamsSetup,
              "Set up function parameters without finalizing")
         .def("finalize_function_with_params", &mlir_edsl::MLIRBuilder::finalizeFunctionWithParams,

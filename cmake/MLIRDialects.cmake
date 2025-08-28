@@ -51,6 +51,7 @@ set(MLIR_CURRENT_LIBS
     ${MLIR_ARITH_LIBS}
     ${MLIR_FUNC_LIBS}
     ${MLIR_LLVM_LIBS}
+    ${MLIR_SCF_LIBS}
     MLIRReconcileUnrealizedCasts
 )
 
