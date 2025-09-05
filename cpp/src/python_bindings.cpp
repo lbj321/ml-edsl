@@ -39,6 +39,10 @@ PYBIND11_MODULE(_mlir_backend, m) {
              "Create comparison operation")
         .def("build_if", &mlir_edsl::MLIRBuilder::buildIf,
              "Create if-else conditional operation")
+        .def("build_for_with_op", &mlir_edsl::MLIRBuilder::buildForWithOp,
+             "Create for loop with predefined operation")
+        .def("build_while_with_op", &mlir_edsl::MLIRBuilder::buildWhileWithOp,
+             "Create while loop with predefined operation")
         .def("create_function_with_params_setup", &mlir_edsl::MLIRBuilder::createFunctionWithParamsSetup,
              "Set up function parameters without finalizing")
         .def("finalize_function_with_params", &mlir_edsl::MLIRBuilder::finalizeFunctionWithParams,

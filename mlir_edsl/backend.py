@@ -1,6 +1,7 @@
 """C++ MLIR backend integration"""
 from typing import Union
 from .ast import Value, BinaryOp, Constant, Parameter, CompareOp, IfOp
+from .loop_ops import LoopOp
 
 try:
     from . import _mlir_backend
@@ -76,6 +77,26 @@ class CppMLIRBuilder:
     def if_else(self, condition: MLIRValue, then_value: MLIRValue, else_value: MLIRValue) -> MLIRValue:
         cpp_result = self.builder.build_if(condition.cpp_value, then_value.cpp_value, else_value.cpp_value)
         result_type = then_value.type
+        return MLIRValue(cpp_result, self, result_type)
+    
+    def for_loop(self, start: MLIRValue, end: MLIRValue, step: MLIRValue, 
+                 init_value: MLIRValue, operation: LoopOp) -> MLIRValue:
+        """Create for loop with predefined operation"""
+        cpp_result = self.builder.build_for_with_op(
+            start.cpp_value, end.cpp_value, step.cpp_value, 
+            init_value.cpp_value, operation.value
+        )
+        result_type = init_value.type  # Result type matches init_value type
+        return MLIRValue(cpp_result, self, result_type)
+    
+    def while_loop(self, init_value: MLIRValue, target: MLIRValue, 
+                   operation: LoopOp, condition: str) -> MLIRValue:
+        """Create while loop with predefined operation"""
+        cpp_result = self.builder.build_while_with_op(
+            init_value.cpp_value, target.cpp_value, 
+            operation.value, condition
+        )
+        result_type = init_value.type  # Result type matches init_value type
         return MLIRValue(cpp_result, self, result_type)
     
     def create_function_with_params_setup(self, param_list: list):

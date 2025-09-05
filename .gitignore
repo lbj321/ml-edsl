@@ -66,6 +66,7 @@ MANIFEST
 # IDE and editor files
 .vscode/
 .idea/
+.clangd
 *.swp
 *.swo
 *~
