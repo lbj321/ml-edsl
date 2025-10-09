@@ -79,6 +79,7 @@ cleanup() {
     echo "🧹 Cleaning build artifacts..."
     rm -rf build/
     rm -f mlir_edsl/_mlir_backend.so
+    rm -f mlir_edsl/ast_pb2.py
     # Clean Python cache
     find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
     find . -name "*.pyc" -delete 2>/dev/null || true
@@ -155,6 +156,17 @@ if [ -n "$COMPONENT" ]; then
 else
     make -j"$JOBS" "${MAKE_ARGS[@]}"
 fi
+
+# Generate Python Protocol Buffers code
+echo "📝 Generating Python Protocol Buffers code..."
+cd ..
+protoc --python_out=mlir_edsl --proto_path=cpp/schemas cpp/schemas/ast.proto
+if [ $? -eq 0 ]; then
+    echo "✅ Python Protocol Buffers generated successfully"
+else
+    echo "⚠️  Warning: Failed to generate Python Protocol Buffers (is protoc installed?)"
+fi
+cd build
 
 # Install Python bindings if they were built
 if [ -f "cpp/_mlir_backend.so" ]; then

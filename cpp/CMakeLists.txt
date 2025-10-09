@@ -1,5 +1,8 @@
 # C++ Components CMakeLists.txt
 
+# Find pybind11 early since core library now needs it
+find_package(pybind11 REQUIRED)
+
 # Core MLIR components library
 add_library(mlir_edsl_core STATIC
     src/MLIRBuilder.cpp
@@ -13,6 +16,17 @@ target_include_directories(mlir_edsl_core PUBLIC
 target_include_mlir_directories(mlir_edsl_core)
 target_link_mlir_libraries(mlir_edsl_core)
 
+# Compile Protocol Buffers schemas
+compile_protobuf_schemas(mlir_edsl_core
+    SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/schemas/ast.proto
+    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated
+)
+
+# Link pybind11 to core library since MLIRBuilder now uses py::object
+target_link_libraries(mlir_edsl_core PUBLIC
+    pybind11::pybind11
+)
+
 # JIT Executor component
 add_library(mlir_edsl_executor STATIC
     src/MLIRExecutor.cpp
@@ -25,9 +39,9 @@ target_include_directories(mlir_edsl_executor PUBLIC
 target_include_mlir_directories(mlir_edsl_executor)
 target_link_mlir_libraries(mlir_edsl_executor)
 
-# Python bindings module
-find_package(pybind11 REQUIRED)
+# Executor doesn't need protobuf
 
+# Python bindings module
 add_library(_mlir_backend MODULE
     src/python_bindings.cpp
 )

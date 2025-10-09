@@ -2,7 +2,7 @@
 
 import pytest
 from mlir_edsl.backend import HAS_CPP_BACKEND, get_backend, CppMLIRBuilder
-from mlir_edsl.loop_ops import LoopOp
+from mlir_edsl.control_flow import LoopOp
 
 # Skip all tests if C++ backend is not available
 pytestmark = pytest.mark.skipif(not HAS_CPP_BACKEND, reason="C++ backend not available")

@@ -1,16 +1,19 @@
 #include "mlir_edsl/MLIRBuilder.h"
 
-#include <iostream>
-
+#include "ast.pb.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OperationSupport.h"
+#include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
 #include "mlir_edsl/MLIRLowering.h"
 #include "llvm/Support/raw_ostream.h"
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include <stdexcept>
 
 namespace mlir_edsl {
 
@@ -38,13 +41,139 @@ MLIRBuilder::~MLIRBuilder() {
 void MLIRBuilder::initializeModule() {
   module = mlir::ModuleOp::create(builder->getUnknownLoc());
   builder->setInsertionPointToEnd(module.getBody());
+}
 
-  auto funcType = builder->getFunctionType({}, {});
-  currentFunction = builder->create<mlir::func::FuncOp>(
-      builder->getUnknownLoc(), "temp_function", funcType);
+mlir::Value MLIRBuilder::buildFromProtoBuf(const std::string &buffer) {
+  mlir_edsl::ASTNode pbNode;
+  if (!pbNode.ParseFromString(buffer)) {
+    throw std::runtime_error("Failed to parse protobuf AST");
+  }
+  return buildFromProtobufNode(pbNode);
+}
 
-  auto *entryBlock = currentFunction.addEntryBlock();
-  builder->setInsertionPointToStart(entryBlock);
+mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
+  if (node.has_constant()) {
+    const auto &constant = node.constant();
+    if (constant.value_type() == mlir_edsl::ValueType::I32) {
+      return buildConstant(constant.int_value());
+    } else if (constant.value_type() == mlir_edsl::ValueType::F32) {
+      return buildConstant(constant.float_value());
+    }
+
+  } else if (node.has_parameter()) {
+    const auto &param = node.parameter();
+    return getParameter(param.name());
+
+  } else if (node.has_binary_op()) {
+    const auto &binop = node.binary_op();
+    mlir::Value left = buildFromProtobufNode(binop.left());
+    mlir::Value right = buildFromProtobufNode(binop.right());
+
+    switch (binop.op_type()) {
+    case mlir_edsl::BinaryOpType::ADD:
+      return buildAdd(left, right);
+    case mlir_edsl::BinaryOpType::SUB:
+      return buildSub(left, right);
+    case mlir_edsl::BinaryOpType::MUL:
+      return buildMul(left, right);
+    case mlir_edsl::BinaryOpType::DIV:
+      return buildDiv(left, right);
+    default:
+      throw std::runtime_error("Unsupported binary operation");
+    }
+
+  } else if (node.has_compare_op()) {
+    const auto &cmp = node.compare_op();
+    mlir::Value left = buildFromProtobufNode(cmp.left());
+    mlir::Value right = buildFromProtobufNode(cmp.right());
+
+    auto [promotedLhs, promotedRhs] = promoteTypes(left, right);
+    auto loc = builder->getUnknownLoc();
+
+    if (isIntegerType(promotedLhs.getType())) {
+      auto pred = protobufToIntPredicate(cmp.predicate());
+      return builder->create<mlir::arith::CmpIOp>(loc, pred, promotedLhs,
+                                                  promotedRhs);
+    } else {
+      auto pred = protobufToFloatPredicate(cmp.predicate());
+      return builder->create<mlir::arith::CmpFOp>(loc, pred, promotedLhs,
+                                                  promotedRhs);
+    }
+
+  } else if (node.has_if_op()) {
+    const auto &ifop = node.if_op();
+    mlir::Value cond = buildFromProtobufNode(ifop.condition());
+    mlir::Value thenVal = buildFromProtobufNode(ifop.then_value());
+    mlir::Value elseVal = buildFromProtobufNode(ifop.else_value());
+    return buildIf(cond, thenVal, elseVal);
+
+  } else if (node.has_call_op()) {
+    const auto &call = node.call_op();
+    std::vector<mlir::Value> args;
+    for (const auto &arg : call.args()) {
+      args.push_back(buildFromProtobufNode(arg));
+    }
+    return callFunction(call.func_name(), args);
+
+  } else if (node.has_for_loop_op()) {
+    const auto &forloop = node.for_loop_op();
+    mlir::Value start = buildFromProtobufNode(forloop.start());
+    mlir::Value end = buildFromProtobufNode(forloop.end());
+    mlir::Value step = buildFromProtobufNode(forloop.step());
+    mlir::Value init_value = buildFromProtobufNode(forloop.init_value());
+    return buildForWithOp(start, end, step, init_value, forloop.operation());
+
+  } else if (node.has_while_loop_op()) {
+    const auto &whileloop = node.while_loop_op();
+    mlir::Value init_value = buildFromProtobufNode(whileloop.init_value());
+    mlir::Value target = buildFromProtobufNode(whileloop.target());
+    return buildWhileWithOp(init_value, target, whileloop.operation(),
+                            whileloop.predicate());
+  }
+
+  throw std::runtime_error("Unknown protobuf node type");
+}
+
+mlir::arith::CmpIPredicate
+MLIRBuilder::protobufToIntPredicate(mlir_edsl::ComparisonPredicate pred) const {
+  switch (pred) {
+  case mlir_edsl::ComparisonPredicate::SGT:
+    return mlir::arith::CmpIPredicate::sgt;
+  case mlir_edsl::ComparisonPredicate::SLT:
+    return mlir::arith::CmpIPredicate::slt;
+  case mlir_edsl::ComparisonPredicate::EQ:
+    return mlir::arith::CmpIPredicate::eq;
+  case mlir_edsl::ComparisonPredicate::NE:
+    return mlir::arith::CmpIPredicate::ne;
+  case mlir_edsl::ComparisonPredicate::SGE:
+    return mlir::arith::CmpIPredicate::sge;
+  case mlir_edsl::ComparisonPredicate::SLE:
+    return mlir::arith::CmpIPredicate::sle;
+  default:
+    throw std::runtime_error(
+        "Invalid or unsupported integer comparison predicate");
+  }
+}
+
+mlir::arith::CmpFPredicate MLIRBuilder::protobufToFloatPredicate(
+    mlir_edsl::ComparisonPredicate pred) const {
+  switch (pred) {
+  case mlir_edsl::ComparisonPredicate::OGT:
+    return mlir::arith::CmpFPredicate::OGT;
+  case mlir_edsl::ComparisonPredicate::OLT:
+    return mlir::arith::CmpFPredicate::OLT;
+  case mlir_edsl::ComparisonPredicate::OEQ:
+    return mlir::arith::CmpFPredicate::OEQ;
+  case mlir_edsl::ComparisonPredicate::ONE:
+    return mlir::arith::CmpFPredicate::ONE;
+  case mlir_edsl::ComparisonPredicate::OGE:
+    return mlir::arith::CmpFPredicate::OGE;
+  case mlir_edsl::ComparisonPredicate::OLE:
+    return mlir::arith::CmpFPredicate::OLE;
+  default:
+    throw std::runtime_error(
+        "Invalid or unsupported float comparison predicate");
+  }
 }
 
 mlir::Value MLIRBuilder::buildConstant(int32_t value) {
@@ -113,58 +242,18 @@ mlir::Value MLIRBuilder::convertIntToFloat(mlir::Value intValue) {
   return builder->create<mlir::arith::SIToFPOp>(loc, floatType, intValue);
 }
 
-mlir::arith::CmpIPredicate
-MLIRBuilder::getIntegerPredicate(const std::string &pred) const {
-  // Map string to integer predicate enum
-  if (pred == "sgt") {
-    return mlir::arith::CmpIPredicate::sgt; // signed greater than
-  } else if (pred == "slt") {
-    return mlir::arith::CmpIPredicate::slt; // signed less than
-  } else if (pred == "eq") {
-    return mlir::arith::CmpIPredicate::eq; // equal
-  } else if (pred == "ne") {
-    return mlir::arith::CmpIPredicate::ne; // not equal
-  } else if (pred == "sge") {
-    return mlir::arith::CmpIPredicate::sge; // signed greater or equal
-  } else if (pred == "sle") {
-    return mlir::arith::CmpIPredicate::sle; // signed less or equal
-  } else {
-    throw std::runtime_error("Unsupported integer predicate: " + pred);
-  }
-}
-
-mlir::arith::CmpFPredicate
-MLIRBuilder::getFloatPredicate(const std::string &pred) const {
-  // Map string to float predicate enum
-  if (pred == "ogt") {
-    return mlir::arith::CmpFPredicate::OGT; // ordered greater than
-  } else if (pred == "olt") {
-    return mlir::arith::CmpFPredicate::OLT; // ordered less than
-  } else if (pred == "oeq") {
-    return mlir::arith::CmpFPredicate::OEQ; // ordered equal
-  } else if (pred == "one") {
-    return mlir::arith::CmpFPredicate::ONE; // ordered not equal
-  } else if (pred == "oge") {
-    return mlir::arith::CmpFPredicate::OGE; // ordered greater or equal
-  } else if (pred == "ole") {
-    return mlir::arith::CmpFPredicate::OLE; // ordered less or equal
-  } else {
-    throw std::runtime_error("Unsupported float predicate: " + pred);
-  }
-}
-
-mlir::Value MLIRBuilder::buildCompare(const std::string &predicate,
+mlir::Value MLIRBuilder::buildCompare(mlir_edsl::ComparisonPredicate predicate,
                                       mlir::Value lhs, mlir::Value rhs) {
   auto loc = builder->getUnknownLoc();
   auto [promotedLhs, promotedRhs] = promoteTypes(lhs, rhs);
 
   if (isIntegerType(promotedLhs.getType())) {
-    auto pred = getIntegerPredicate(predicate);
+    auto pred = protobufToIntPredicate(predicate);
     return builder->create<mlir::arith::CmpIOp>(loc, pred, promotedLhs,
                                                 promotedRhs);
   }
 
-  auto pred = getFloatPredicate(predicate);
+  auto pred = protobufToFloatPredicate(predicate);
   return builder->create<mlir::arith::CmpFOp>(loc, pred, promotedLhs,
                                               promotedRhs);
 }
@@ -192,20 +281,22 @@ mlir::Value MLIRBuilder::buildIf(mlir::Value condition, mlir::Value thenValue,
 mlir::Value MLIRBuilder::buildForWithOp(mlir::Value start, mlir::Value end,
                                         mlir::Value step,
                                         mlir::Value init_value,
-                                        const std::string &operation) {
+                                        mlir_edsl::BinaryOpType operation) {
 
   auto body_fn = [this, operation](mlir::Value iv,
                                    mlir::Value iter_arg) -> mlir::Value {
-    if (operation == "add") {
-      return buildAdd(iter_arg, iv); // iter_arg + iv
-    } else if (operation == "mul") {
-      return buildMul(iter_arg, iv); // iter_arg * iv
-    } else if (operation == "sub") {
-      return buildSub(iter_arg, iv); // iter_arg - iv
-    } else if (operation == "div") {
-      return buildDiv(iter_arg, iv); // iter_arg / iv
+    switch (operation) {
+    case mlir_edsl::BinaryOpType::ADD:
+      return buildAdd(iter_arg, iv);
+    case mlir_edsl::BinaryOpType::MUL:
+      return buildMul(iter_arg, iv);
+    case mlir_edsl::BinaryOpType::SUB:
+      return buildSub(iter_arg, iv);
+    case mlir_edsl::BinaryOpType::DIV:
+      return buildDiv(iter_arg, iv);
+    default:
+      throw std::runtime_error("Unsupported binary operation in for loop");
     }
-    throw std::runtime_error("Unsupported operation: " + operation);
   };
 
   return buildFor(start, end, step, init_value, body_fn);
@@ -235,30 +326,33 @@ mlir::Value MLIRBuilder::buildFor(
   return forOp.getResult(0);
 }
 
-mlir::Value MLIRBuilder::buildWhileWithOp(mlir::Value init, mlir::Value target,
-                                          const std::string &operation,
-                                          const std::string &condition) {
+mlir::Value
+MLIRBuilder::buildWhileWithOp(mlir::Value init, mlir::Value target,
+                              mlir_edsl::BinaryOpType operation,
+                              mlir_edsl::ComparisonPredicate condition) {
 
   auto condition_fn = [this, condition,
                        target](mlir::Value current) -> mlir::Value {
-    return buildCompare(condition, current, target);
+    return buildCompare(condition, current, target); // Now uses enum!
   };
 
   auto body_fn = [this, operation](mlir::Value current) -> mlir::Value {
-    if (operation == "add") {
-      return buildAdd(current, buildConstant(1)); // current + 1
-    } else if (operation == "mul") {
-      return buildMul(current, buildConstant(2)); // current * 2
-    } else if (operation == "sub") {
-      return buildSub(current, buildConstant(1)); // current - 1
-    } else if (operation == "div") {
-      return buildDiv(current, buildConstant(2)); // current / 2
+    switch (operation) {
+    case mlir_edsl::BinaryOpType::ADD:
+      return buildAdd(current, buildConstant(1));
+    case mlir_edsl::BinaryOpType::MUL:
+      return buildMul(current, buildConstant(2));
+    case mlir_edsl::BinaryOpType::SUB:
+      return buildSub(current, buildConstant(1));
+    case mlir_edsl::BinaryOpType::DIV:
+      return buildDiv(current, buildConstant(2));
+    default:
+      throw std::runtime_error("Unsupported binary operation");
     }
-    throw std::runtime_error("Unsupported operation: " + operation);
   };
 
   return buildWhile(init, condition_fn, body_fn);
-};
+}
 
 mlir::Value
 MLIRBuilder::buildWhile(mlir::Value init,
@@ -268,7 +362,8 @@ MLIRBuilder::buildWhile(mlir::Value init,
   auto loc = builder->getUnknownLoc();
   auto resultType = init.getType();
 
-  auto whileOp = builder->create<mlir::scf::WhileOp>(loc, mlir::TypeRange{resultType}, init);
+  auto whileOp = builder->create<mlir::scf::WhileOp>(
+      loc, mlir::TypeRange{resultType}, init);
 
   auto &beforeRegion = whileOp.getBefore();
   auto *beforeBlock = builder->createBlock(&beforeRegion, beforeRegion.end(),
@@ -307,7 +402,14 @@ std::string MLIRBuilder::getLLVMIRString() {
   return lowering.lowerToLLVMIR(module);
 }
 
-void MLIRBuilder::reset() { initializeModule(); }
+void MLIRBuilder::reset() {
+  // Reset builder state without destroying the module
+  currentFunction = nullptr;
+  parameterMap.clear();
+
+  // Move insertion point back to module level
+  builder->setInsertionPointToEnd(module.getBody());
+}
 
 mlir::Type MLIRBuilder::getIntegerType() const { return builder->getI32Type(); }
 
@@ -355,17 +457,23 @@ mlir::Value MLIRBuilder::getParameter(const std::string &name) {
   throw std::runtime_error("Parameter not found: " + name);
 }
 
-void MLIRBuilder::createFunctionWithParamsSetup(
-    const std::vector<std::pair<std::string, std::string>> &params) {
-  if (!currentFunction) {
-    std::cerr << "Error: No current function!\n";
-    return;
-  }
+void MLIRBuilder::compileFunctionFromAST(
+    const std::string &name,
+    const std::vector<std::pair<std::string, std::string>> &params,
+    const std::string &return_type, const std::string &ast_protobuf_bytes) {
 
-  std::cerr << "MLIRBuilder: Setting up function with " << params.size()
-            << " parameters\n";
+  createFunction(name, params, return_type);
+  mlir::Value result = buildFromProtoBuf(ast_protobuf_bytes);
+  finalizeFunction(name, result);
+}
 
-  parameterMap.clear();
+void MLIRBuilder::createFunction(
+    const std::string &name,
+    const std::vector<std::pair<std::string, std::string>> &params,
+    const std::string &return_type) {
+
+  // Reset builder state from previous function
+  reset();
 
   std::vector<mlir::Type> paramTypes;
   for (const auto &[paramName, typeStr] : params) {
@@ -380,44 +488,71 @@ void MLIRBuilder::createFunctionWithParamsSetup(
     paramTypes.push_back(paramType);
   }
 
-  // Set up parameters for the function
-  auto &entryBlock = currentFunction.front();
-
-  // Only clear and rebuild the block if we have parameters
-  if (!params.empty()) {
-    entryBlock.clear();
-
-    for (size_t i = 0; i < params.size(); i++) {
-      entryBlock.addArgument(paramTypes[i], builder->getUnknownLoc());
-    }
-
-    for (size_t i = 0; i < params.size(); i++) {
-      parameterMap[params[i].first] = entryBlock.getArgument(i);
-    }
-
-    builder->setInsertionPointToStart(&entryBlock);
+  mlir::Type returnType;
+  if (return_type == "i32") {
+    returnType = builder->getI32Type();
+  } else if (return_type == "f32") {
+    returnType = builder->getF32Type();
+  } else {
+    throw std::runtime_error("Unsupported return type: " + return_type);
   }
-  // For parameterless functions, leave existing operations intact
+
+  auto funcType = builder->getFunctionType(paramTypes, {returnType});
+  currentFunction = builder->create<mlir::func::FuncOp>(
+      builder->getUnknownLoc(), name, funcType);
+
+  functionTable[name] = currentFunction;
+
+  auto *entryBlock = currentFunction.addEntryBlock();
+  builder->setInsertionPointToStart(entryBlock);
+
+  // parameterMap already cleared by reset()
+  for (size_t i = 0; i < params.size(); i++) {
+    parameterMap[params[i].first] = entryBlock->getArgument(i);
+  }
 }
 
-void MLIRBuilder::finalizeFunctionWithParams(const std::string &name,
-                                             mlir::Value result) {
-  std::cerr << "MLIRBuilder: Finalizing function " << name << "\n";
-
-  // Get argument types from the entry block
-  auto &entryBlock = currentFunction.front();
-  std::vector<mlir::Type> argTypes;
-  for (auto arg : entryBlock.getArguments()) {
-    argTypes.push_back(arg.getType());
+void MLIRBuilder::finalizeFunction(const std::string &name,
+                                   mlir::Value result) {
+  if (!currentFunction) {
+    throw std::runtime_error("No current function to finish");
   }
-
-  // Set function name and type with correct argument types
-  currentFunction.setName(name);
-  currentFunction.setFunctionType(
-      builder->getFunctionType(argTypes, {result.getType()}));
-
-  builder->setInsertionPointToEnd(&entryBlock);
   builder->create<mlir::func::ReturnOp>(builder->getUnknownLoc(), result);
+  compiledFunctions.insert(name);
+}
+
+mlir::Value MLIRBuilder::callFunction(const std::string &name,
+                                      const std::vector<mlir::Value> &args) {
+  auto it = functionTable.find(name);
+  if (it == functionTable.end()) {
+    throw std::runtime_error("Function not found: " + name);
+  }
+  auto funcOp = it->second;
+  return builder
+      ->create<mlir::func::CallOp>(builder->getUnknownLoc(), funcOp, args)
+      .getResult(0);
+}
+
+bool MLIRBuilder::hasFunction(const std::string &name) const {
+  return compiledFunctions.count(name) > 0;
+}
+
+void MLIRBuilder::clearModule() {
+  module = mlir::ModuleOp::create(builder->getUnknownLoc());
+  builder->setInsertionPointToEnd(module.getBody());
+
+  compiledFunctions.clear();
+  parameterMap.clear();
+  functionTable.clear();
+  currentFunction = nullptr;
+}
+
+std::vector<std::string> MLIRBuilder::listFunctions() const {
+  std::vector<std::string> result;
+  for (const auto &name : compiledFunctions) {
+    result.push_back(name);
+  }
+  return result;
 }
 
 } // namespace mlir_edsl

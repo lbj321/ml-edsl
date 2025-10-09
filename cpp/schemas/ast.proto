@@ -1,0 +1,136 @@
+// Protocol Buffers schema for MLIR EDSL AST
+// Serialization between Python frontend and C++ backend
+
+syntax = "proto3";
+
+package mlir_edsl;
+
+// Value types supported in the EDSL
+enum ValueType {
+  I32 = 0;
+  F32 = 1;
+  I1 = 2;
+}
+
+// Binary operations
+enum BinaryOpType {
+  ADD = 0;
+  SUB = 1;
+  MUL = 2;
+  DIV = 3;
+}
+
+// Comparison predicates
+enum ComparisonPredicate {
+  // Generic (maps to signed int or ordered float)
+  GT = 0;   // Greater than
+  LT = 1;   // Less than
+  EQ = 2;   // Equal
+  NE = 3;   // Not equal
+  GE = 4;   // Greater than or equal
+  LE = 5;   // Less than or equal
+
+  // Signed integer comparisons (MLIR arith.cmpi)
+  SLT = 6;  // Signed less than
+  SLE = 7;  // Signed less than or equal
+  SGT = 8;  // Signed greater than
+  SGE = 9;  // Signed greater than or equal
+
+  // Unsigned integer comparisons
+  ULT = 10; // Unsigned less than
+  ULE = 11; // Unsigned less than or equal
+  UGT = 12; // Unsigned greater than
+  UGE = 13; // Unsigned greater than or equal
+
+  // Float comparisons (MLIR arith.cmpf) - ordered
+  OLT = 14; // Ordered less than
+  OLE = 15; // Ordered less than or equal
+  OGT = 16; // Ordered greater than
+  OGE = 17; // Ordered greater than or equal
+  OEQ = 18; // Ordered equal
+  ONE = 19; // Ordered not equal
+
+  // Float comparisons - unordered
+  UEQ = 20; // Unordered equal
+  UNE = 21; // Unordered not equal
+}
+
+// Main AST node container
+message ASTNode {
+  oneof value_data {
+    Constant constant = 1;
+    Parameter parameter = 2;
+    BinaryOp binary_op = 3;
+    CompareOp compare_op = 4;
+    IfOp if_op = 5;
+    CallOp call_op = 6;
+    ForLoopOp for_loop_op = 7;
+    WhileLoopOp while_loop_op = 8;
+  }
+}
+
+// Constant value (integer or float)
+message Constant {
+  int32 int_value = 1;
+  float float_value = 2;
+  ValueType value_type = 3;
+}
+
+// Named parameter with value
+message Parameter {
+  string name = 1;
+  int32 int_value = 2;
+  float float_value = 3;
+  ValueType value_type = 4;
+}
+
+// Binary operation (add, sub, mul, div)
+message BinaryOp {
+  BinaryOpType op_type = 1;
+  ASTNode left = 2;   // Nested node
+  ASTNode right = 3;  // Nested node
+}
+
+// Comparison operation
+message CompareOp {
+  ComparisonPredicate predicate = 1;
+  ASTNode left = 2;
+  ASTNode right = 3;
+}
+
+// Conditional operation (if-then-else)
+message IfOp {
+  ASTNode condition = 1;
+  ASTNode then_value = 2;
+  ASTNode else_value = 3;
+  ValueType result_type = 4;
+}
+
+// Function call operation
+message CallOp {
+  string func_name = 1;
+  repeated ASTNode args = 2;  // Array of argument nodes
+  ValueType return_type = 3;
+}
+
+// For loop operation (scf.for)
+message ForLoopOp {
+  ASTNode start = 1;          // Loop start bound (inclusive)
+  ASTNode end = 2;            // Loop end bound (exclusive)
+  ASTNode step = 3;           // Loop step/increment
+  ASTNode init_value = 4;     // Initial accumulator value
+  BinaryOpType operation = 5; // Loop body operation
+}
+
+// While loop operation (scf.while)
+message WhileLoopOp {
+  ASTNode init_value = 1;          // Initial loop value
+  ASTNode target = 2;              // Comparison target value
+  BinaryOpType operation = 3;      // Loop body operation
+  ComparisonPredicate predicate = 4; // Comparison predicate enum
+}
+
+// Root message for the entire AST
+message ASTRoot {
+  ASTNode root = 1;  // Root node of the expression tree
+}

@@ -104,6 +104,10 @@ int32_t MLIRExecutor::callInt32Function(void *funcPtr,
     typedef int32_t (*FuncType)(int32_t, int32_t, int32_t);
     auto func = reinterpret_cast<FuncType>(funcPtr);
     return func(intArgs[0], intArgs[1], intArgs[2]);
+  } else if (intArgs.size() == 4 && floatArgs.empty()) {
+    typedef int32_t (*FuncType)(int32_t, int32_t, int32_t, int32_t);
+    auto func = reinterpret_cast<FuncType>(funcPtr);
+    return func(intArgs[0], intArgs[1], intArgs[2], intArgs[3]);
   } else if (intArgs.size() == 1 && floatArgs.size() == 1) {
     typedef int32_t (*FuncType)(int32_t, float);
     auto func = reinterpret_cast<FuncType>(funcPtr);
@@ -143,6 +147,14 @@ float MLIRExecutor::callFloatFunction(void *funcPtr,
     typedef float (*FuncType)(int32_t, int32_t, int32_t);
     auto func = reinterpret_cast<FuncType>(funcPtr);
     return func(intArgs[0], intArgs[1], intArgs[2]);
+  } else if (intArgs.size() == 4 && floatArgs.empty()) {
+    typedef float (*FuncType)(int32_t, int32_t, int32_t, int32_t);
+    auto func = reinterpret_cast<FuncType>(funcPtr);
+    return func(intArgs[0], intArgs[1], intArgs[2], intArgs[3]);
+  } else if (floatArgs.size() == 2 && intArgs.empty()) {
+    typedef float (*FuncType)(float, float);
+    auto func = reinterpret_cast<FuncType>(funcPtr);
+    return func(floatArgs[0], floatArgs[1]);
   } else if (intArgs.size() == 1 && floatArgs.size() == 1) {
     typedef float (*FuncType)(int32_t, float);
     auto func = reinterpret_cast<FuncType>(funcPtr);

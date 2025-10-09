@@ -1,7 +1,7 @@
 """C++ MLIR backend integration"""
 from typing import Union
-from .ast import Value, BinaryOp, Constant, Parameter, CompareOp, IfOp
-from .loop_ops import LoopOp
+from .ast import Value, BinaryOp, Constant, Parameter, CompareOp, IfOp, CallOp
+from .control_flow import LoopOp
 
 try:
     from . import _mlir_backend
@@ -9,17 +9,28 @@ try:
 except ImportError:
     HAS_CPP_BACKEND = False
 
+try:
+    from . import ast_pb2
+    HAS_PROTOBUF = True
+except ImportError:
+    HAS_PROTOBUF = False
+    ast_pb2 = None
+
 # Global instance to keep the builder alive
 _global_builder = None
 
 class MLIRValue(Value):
     """Wrapper for C++ MLIR values"""
-    
+
     def __init__(self, cpp_value, builder, value_type: str):
         self.cpp_value = cpp_value
         self.builder = builder
         self.type = value_type
-    
+
+    def to_proto(self):
+        """MLIRValue cannot be serialized to protobuf - it's already compiled MLIR"""
+        raise RuntimeError("MLIRValue is already compiled MLIR and cannot be serialized to protobuf")
+
     def to_mlir(self, ssa_counter: dict) -> tuple[list[str], str]:
         """This should not be called when using C++ backend"""
         raise RuntimeError("to_mlir() should not be called with C++ backend")
@@ -99,13 +110,20 @@ class CppMLIRBuilder:
         result_type = init_value.type  # Result type matches init_value type
         return MLIRValue(cpp_result, self, result_type)
     
-    def create_function_with_params_setup(self, param_list: list):
-        """Set up function parameters without finalizing"""
-        self.builder.create_function_with_params_setup(param_list)
+    def create_function(self, name: str, params: list, return_type: str):
+        """Create function with complete signature"""
+        self.builder.create_function(name, params, return_type)
+
+    def finalize_function(self, name: str, result: MLIRValue):
+        """Finalize function with return statement"""
+        self.builder.finalize_function(name, result.cpp_value)
     
-    def finalize_function_with_params(self, name: str, result: MLIRValue):
-        """Finalize function with parameters"""
-        self.builder.finalize_function_with_params(name, result.cpp_value)
+    def call_function(self, name: str, args: list) -> MLIRValue:
+        """Call a function by name with arguments"""
+        cpp_args = [arg.cpp_value for arg in args]
+        cpp_result = self.builder.call_function(name, cpp_args)
+        # For now, assume i32 return type - could be enhanced later
+        return MLIRValue(cpp_result, self, "i32")
     
     def get_parameter(self, name: str, param_type: str = "i32") -> MLIRValue:
         """Get a function parameter by name"""
@@ -172,7 +190,19 @@ class CppMLIRBuilder:
     def reset(self):
         """Reset for a new function"""
         self.builder.reset()
-    
+
+    def has_function(self, name: str) -> bool:
+        """Check if function is already compiled in module"""
+        return self.builder.has_function(name)
+
+    def clear_module(self):
+        """Clear all functions from module (explicit reset)"""
+        self.builder.clear_module()
+
+    def list_functions(self) -> list[str]:
+        """Get names of all compiled functions"""
+        return self.builder.list_functions()
+
     def convert_ast_to_mlir_value(self, ast_node: Value) -> MLIRValue:
         """Convert AST node to MLIRValue for C++ backend"""
         if isinstance(ast_node, Constant):
@@ -202,8 +232,67 @@ class CppMLIRBuilder:
             then_mlir = self.convert_ast_to_mlir_value(ast_node.then_value)
             else_mlir = self.convert_ast_to_mlir_value(ast_node.else_value)
             return self.if_else(cond_mlir, then_mlir, else_mlir)
+        elif isinstance(ast_node, CallOp):
+            # Convert arguments to MLIRValues
+            mlir_args = []
+            for arg in ast_node.args:
+                mlir_args.append(self.convert_ast_to_mlir_value(arg))
+            return self.call_function(ast_node.func_name, mlir_args)
         else:
             raise ValueError(f"Unsupported AST node type: {type(ast_node)}")
+        
+    def buildFromAST(self, ast_node):
+        """Build MLIR from AST node - delegates to C++ backend"""
+        return self.builder.buildFromAST(ast_node)
+
+    def build_from_protobuf(self, ast_node: Value):
+        """Build MLIR from AST using protobuf serialization
+
+        This is the main entry point for AST → MLIR conversion.
+        Serializes the AST to protobuf and sends to C++ for MLIR generation.
+
+        Args:
+            ast_node: Root AST node to serialize and build
+
+        Returns:
+            MLIRValue wrapper containing the C++ mlir::Value
+        """
+        if not HAS_PROTOBUF:
+            raise RuntimeError("Protobuf not available. Run ./build.sh to generate protobuf code.")
+
+        # Serialize AST to protobuf bytes
+        pb_node = ast_node.to_proto()
+        buffer = pb_node.SerializeToString()
+
+        # Send to C++ backend for MLIR building
+        cpp_value = self.builder.build_from_protobuf(buffer)
+
+        # Wrap in MLIRValue with inferred type
+        result_type = self._infer_result_type(ast_node)
+        return MLIRValue(cpp_value, self, result_type)
+
+    def compile_function_from_ast(self, name: str, params: list,
+                                   return_type: str, ast_node: Value) -> None:
+        """Compile complete function from AST in single call
+
+        This combines function declaration, body building, and finalization
+        into a single operation, hiding the multi-phase complexity from the caller.
+
+        Args:
+            name: Function name
+            params: List of (param_name, param_type) tuples
+            return_type: Return type ("i32", "f32", etc.)
+            ast_node: Root AST node to compile
+        """
+        if not HAS_PROTOBUF:
+            raise RuntimeError("Protobuf not available. Run ./build.sh")
+
+        # Serialize AST to protobuf
+        pb_node = ast_node.to_proto()
+        buffer = pb_node.SerializeToString()
+
+        # Single C++ call handles everything (3 phases internally)
+        self.builder.compile_function_from_ast(name, params, return_type, buffer)
 
 def get_backend():
     """Get the appropriate backend (C++ if available, fallback to string-based)"""

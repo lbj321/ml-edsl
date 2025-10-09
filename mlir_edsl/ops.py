@@ -1,7 +1,8 @@
 """Basic arithmetic operations for the EDSL"""
 
 from typing import Union
-from .ast import BinaryOp, Constant, Value
+from .ast import BinaryOp, Constant, Value, CallOp, CompareOp
+from .types import I32
 
 
 def add(left: Union[int, float, Value], right: Union[int, float, Value]) -> BinaryOp:
@@ -78,3 +79,25 @@ def div(left: Union[int, float, Value], right: Union[int, float, Value]) -> Bina
         right = Constant(right)
 
     return BinaryOp("div", left, right)
+
+
+def call(func_name: str, args: list[Union[int, float, Value]], return_type) -> CallOp:
+    """Create a function call operation
+
+    Args:
+        func_name: Name of the function to call
+        args: List of arguments (can be integers, floats, or Values)
+        return_type: Expected return type (I32, F32, or I1 enum) - required
+
+    Returns:
+        CallOp representing the function call
+    """
+    # Convert primitive types to Constants
+    converted_args = []
+    for arg in args:
+        if isinstance(arg, (int, float)):
+            converted_args.append(Constant(arg))
+        else:
+            converted_args.append(arg)
+
+    return CallOp(func_name, converted_args, return_type)

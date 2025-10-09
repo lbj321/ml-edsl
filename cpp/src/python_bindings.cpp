@@ -3,6 +3,7 @@
 #include "mlir_edsl/MLIRBuilder.h"
 #include "mlir_edsl/MLIRExecutor.h"
 #include "mlir/IR/Value.h"
+#include "ast.pb.h"
 
 namespace py = pybind11;
 
@@ -43,10 +44,12 @@ PYBIND11_MODULE(_mlir_backend, m) {
              "Create for loop with predefined operation")
         .def("build_while_with_op", &mlir_edsl::MLIRBuilder::buildWhileWithOp,
              "Create while loop with predefined operation")
-        .def("create_function_with_params_setup", &mlir_edsl::MLIRBuilder::createFunctionWithParamsSetup,
-             "Set up function parameters without finalizing")
-        .def("finalize_function_with_params", &mlir_edsl::MLIRBuilder::finalizeFunctionWithParams,
-             "Finalize function with parameters")
+        .def("create_function", &mlir_edsl::MLIRBuilder::createFunction,
+             "Create function with signature")
+        .def("finalize_function", &mlir_edsl::MLIRBuilder::finalizeFunction,
+             "Finalize function with return statement")
+        .def("call_function", &mlir_edsl::MLIRBuilder::callFunction,
+             "Call a function by name with arguments")
         .def("get_parameter", &mlir_edsl::MLIRBuilder::getParameter,
              "Get parameter by name")
         .def("get_mlir_string", &mlir_edsl::MLIRBuilder::getMLIRString,
@@ -54,8 +57,22 @@ PYBIND11_MODULE(_mlir_backend, m) {
         .def("get_llvm_ir_string", &mlir_edsl::MLIRBuilder::getLLVMIRString,
              "Get generated LLVM IR as string")
         .def("reset", &mlir_edsl::MLIRBuilder::reset,
-             "Reset builder for new function");
-    
+             "Reset builder for new function")
+        .def("has_function", &mlir_edsl::MLIRBuilder::hasFunction,
+             "Check if function is already compiled")
+        .def("clear_module", &mlir_edsl::MLIRBuilder::clearModule,
+             "Clear all functions from module")
+        .def("list_functions", &mlir_edsl::MLIRBuilder::listFunctions,
+             "Get list of all compiled function names")
+        .def("build_from_protobuf", &mlir_edsl::MLIRBuilder::buildFromProtoBuf,
+             "Build MLIR from protobuf-serialized AST")
+        .def("compile_function_from_ast", &mlir_edsl::MLIRBuilder::compileFunctionFromAST,
+             py::arg("name"),
+             py::arg("params"),
+             py::arg("return_type"),
+             py::arg("ast_protobuf_bytes"),
+             "Compile complete function from protobuf AST (single call)");
+
     py::class_<mlir_edsl::MLIRExecutor>(m, "MLIRExecutor")
         .def(py::init<>())
         .def("initialize", &mlir_edsl::MLIRExecutor::initialize,
