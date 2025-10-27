@@ -1,7 +1,13 @@
-"""Tests for C++ MLIR backend integration"""
+"""Tests for C++ MLIR backend - AST compilation and execution
+
+This test suite directly tests the backend's AST compilation and execution.
+It uses AST nodes directly rather than @ml_function to isolate backend testing.
+"""
 
 import pytest
 from mlir_edsl.backend import HAS_CPP_BACKEND, get_backend, CppMLIRBuilder
+from mlir_edsl.ast import Constant, BinaryOp, CompareOp, IfOp, ForLoopOp, WhileLoopOp, Parameter
+from mlir_edsl.types import I32, F32, I1
 
 # Skip all tests if C++ backend is not available
 pytestmark = pytest.mark.skipif(not HAS_CPP_BACKEND, reason="C++ backend not available")
@@ -11,9 +17,11 @@ pytestmark = pytest.mark.skipif(not HAS_CPP_BACKEND, reason="C++ backend not ava
 def backend():
     """Provide a clean backend instance for each test"""
     backend_instance = get_backend()
-    backend_instance.reset()
+    backend_instance.clear_module()
     return backend_instance
 
+
+# ==================== BACKEND AVAILABILITY ====================
 
 def test_backend_availability():
     """Test that C++ backend is available and can be instantiated"""
@@ -22,234 +30,7 @@ def test_backend_availability():
     assert isinstance(backend, CppMLIRBuilder)
 
 
-def test_cpp_constant_creation(backend):
-    """Test creating constants with C++ backend"""
-    # Test integer constant
-    int_val = backend.constant(42)
-    assert int_val.type == "i32"
-    
-    # Test float constant
-    float_val = backend.constant(3.14)
-    assert float_val.type == "f32"
-
-
-def test_cpp_addition(backend):
-    """Test addition operation with C++ backend"""
-    left = backend.constant(5)
-    right = backend.constant(3)
-    result = backend.add(left, right)
-    
-    assert result.type == "i32"
-
-
-def test_cpp_subtraction(backend):
-    """Test subtraction operation with C++ backend"""
-    left = backend.constant(10)
-    right = backend.constant(3)
-    result = backend.sub(left, right)
-    
-    assert result.type == "i32"
-
-
-def test_cpp_multiplication(backend):
-    """Test multiplication operation with C++ backend"""
-    left = backend.constant(6)
-    right = backend.constant(4)
-    result = backend.mul(left, right)
-    
-    assert result.type == "i32"
-
-
-def test_cpp_division(backend):
-    """Test division operation with C++ backend"""
-    left = backend.constant(20)
-    right = backend.constant(4)
-    result = backend.div(left, right)
-    
-    assert result.type == "i32"
-
-
-def test_cpp_float_operations(backend):
-    """Test operations with float types"""
-    left = backend.constant(5.5)
-    right = backend.constant(2.0)
-    
-    # Test all operations with floats
-    add_result = backend.add(left, right)
-    assert add_result.type == "f32"
-    
-    sub_result = backend.sub(left, right)
-    assert sub_result.type == "f32"
-    
-    mul_result = backend.mul(left, right)
-    assert mul_result.type == "f32"
-    
-    div_result = backend.div(left, right)
-    assert div_result.type == "f32"
-
-
-def test_cpp_mixed_type_promotion(backend):
-    """Test mixed type promotion (int + float = float)"""
-    int_val = backend.constant(5)
-    float_val = backend.constant(2.5)
-    
-    # int + float should result in float
-    result = backend.add(int_val, float_val)
-    assert result.type == "f32"
-    
-    # float + int should result in float
-    result2 = backend.add(float_val, int_val)
-    assert result2.type == "f32"
-
-
-def test_cpp_function_generation(backend):
-    """Test generating a complete MLIR function"""
-    # Create a simple addition
-    left = backend.constant(10)
-    right = backend.constant(20)
-    result = backend.add(left, right)
-    
-    # Generate function
-    backend.create_function_with_params_setup([])
-    backend.finalize_function_with_params("test_add", result)
-    mlir_code = backend.get_mlir_string()
-    
-    # Verify basic structure
-    assert "func.func @test_add()" in mlir_code
-    assert "-> i32" in mlir_code
-    assert "return" in mlir_code  # MLIR uses "return", not "func.return"
-    assert "arith.constant 10" in mlir_code
-    assert "arith.constant 20" in mlir_code
-
-
-def test_cpp_float_function_generation(backend):
-    """Test generating MLIR function with float result"""
-    # Create float operation
-    left = backend.constant(3.14)
-    right = backend.constant(2.86)
-    result = backend.mul(left, right)
-    
-    # Generate function
-    backend.create_function_with_params_setup([])
-    backend.finalize_function_with_params("test_float_mul", result)
-    mlir_code = backend.get_mlir_string()
-    
-    # Verify float types
-    assert "func.func @test_float_mul()" in mlir_code
-    assert "-> f32" in mlir_code
-    assert "arith.constant 3.14" in mlir_code
-    assert "arith.constant 2.86" in mlir_code
-
-
-def test_cpp_llvm_ir_generation(backend):
-    """Test generating LLVM IR from MLIR"""
-    # Create a simple addition
-    left = backend.constant(4)
-    right = backend.constant(6)
-    result = backend.add(left, right)
-    
-    # Create function and get LLVM IR
-    backend.create_function_with_params_setup([])
-    backend.finalize_function_with_params("add_fn", result)
-    llvm_ir = backend.get_llvm_ir_string()
-    
-    # Also get MLIR for comparison
-    mlir_code = backend.get_mlir_string()
-    backend.reset()  # Manual reset
-    
-    # Verify LLVM IR structure
-    assert "define" in llvm_ir
-    assert "add_fn" in llvm_ir
-    assert "ret" in llvm_ir
-    assert not llvm_ir.startswith("ERROR:")
-    assert not llvm_ir.startswith("TODO:")
-    
-    print(f"\nGenerated MLIR:\n{mlir_code}")
-    print(f"\nGenerated LLVM IR:\n{llvm_ir}")
-
-
-def test_cpp_llvm_ir_float(backend):
-    """Test LLVM IR generation with float operations"""
-    # Create float multiplication
-    left = backend.constant(2.5)
-    right = backend.constant(4.0)
-    result = backend.mul(left, right)
-    
-    # Create function and get LLVM IR
-    backend.create_function_with_params_setup([])
-    backend.finalize_function_with_params("mul_fn", result)
-    llvm_ir = backend.get_llvm_ir_string()
-    
-    # Also get MLIR for comparison
-    mlir_code = backend.get_mlir_string()
-    backend.reset()  # Manual reset
-    
-    # Verify LLVM IR contains float operations
-    assert "define" in llvm_ir
-    assert "mul_fn" in llvm_ir
-    assert "float" in llvm_ir or "f32" in llvm_ir
-    assert "ret" in llvm_ir
-    assert not llvm_ir.startswith("ERROR:")
-    
-    print(f"\nGenerated Float MLIR:\n{mlir_code}")
-    print(f"\nGenerated Float LLVM IR:\n{llvm_ir}")
-
-
-def test_cpp_complex_expression(backend):
-    """Test building a complex expression with C++ backend"""
-    # Build: (5 + 3) * 2
-    a = backend.constant(5)
-    b = backend.constant(3)
-    c = backend.constant(2)
-    
-    add_result = backend.add(a, b)
-    final_result = backend.mul(add_result, c)
-    
-    backend.create_function_with_params_setup([])
-    backend.finalize_function_with_params("complex_expr", final_result)
-    mlir_code = backend.get_mlir_string()
-    
-    # Should contain multiple constants and operations
-    assert "arith.constant 5" in mlir_code
-    assert "arith.constant 3" in mlir_code
-    assert "arith.constant 2" in mlir_code
-    assert mlir_code.count("arith.") >= 3  # At least 3 arith operations
-
-
-def test_cpp_reset_functionality(backend):
-    """Test that reset allows creating multiple functions"""
-    # Create first function
-    val1 = backend.constant(10)
-    val2 = backend.constant(5)
-    result1 = backend.add(val1, val2)
-    backend.create_function_with_params_setup([])
-    backend.finalize_function_with_params("func1", result1)
-    mlir1 = backend.get_mlir_string()
-    
-    # Reset and create second function
-    backend.reset()
-    val3 = backend.constant(20)
-    val4 = backend.constant(10)
-    result2 = backend.sub(val3, val4)
-    backend.create_function_with_params_setup([])
-    backend.finalize_function_with_params("func2", result2)
-    mlir2 = backend.get_mlir_string()
-    
-    # Verify both functions are different
-    assert "func1" in mlir1
-    assert "func2" in mlir2
-    assert "func1" not in mlir2
-    assert "func2" not in mlir1
-
-
-@pytest.mark.skipif(HAS_CPP_BACKEND, reason="Testing fallback when C++ backend unavailable")
-def test_backend_fallback():
-    """Test fallback behavior when C++ backend is not available"""
-    backend = get_backend()
-    assert backend is None
-
-
-def test_cpp_backend_error_handling():
+def test_backend_error_handling():
     """Test error handling when C++ backend is used incorrectly"""
     if not HAS_CPP_BACKEND:
         # Test that CppMLIRBuilder raises error when backend unavailable
@@ -261,6 +42,309 @@ def test_cpp_backend_error_handling():
         assert backend is not None
 
 
+# ==================== BASIC ARITHMETIC COMPILATION ====================
+
+def test_constant_addition(backend):
+    """Test compiling constant addition"""
+    # Create AST: 5 + 3
+    left = Constant(5)
+    right = Constant(3)
+    result = BinaryOp("add", left, right)
+
+    # Compile function
+    backend.compile_function_from_ast("test_add", [], I32, result)
+    mlir_code = backend.get_mlir_string()
+
+    # Verify MLIR structure
+    assert "func.func @test_add()" in mlir_code
+    assert "-> i32" in mlir_code
+    assert "arith.constant 5" in mlir_code
+    assert "arith.constant 3" in mlir_code
+    assert "arith.addi" in mlir_code
+
+    # Test JIT execution
+    executed_result = backend.execute_function("test_add", result)
+    assert executed_result == 8
+
+
+def test_constant_operations(backend):
+    """Test all basic arithmetic operations"""
+    # Addition
+    add_result = BinaryOp("add", Constant(10), Constant(5))
+    backend.compile_function_from_ast("test_ops_add", [], I32, add_result)
+    assert backend.execute_function("test_ops_add", add_result) == 15
+
+    # Subtraction
+    sub_result = BinaryOp("sub", Constant(10), Constant(3))
+    backend.compile_function_from_ast("test_ops_sub", [], I32, sub_result)
+    assert backend.execute_function("test_ops_sub", sub_result) == 7
+
+    # Multiplication
+    mul_result = BinaryOp("mul", Constant(6), Constant(4))
+    backend.compile_function_from_ast("test_ops_mul", [], I32, mul_result)
+    assert backend.execute_function("test_ops_mul", mul_result) == 24
+
+    # Division
+    div_result = BinaryOp("div", Constant(20), Constant(4))
+    backend.compile_function_from_ast("test_ops_div", [], I32, div_result)
+    assert backend.execute_function("test_ops_div", div_result) == 5
+
+
+def test_float_operations(backend):
+    """Test float operations"""
+    # Float addition
+    left = Constant(5.5)
+    right = Constant(2.5)
+    result = BinaryOp("add", left, right)
+
+    backend.compile_function_from_ast("test_float_add", [], F32, result)
+    mlir_code = backend.get_mlir_string()
+
+    # Verify float types in MLIR
+    assert "-> f32" in mlir_code
+    assert "arith.addf" in mlir_code
+
+    # Test execution
+    executed_result = backend.execute_function("test_float_add", result)
+    assert abs(executed_result - 8.0) < 0.001
+
+
+def test_type_promotion(backend):
+    """Test mixed type promotion (int + float = float)"""
+    int_val = Constant(5)
+    float_val = Constant(2.5)
+    result = BinaryOp("add", int_val, float_val)
+
+    # Result should be float
+    assert result.infer_type() == F32
+
+    backend.compile_function_from_ast("test_promotion", [], F32, result)
+    executed_result = backend.execute_function("test_promotion", result)
+    assert abs(executed_result - 7.5) < 0.001
+
+
+def test_complex_expression(backend):
+    """Test complex nested expression: (5 + 3) * 2"""
+    a = Constant(5)
+    b = Constant(3)
+    c = Constant(2)
+
+    add_result = BinaryOp("add", a, b)
+    final_result = BinaryOp("mul", add_result, c)
+
+    backend.compile_function_from_ast("test_complex", [], I32, final_result)
+    mlir_code = backend.get_mlir_string()
+
+    # Should contain multiple operations
+    assert "arith.constant 5" in mlir_code
+    assert "arith.constant 3" in mlir_code
+    assert "arith.constant 2" in mlir_code
+    assert mlir_code.count("arith.") >= 3
+
+    # Test execution: (5 + 3) * 2 = 16
+    executed_result = backend.execute_function("test_complex", final_result)
+    assert executed_result == 16
+
+
+# ==================== PARAMETERIZED FUNCTIONS ====================
+
+def test_parameterized_function(backend):
+    """Test function with parameters"""
+    # Create function: add(x, y) = x + y
+    param_x = Parameter("x", I32)
+    param_y = Parameter("y", I32)
+    result = BinaryOp("add", param_x, param_y)
+
+    backend.compile_function_from_ast(
+        "test_param_add",
+        [("x", I32), ("y", I32)],
+        I32,
+        result
+    )
+
+    mlir_code = backend.get_mlir_string()
+    assert "func.func @test_param_add(%arg0: i32, %arg1: i32)" in mlir_code
+
+    # Test with different arguments
+    assert backend.execute_function("test_param_add", result, int_args=[10, 5]) == 15
+    assert backend.execute_function("test_param_add", result, int_args=[100, 200]) == 300
+
+
+def test_float_parameters(backend):
+    """Test function with float parameters"""
+    param_x = Parameter("x", F32)
+    param_y = Parameter("y", F32)
+    result = BinaryOp("mul", param_x, param_y)
+
+    backend.compile_function_from_ast(
+        "test_float_param",
+        [("x", F32), ("y", F32)],
+        F32,
+        result
+    )
+
+    executed_result = backend.execute_function("test_float_param", result, float_args=[2.5, 4.0])
+    assert abs(executed_result - 10.0) < 0.001
+
+
+# ==================== CONDITIONAL OPERATIONS ====================
+
+def test_comparison_compilation(backend):
+    """Test comparison operation compilation"""
+    left = Constant(5)
+    right = Constant(3)
+    comparison = CompareOp("sgt", left, right)
+
+    # Comparisons return I1 (bool)
+    assert comparison.infer_type() == I1
+
+    # Use in an If to get a concrete value
+    result = IfOp(comparison, Constant(1), Constant(0))
+    backend.compile_function_from_ast("test_compare", [], I32, result)
+
+    mlir_code = backend.get_mlir_string()
+    assert "arith.cmpi" in mlir_code
+    assert "scf.if" in mlir_code
+
+    # 5 > 3 is true, so return 1
+    executed_result = backend.execute_function("test_compare", result)
+    assert executed_result == 1
+
+
+def test_if_else_compilation(backend):
+    """Test if-else operation compilation"""
+    # if (10 > 5) return 100 else return 200
+    condition = CompareOp("sgt", Constant(10), Constant(5))
+    result = IfOp(condition, Constant(100), Constant(200))
+
+    backend.compile_function_from_ast("test_if", [], I32, result)
+    mlir_code = backend.get_mlir_string()
+
+    assert "arith.cmpi" in mlir_code
+    assert "scf.if" in mlir_code
+    assert "scf.yield" in mlir_code
+
+    # 10 > 5 is true, return 100
+    executed_result = backend.execute_function("test_if", result)
+    assert executed_result == 100
+
+
+# ==================== LOOP OPERATIONS ====================
+
+def test_for_loop_compilation(backend):
+    """Test for loop compilation"""
+    # for(i = 0; i < 5; i += 1) accumulator += i, starting from 10
+    # Result: 10 + 0 + 1 + 2 + 3 + 4 = 20
+    start = Constant(0)
+    end = Constant(5)
+    step = Constant(1)
+    init_value = Constant(10)
+
+    result = ForLoopOp(start, end, step, init_value, "add")
+
+    backend.compile_function_from_ast("test_for", [], I32, result)
+    mlir_code = backend.get_mlir_string()
+
+    assert "scf.for" in mlir_code
+    assert "scf.yield" in mlir_code
+    assert "arith.addi" in mlir_code
+
+    executed_result = backend.execute_function("test_for", result)
+    assert executed_result == 20
+
+
+def test_while_loop_compilation(backend):
+    """Test while loop compilation"""
+    # while(current < 5) current = current + 1, starting from 0
+    # Result: 0 -> 1 -> 2 -> 3 -> 4 -> 5
+    init_value = Constant(0)
+    target = Constant(5)
+
+    result = WhileLoopOp(init_value, target, "add", "slt")
+
+    backend.compile_function_from_ast("test_while", [], I32, result)
+    mlir_code = backend.get_mlir_string()
+
+    assert "scf.while" in mlir_code
+    assert "scf.condition" in mlir_code
+    assert "scf.yield" in mlir_code
+
+    executed_result = backend.execute_function("test_while", result)
+    assert executed_result == 5
+
+
+# ==================== LLVM IR GENERATION ====================
+
+def test_llvm_ir_generation(backend):
+    """Test LLVM IR generation from MLIR"""
+    # Simple addition
+    result = BinaryOp("add", Constant(4), Constant(6))
+    backend.compile_function_from_ast("add_fn", [], I32, result)
+
+    llvm_ir = backend.get_llvm_ir_string()
+    mlir_code = backend.get_mlir_string()
+
+    # Verify LLVM IR structure
+    assert "define" in llvm_ir
+    assert "add_fn" in llvm_ir
+    assert "ret" in llvm_ir
+    assert not llvm_ir.startswith("ERROR:")
+
+    print(f"\nGenerated MLIR:\n{mlir_code}")
+    print(f"\nGenerated LLVM IR:\n{llvm_ir}")
+
+
+def test_llvm_ir_float(backend):
+    """Test LLVM IR generation with float operations"""
+    result = BinaryOp("mul", Constant(2.5), Constant(4.0))
+    backend.compile_function_from_ast("mul_fn", [], F32, result)
+
+    llvm_ir = backend.get_llvm_ir_string()
+
+    # Verify float types
+    assert "define" in llvm_ir
+    assert "mul_fn" in llvm_ir
+    assert ("float" in llvm_ir or "f32" in llvm_ir)
+    assert "ret" in llvm_ir
+
+
+# ==================== MODULE MANAGEMENT ====================
+
+def test_has_function(backend):
+    """Test has_function method"""
+    assert not backend.has_function("test_func")
+
+    result = BinaryOp("add", Constant(1), Constant(2))
+    backend.compile_function_from_ast("test_func", [], I32, result)
+
+    assert backend.has_function("test_func")
+
+
+def test_list_functions(backend):
+    """Test list_functions method"""
+    # Compile multiple functions
+    result1 = BinaryOp("add", Constant(1), Constant(2))
+    backend.compile_function_from_ast("func1", [], I32, result1)
+
+    result2 = BinaryOp("mul", Constant(3), Constant(4))
+    backend.compile_function_from_ast("func2", [], I32, result2)
+
+    functions = backend.list_functions()
+    assert "func1" in functions
+    assert "func2" in functions
+
+
+def test_clear_module(backend):
+    """Test clear_module method"""
+    # Compile a function
+    result = BinaryOp("add", Constant(1), Constant(2))
+    backend.compile_function_from_ast("test_func", [], I32, result)
+    assert backend.has_function("test_func")
+
+    # Clear module
+    backend.clear_module()
+    assert not backend.has_function("test_func")
+
 
 if __name__ == "__main__":
-    pytest.main([__file__])
+    pytest.main([__file__, "-v"])

@@ -3,7 +3,6 @@
 #include "mlir_edsl/MLIRBuilder.h"
 #include "mlir_edsl/MLIRExecutor.h"
 #include "mlir/IR/Value.h"
-#include "ast.pb.h"
 
 namespace py = pybind11;
 
@@ -20,58 +19,27 @@ PYBIND11_MODULE(_mlir_backend, m) {
     
     py::class_<mlir_edsl::MLIRBuilder>(m, "MLIRBuilder")
         .def(py::init<>())
-        .def("initialize_module", &mlir_edsl::MLIRBuilder::initializeModule, 
+        .def("initialize_module", &mlir_edsl::MLIRBuilder::initializeModule,
              "Initialize a new MLIR module")
-        .def("build_constant", 
-             py::overload_cast<int32_t>(&mlir_edsl::MLIRBuilder::buildConstant),
-             "Create integer constant")
-        .def("build_constant", 
-             py::overload_cast<float>(&mlir_edsl::MLIRBuilder::buildConstant),
-             "Create float constant")
-        .def("build_add", &mlir_edsl::MLIRBuilder::buildAdd,
-             "Create addition operation")
-        .def("build_sub", &mlir_edsl::MLIRBuilder::buildSub,
-             "Create subtraction operation")
-        .def("build_mul", &mlir_edsl::MLIRBuilder::buildMul,
-             "Create multiplication operation")
-        .def("build_div", &mlir_edsl::MLIRBuilder::buildDiv,
-             "Create division operation")
-        .def("build_compare", &mlir_edsl::MLIRBuilder::buildCompare,
-             "Create comparison operation")
-        .def("build_if", &mlir_edsl::MLIRBuilder::buildIf,
-             "Create if-else conditional operation")
-        .def("build_for_with_op", &mlir_edsl::MLIRBuilder::buildForWithOp,
-             "Create for loop with predefined operation")
-        .def("build_while_with_op", &mlir_edsl::MLIRBuilder::buildWhileWithOp,
-             "Create while loop with predefined operation")
-        .def("create_function", &mlir_edsl::MLIRBuilder::createFunction,
-             "Create function with signature")
-        .def("finalize_function", &mlir_edsl::MLIRBuilder::finalizeFunction,
-             "Finalize function with return statement")
-        .def("call_function", &mlir_edsl::MLIRBuilder::callFunction,
-             "Call a function by name with arguments")
-        .def("get_parameter", &mlir_edsl::MLIRBuilder::getParameter,
-             "Get parameter by name")
+
+        // ==================== CORE COMPILATION ====================
+        .def("compile_function", &mlir_edsl::MLIRBuilder::compileFunctionFromDef,
+             py::arg("function_def_bytes"),
+             "Compile complete function from protobuf FunctionDef (single buffer)")
+
+        // ==================== INSPECTION ====================
         .def("get_mlir_string", &mlir_edsl::MLIRBuilder::getMLIRString,
-             "Get generated MLIR as string")
+             "Get generated MLIR IR as string")
         .def("get_llvm_ir_string", &mlir_edsl::MLIRBuilder::getLLVMIRString,
              "Get generated LLVM IR as string")
-        .def("reset", &mlir_edsl::MLIRBuilder::reset,
-             "Reset builder for new function")
+
+        // ==================== MANAGEMENT ====================
         .def("has_function", &mlir_edsl::MLIRBuilder::hasFunction,
              "Check if function is already compiled")
-        .def("clear_module", &mlir_edsl::MLIRBuilder::clearModule,
-             "Clear all functions from module")
         .def("list_functions", &mlir_edsl::MLIRBuilder::listFunctions,
-             "Get list of all compiled function names")
-        .def("build_from_protobuf", &mlir_edsl::MLIRBuilder::buildFromProtoBuf,
-             "Build MLIR from protobuf-serialized AST")
-        .def("compile_function_from_ast", &mlir_edsl::MLIRBuilder::compileFunctionFromAST,
-             py::arg("name"),
-             py::arg("params"),
-             py::arg("return_type"),
-             py::arg("ast_protobuf_bytes"),
-             "Compile complete function from protobuf AST (single call)");
+             "List all compiled function names")
+        .def("clear_module", &mlir_edsl::MLIRBuilder::clearModule,
+             "Clear all compiled functions");
 
     py::class_<mlir_edsl::MLIRExecutor>(m, "MLIRExecutor")
         .def(py::init<>())

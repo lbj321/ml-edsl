@@ -48,6 +48,7 @@ add_library(_mlir_backend MODULE
 
 target_include_directories(_mlir_backend PRIVATE
     include
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
 )
 
 target_include_mlir_directories(_mlir_backend)

@@ -125,3 +125,7 @@ yarn-error.log*
 # Generated Python bindings
 *.so
 pybind11/
+
+
+# Protocol buffer generated files
+*_pb2.py

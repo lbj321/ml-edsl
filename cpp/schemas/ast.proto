@@ -89,6 +89,7 @@ message BinaryOp {
   BinaryOpType op_type = 1;
   ASTNode left = 2;   // Nested node
   ASTNode right = 3;  // Nested node
+  ValueType result_type = 4;  // Result type after type promotion (set by Python)
 }
 
 // Comparison operation
@@ -96,6 +97,7 @@ message CompareOp {
   ComparisonPredicate predicate = 1;
   ASTNode left = 2;
   ASTNode right = 3;
+  ValueType operand_type = 4;  // Operand type after promotion (set by Python)
 }
 
 // Conditional operation (if-then-else)
@@ -103,14 +105,14 @@ message IfOp {
   ASTNode condition = 1;
   ASTNode then_value = 2;
   ASTNode else_value = 3;
-  ValueType result_type = 4;
+  ValueType result_type = 4;  // Result type (set by Python after branch validation)
 }
 
 // Function call operation
 message CallOp {
   string func_name = 1;
   repeated ASTNode args = 2;  // Array of argument nodes
-  ValueType return_type = 3;
+  ValueType return_type = 3;  // Required: Specifies function return type
 }
 
 // For loop operation (scf.for)
@@ -120,6 +122,7 @@ message ForLoopOp {
   ASTNode step = 3;           // Loop step/increment
   ASTNode init_value = 4;     // Initial accumulator value
   BinaryOpType operation = 5; // Loop body operation
+  ValueType result_type = 6;  // Result type (set by Python, all inputs must match)
 }
 
 // While loop operation (scf.while)
@@ -128,9 +131,24 @@ message WhileLoopOp {
   ASTNode target = 2;              // Comparison target value
   BinaryOpType operation = 3;      // Loop body operation
   ComparisonPredicate predicate = 4; // Comparison predicate enum
+  ValueType result_type = 5;       // Result type (set by Python, init_value and target must match)
 }
 
 // Root message for the entire AST
 message ASTRoot {
   ASTNode root = 1;  // Root node of the expression tree
+}
+
+// Function parameter definition
+message FunctionParameter {
+  string name = 1;
+  ValueType type = 2;
+}
+
+// Complete function definition (name, signature, body)
+message FunctionDef {
+  string name = 1;                    // Function name
+  repeated FunctionParameter params = 2;  // Function parameters
+  ValueType return_type = 3;          // Return type
+  ASTNode body = 4;                   // Function body AST
 }

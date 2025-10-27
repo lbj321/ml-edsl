@@ -1,204 +1,217 @@
-"""Tests for conditional operations (comparisons and if-else)"""
+"""Tests for conditional operations using high-level API
+
+This test suite uses @ml_function decorator with operator overloading and If() helper.
+Tests focus on JIT execution results rather than backend implementation details.
+"""
 
 import pytest
-from mlir_edsl.backend import HAS_CPP_BACKEND, get_backend
+from mlir_edsl import ml_function, If
+from mlir_edsl.backend import HAS_CPP_BACKEND
 
 # Skip all tests if C++ backend is not available
 pytestmark = pytest.mark.skipif(not HAS_CPP_BACKEND, reason="C++ backend not available")
 
 
-@pytest.fixture
-def backend():
-    """Provide a clean backend instance for each test"""
-    backend_instance = get_backend()
-    backend_instance.reset()
-    return backend_instance
+# ==================== BASIC CONDITIONAL TESTS ====================
+
+def test_if_greater_than():
+    """Test If with greater than comparison"""
+
+    @ml_function
+    def max_value(x, y):
+        return If(x > y, then_value=x, else_value=y)
+
+    assert max_value(10, 5) == 10
+    assert max_value(3, 7) == 7
+    assert max_value(5, 5) == 5
 
 
-def test_cpp_comparison_operations(backend):
-    """Test basic comparison operations"""
-    # Test integer comparisons
-    five = backend.constant(5)
-    three = backend.constant(3)
-    
-    # Test greater than (5 > 3 = true)
-    gt_result = backend.compare("sgt", five, three)
-    assert gt_result.type == "i1"  # Boolean result
-    
-    # Test less than (5 < 3 = false) 
-    lt_result = backend.compare("slt", five, three)
-    assert lt_result.type == "i1"
-    
-    # Test equality (5 == 3 = false)
-    eq_result = backend.compare("eq", five, three)
-    assert eq_result.type == "i1"
+def test_if_less_than():
+    """Test If with less than comparison"""
+
+    @ml_function
+    def min_value(x, y):
+        return If(x < y, then_value=x, else_value=y)
+
+    assert min_value(10, 5) == 5
+    assert min_value(3, 7) == 3
+    assert min_value(5, 5) == 5
 
 
-def test_cpp_float_comparison(backend):
-    """Test float comparison operations"""
-    # Test float comparisons with promoted predicates
-    pi = backend.constant(3.14)
-    e = backend.constant(2.71)
-    
-    # Note: Float comparisons use "ordered" predicates
-    gt_result = backend.compare("ogt", pi, e)  # 3.14 > 2.71 = true
-    assert gt_result.type == "i1"
-    
-    eq_result = backend.compare("oeq", pi, pi)  # 3.14 == 3.14 = true
-    assert eq_result.type == "i1"
+def test_if_equality():
+    """Test If with equality comparison"""
+
+    @ml_function
+    def check_equal(x, y):
+        return If(x == y, then_value=1, else_value=0)
+
+    assert check_equal(5, 5) == 1
+    assert check_equal(5, 3) == 0
 
 
-def test_cpp_mixed_type_comparison(backend):
-    """Test comparison with mixed types (int vs float)"""
-    # Mixed types should be promoted for comparison
-    int_val = backend.constant(5)      # i32
-    float_val = backend.constant(5.0)  # f32
-    
-    # Should promote int to float, then use float comparison
-    eq_result = backend.compare("oeq", int_val, float_val)
-    assert eq_result.type == "i1"
+def test_if_not_equal():
+    """Test If with not-equal comparison"""
+
+    @ml_function
+    def check_not_equal(x, y):
+        return If(x != y, then_value=1, else_value=0)
+
+    assert check_not_equal(5, 3) == 1
+    assert check_not_equal(5, 5) == 0
 
 
-def test_cpp_basic_if_else(backend):
-    """Test basic if-else operation"""
-    # Create: if (5 > 3) return 10 else return 20
-    five = backend.constant(5)
-    three = backend.constant(3)
-    condition = backend.compare("sgt", five, three)  # true
-    
-    ten = backend.constant(10)
-    twenty = backend.constant(20)
-    
-    if_result = backend.if_else(condition, ten, twenty)
-    assert if_result.type == "i32"  # Should match then/else type
+# ==================== CONDITIONAL WITH EXPRESSIONS ====================
+
+def test_if_with_arithmetic_branches():
+    """Test If with arithmetic in branches"""
+
+    @ml_function
+    def conditional_calc(x, y):
+        return If(x > y, then_value=x * 2, else_value=y * 2)
+
+    assert conditional_calc(10, 5) == 20  # 10 > 5, so 10 * 2
+    assert conditional_calc(3, 7) == 14   # 3 < 7, so 7 * 2
 
 
-def test_cpp_conditional_mlir_generation(backend):
-    """Test MLIR generation for conditional operations"""
-    # Create: if (7 > 2) return 100 else return 200
-    seven = backend.constant(7)
-    two = backend.constant(2)
-    condition = backend.compare("sgt", seven, two)
-    
-    hundred = backend.constant(100)
-    two_hundred = backend.constant(200)
-    result = backend.if_else(condition, hundred, two_hundred)
-    
-    backend.create_function("test_conditional", [], "i32")
-    backend.finalize_function("test_conditional", result)
-    mlir_code = backend.get_mlir_string()
-    
-    # Verify MLIR contains conditional constructs
-    assert "arith.cmpi" in mlir_code or "arith.cmp" in mlir_code     # Comparison operation
-    assert "scf.if" in mlir_code         # Conditional operation
-    assert "scf.yield" in mlir_code      # Yield in regions
-    assert "value = 100" in mlir_code    # Constant 100 (updated format)
-    assert "value = 200" in mlir_code    # Constant 200 (updated format)
-    
-    print(f"\nGenerated Conditional MLIR:\n{mlir_code}")
+def test_if_with_complex_condition():
+    """Test If with complex expression in condition"""
+
+    @ml_function
+    def complex_condition(a, b, c):
+        # Condition: (a + b) > c
+        return If((a + b) > c, then_value=a + b, else_value=c)
+
+    assert complex_condition(10, 5, 12) == 15  # (10+5)=15 > 12, return 15
+    assert complex_condition(3, 2, 10) == 10   # (3+2)=5 < 10, return 10
 
 
-def test_cpp_nested_conditional(backend):
-    """Test nested expressions with conditionals"""
-    # Create: if ((10 + 5) > 12) return (2 * 3) else return (20 - 5)
-    ten = backend.constant(10)
-    five = backend.constant(5)
-    twelve = backend.constant(12)
-    
-    # Left side: (10 + 5) > 12
-    sum_result = backend.add(ten, five)  # 15
-    condition = backend.compare("sgt", sum_result, twelve)  # 15 > 12 = true
-    
-    # Then branch: 2 * 3
-    two = backend.constant(2)
-    three = backend.constant(3)
-    then_value = backend.mul(two, three)  # 6
-    
-    # Else branch: 20 - 5  
-    twenty = backend.constant(20)
-    five2 = backend.constant(5)
-    else_value = backend.sub(twenty, five2)  # 15
-    
-    result = backend.if_else(condition, then_value, else_value)
-    backend.create_function("nested_conditional", [], "i32")
-    backend.finalize_function("nested_conditional", result)
-    mlir_code = backend.get_mlir_string()
-    
-    # Should contain multiple operations
-    assert "arith.addi" in mlir_code     # Addition
-    assert "arith.cmpi" in mlir_code     # Comparison
-    assert "scf.if" in mlir_code         # Conditional
-    assert "arith.muli" in mlir_code     # Multiplication in then
-    assert "arith.subi" in mlir_code     # Subtraction in else
-    
-    print(f"\nGenerated Nested Conditional MLIR:\n{mlir_code}")
+def test_if_with_complex_branches():
+    """Test If with complex expressions in both branches"""
+
+    @ml_function
+    def nested_arithmetic(x, y):
+        # if ((10 + 5) > 12) return (2 * 3) else return (20 - 5)
+        condition = (x + 5) > 12
+        then_branch = 2 * 3
+        else_branch = 20 - 5
+        return If(condition, then_value=then_branch, else_value=else_branch)
+
+    assert nested_arithmetic(10, 0) == 6   # (10+5)=15 > 12, return 2*3=6
+    assert nested_arithmetic(5, 0) == 15   # (5+5)=10 < 12, return 20-5=15
 
 
-def test_cpp_float_conditional(backend):
-    """Test conditional with float operations"""
-    # Create: if (3.5 > 2.1) return 10.0 else return 20.0
-    val1 = backend.constant(3.5)
-    val2 = backend.constant(2.1)
-    condition = backend.compare("ogt", val1, val2)  # float comparison
-    
-    then_val = backend.constant(10.0)
-    else_val = backend.constant(20.0)
-    
-    result = backend.if_else(condition, then_val, else_val)
-    assert result.type == "f32"
-    
-    backend.create_function("float_conditional", [], "f32")
-    backend.finalize_function("float_conditional", result)
-    mlir_code = backend.get_mlir_string()
-    
-    # Verify float operations
-    assert "arith.cmpf" in mlir_code     # Float comparison
-    assert "scf.if" in mlir_code
-    assert "-> f32" in mlir_code         # Float return type
-    
-    print(f"\nGenerated Float Conditional MLIR:\n{mlir_code}")
+# ==================== FLOAT CONDITIONALS ====================
+
+def test_if_float_comparison():
+    """Test If with float comparisons"""
+
+    @ml_function
+    def float_max(x, y):
+        return If(x > y, then_value=x, else_value=y)
+
+    result = float_max(3.5, 2.1)
+    assert abs(result - 3.5) < 0.001
+
+    result = float_max(1.5, 2.8)
+    assert abs(result - 2.8) < 0.001
 
 
-def test_cpp_comparison_predicates(backend):
-    """Test different comparison predicates"""
-    a = backend.constant(10)
-    b = backend.constant(5)
-    
-    # Test all integer predicates
-    sgt = backend.compare("sgt", a, b)  # 10 > 5
-    slt = backend.compare("slt", a, b)  # 10 < 5  
-    eq = backend.compare("eq", a, a)    # 10 == 10
-    ne = backend.compare("ne", a, b)    # 10 != 5
-    sge = backend.compare("sge", a, b)  # 10 >= 5
-    sle = backend.compare("sle", b, a)  # 5 <= 10
-    
-    # All should return i1 type
-    for comp_result in [sgt, slt, eq, ne, sge, sle]:
-        assert comp_result.type == "i1"
+def test_if_float_operations():
+    """Test If with float arithmetic in branches"""
+
+    @ml_function
+    def float_conditional(x, y):
+        return If(x > y, then_value=x + 1.5, else_value=y + 2.5)
+
+    result = float_conditional(10.0, 5.0)
+    assert abs(result - 11.5) < 0.001  # 10 > 5, so 10 + 1.5
+
+    result = float_conditional(3.0, 7.0)
+    assert abs(result - 9.5) < 0.001   # 3 < 7, so 7 + 2.5
 
 
-def test_cpp_conditional_llvm_ir(backend):
-    """Test LLVM IR generation for conditionals"""
-    # Use parameters instead of constants to prevent constant folding
-    backend.create_function("conditional_fn", [("param1", "i32"), ("param2", "i32")], "i32")
-    param1 = backend.get_parameter("param1")
-    param2 = backend.get_parameter("param2")
+def test_if_mixed_type_comparison():
+    """Test If with mixed int/float (type promotion)"""
 
-    condition = backend.compare("sgt", param1, param2)
-    result = backend.if_else(condition, backend.constant(42), backend.constant(24))
+    @ml_function
+    def mixed_conditional(x, y):
+        # x is int, y is float - should promote to float comparison
+        return If(x > y, then_value=x, else_value=y)
 
-    backend.finalize_function("conditional_fn", result)
-    llvm_ir = backend.get_llvm_ir_string()
-    
-    # Verify LLVM IR contains conditional constructs
-    assert "define" in llvm_ir
-    assert "conditional_fn" in llvm_ir
-    assert "icmp" in llvm_ir  # Now there should be an actual comparison
-    assert "br" in llvm_ir                        # Branch instruction
-    assert "ret" in llvm_ir
-    assert not llvm_ir.startswith("ERROR:")
-    print(f"\nConditional LLVM IR:\n{llvm_ir}")
+    result = mixed_conditional(10, 5.5)
+    # 10.0 > 5.5, return 10 (promoted to float)
+    assert abs(result - 10.0) < 0.001
+
+
+# ==================== COMPARISON OPERATORS ====================
+
+def test_all_comparison_operators():
+    """Test all comparison operators via overloading"""
+
+    @ml_function
+    def test_gt(x, y):
+        return If(x > y, then_value=1, else_value=0)
+
+    @ml_function
+    def test_lt(x, y):
+        return If(x < y, then_value=1, else_value=0)
+
+    @ml_function
+    def test_ge(x, y):
+        return If(x >= y, then_value=1, else_value=0)
+
+    @ml_function
+    def test_le(x, y):
+        return If(x <= y, then_value=1, else_value=0)
+
+    # Greater than
+    assert test_gt(10, 5) == 1
+    assert test_gt(5, 10) == 0
+
+    # Less than
+    assert test_lt(5, 10) == 1
+    assert test_lt(10, 5) == 0
+
+    # Greater or equal
+    assert test_ge(10, 5) == 1
+    assert test_ge(5, 5) == 1
+    assert test_ge(3, 5) == 0
+
+    # Less or equal
+    assert test_le(5, 10) == 1
+    assert test_le(5, 5) == 1
+    assert test_le(10, 5) == 0
+
+
+# ==================== PARAMETERIZED CONDITIONALS ====================
+
+def test_if_with_parameters():
+    """Test If using function parameters in all parts"""
+
+    @ml_function
+    def param_conditional(a, b, x, y):
+        # Use parameters in condition and branches
+        return If(a > b, then_value=x, else_value=y)
+
+    assert param_conditional(10, 5, 100, 200) == 100
+    assert param_conditional(3, 7, 100, 200) == 200
+
+
+def test_if_chained_logic():
+    """Test multiple conditional-like logic"""
+
+    @ml_function
+    def clamp(value, min_val, max_val):
+        # Clamp value between min and max
+        # First check if value < min_val
+        adjusted = If(value < min_val, then_value=min_val, else_value=value)
+        # Then check if adjusted > max_val
+        return If(adjusted > max_val, then_value=max_val, else_value=adjusted)
+
+    assert clamp(5, 0, 10) == 5    # Within range
+    assert clamp(-5, 0, 10) == 0   # Below min
+    assert clamp(15, 0, 10) == 10  # Above max
 
 
 if __name__ == "__main__":
-    pytest.main([__file__])
+    pytest.main([__file__, "-v"])

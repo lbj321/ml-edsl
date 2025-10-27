@@ -8,7 +8,7 @@ Phase 3: C++ MLIR Backend
 - Fallback to string-based generation if C++ backend unavailable
 """
 
-from .ops import add, sub, mul, div
+from .ops import add, sub, mul, div, lt, le, gt, ge, eq, ne, If, For, While
 from .functions import ml_function
 from .ast import Value, Constant, BinaryOp
 
@@ -22,12 +22,20 @@ except ImportError:
 __version__ = "0.3.0"
 
 __all__ = [
-    # Main user-facing API
+    # Main decorator
+    "ml_function",
+
+    # Arithmetic operations
     "add", "sub", "mul", "div",
-    "ml_function", 
-    
+
+    # Comparison operations
+    "lt", "le", "gt", "ge", "eq", "ne",
+
+    # Control flow
+    "If", "For", "While",
+
     # AST classes (for advanced usage)
     "Value",
-    "Constant", 
+    "Constant",
     "BinaryOp",
 ] + __all_cpp__

@@ -21,27 +21,30 @@ class MLFunction:
         if backend is None:
             raise RuntimeError("C++ backend not available for JIT execution")
 
-        # Prepare arguments
-        param_map = self._create_parameter_map(args, kwargs)
+        # Prepare arguments with type enums
+        param_map, runtime_values = self._create_parameter_map(args, kwargs)
         self._last_param_map = param_map
 
         param_list = []
         int_args = []
         float_args = []
         for param_name, param_obj in param_map.items():
-            param_list.append((param_name, param_obj.type))
-            if param_obj.type == "i32":
-                int_args.append(param_obj.value)
-            elif param_obj.type == "f32":
-                float_args.append(param_obj.value)
+            param_list.append((param_name, param_obj.value_type))
+            # Use runtime values for execution
+            if param_obj.value_type == I32:
+                int_args.append(runtime_values[param_name])
+            elif param_obj.value_type == F32:
+                float_args.append(runtime_values[param_name])
 
         # Check if function already compiled
         if not backend.has_function(self.func_name):
             # Compile function (only on first call)
             result_ast = self._execute_symbolic(param_map)
-            return_type = self._infer_return_type(result_ast)
 
-            # Single call compiles complete function (declaration + body + return)
+            # Get return type directly from AST
+            return_type = result_ast.infer_type()
+
+            # Single call compiles complete function
             backend.compile_function_from_ast(
                 self.func_name,
                 param_list,
@@ -61,23 +64,35 @@ class MLFunction:
         return self.__call__()
     
     def _create_parameter_map(self, args: Tuple,
-                              kwargs: Dict[str, Any]) -> Dict[str, Parameter]:
-        
+                              kwargs: Dict[str, Any]) -> Tuple[Dict[str, Parameter], Dict[str, Any]]:
+        """Create parameter map with schema-based type enums
+
+        Returns:
+            Tuple of (parameter_map with type enums, runtime_values dict)
+        """
         signature = inspect.signature(self.func)
         param_names = list(signature.parameters.keys())
 
         parameter_map = {}
+        runtime_values = {}
 
+        # Process positional arguments
         for i, arg_value in enumerate(args):
             if i < len(param_names):
                 param_name = param_names[i]
-                parameter_map[param_name] = Parameter(param_name, arg_value)
+                # Infer type enum from Python runtime value
+                value_type = I32 if isinstance(arg_value, int) else F32
+                parameter_map[param_name] = Parameter(param_name, value_type)
+                runtime_values[param_name] = arg_value
 
+        # Process keyword arguments
         for param_name, arg_value in kwargs.items():
             if param_name in param_names:
-                parameter_map[param_name] = Parameter(param_name, arg_value)
+                value_type = I32 if isinstance(arg_value, int) else F32
+                parameter_map[param_name] = Parameter(param_name, value_type)
+                runtime_values[param_name] = arg_value
 
-        return parameter_map
+        return parameter_map, runtime_values
     
     def _execute_symbolic(self, param_map: Dict):
         
@@ -93,35 +108,6 @@ class MLFunction:
         
         return self.func(*symbolic_args)
     
-    def _infer_return_type(self, result_ast) -> str:
-        """Recursively infer type from AST tree"""
-        
-        if isinstance(result_ast, Constant):
-            return "i32" if isinstance(result_ast.value, int) else "f32"
-        
-        elif isinstance(result_ast, Parameter):
-            return result_ast.type
-        
-        elif isinstance(result_ast, BinaryOp):
-            # Get types of both operands
-            left_type = self._infer_return_type(result_ast.left)
-            right_type = self._infer_return_type(result_ast.right)
-            # Apply promotion rules (matches your C++ backend)
-            return "f32" if left_type == "f32" or right_type == "f32" else "i32"
-        
-        elif isinstance(result_ast, CallOp):
-            # Function calls have explicit return types
-            return result_ast.type  # "i32" or "f32"
-        
-        elif isinstance(result_ast, CompareOp):
-            return "i1"  # Boolean result
-        
-        elif isinstance(result_ast, IfOp):
-            # Return type matches then/else branches
-            return self._infer_return_type(result_ast.then_value)
-        
-        else:
-            raise ValueError(f"Cannot infer type for AST node: {type(result_ast).__name__}")
 
 
 def ml_function(func: Callable) -> MLFunction:
