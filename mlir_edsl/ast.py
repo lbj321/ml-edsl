@@ -175,28 +175,28 @@ class Constant(Value):
 
 
 class BinaryOp(Value):
-    """Represents a binary operation like addition, subtraction, etc."""
+    """Represents a binary operation - STRICT TYPE MATCHING ENFORCED"""
 
     def __init__(self, op: str, left: Value, right: Value):
         self.op = op
         self.left = left
         self.right = right
-        # Infer and cache type at construction
-        self._inferred_type = self._compute_type()
 
-    def _compute_type(self) -> int:
-        """Type promotion rules: F32 > I32"""
+    def infer_type(self) -> int:
+        """STRICT: Both operands must have the same type"""
         left_type = self.left.infer_type()
         right_type = self.right.infer_type()
 
-        # Float promotion: if either operand is float, result is float
-        if left_type == F32 or right_type == F32:
-            return F32
-        return I32
+        if left_type != right_type:
+            from .types import type_to_string
+            raise TypeError(
+                f"Binary operation '{self.op}' requires matching types.\n"
+                f"  Left operand type:  {type_to_string(left_type)}\n"
+                f"  Right operand type: {type_to_string(right_type)}\n"
+                f"  Hint: Use cast() to convert types explicitly"
+            )
 
-    def infer_type(self) -> int:
-        """Return cached inferred type"""
-        return self._inferred_type
+        return left_type
 
     def to_proto(self):
         if ast_pb2 is None:
@@ -204,7 +204,7 @@ class BinaryOp(Value):
 
         pb_node = ast_pb2.ASTNode()
         pb_node.binary_op.op_type = _binary_op_to_proto(self.op)
-        pb_node.binary_op.result_type = self._inferred_type
+        pb_node.binary_op.result_type = self.infer_type()
 
         # Recursively serialize children
         pb_node.binary_op.left.CopyFrom(self.left.to_proto())
@@ -445,4 +445,31 @@ class WhileLoopOp(Value):
         pb_node.while_loop_op.predicate = _predicate_to_proto(self.predicate)
         pb_node.while_loop_op.result_type = self._inferred_type
 
+        return pb_node
+
+
+class CastOp(Value):
+    """Explicit type cast operation"""
+
+    def __init__(self, value: Value, target_type: int):
+        """Create a cast operation
+
+        Args:
+            value: Value to cast
+            target_type: Target MLIR type enum (I32, F32, I1)
+        """
+        self.value = value
+        self.target_type = target_type
+
+    def infer_type(self) -> int:
+        """Cast always produces the target type"""
+        return self.target_type
+
+    def to_proto(self):
+        if ast_pb2 is None:
+            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
+
+        pb_node = ast_pb2.ASTNode()
+        pb_node.cast_op.value.CopyFrom(self.value.to_proto())
+        pb_node.cast_op.target_type = self.target_type
         return pb_node

@@ -365,3 +365,31 @@ def While(init: Union[int, float, Value],
         target = Constant(target)
 
     return WhileLoopOp(init, target, operation, predicate)
+
+
+def cast(value: Union[int, float, Value], target_type) -> 'CastOp':
+    """Explicitly cast a value to a different type
+
+    Args:
+        value: Value to cast (int, float, or AST Value)
+        target_type: Target MLIR type (i32, f32, i1 object or I32, F32, I1 enum)
+
+    Returns:
+        CastOp representing the explicit conversion
+
+    Examples:
+        cast(my_float, i32)  # f32 -> i32 (truncate)
+        cast(my_int, f32)    # i32 -> f32 (convert)
+        cast(5.7, i32)       # Constant 5.7 -> i32
+        result = add(cast(a, f32), b)  # a is i32, b is f32
+    """
+    from .ast import CastOp
+    from .types import MLIRType
+
+    if isinstance(value, (int, float)):
+        value = Constant(value)
+
+    if isinstance(target_type, MLIRType):
+        target_type = target_type.enum_value
+
+    return CastOp(value, target_type)

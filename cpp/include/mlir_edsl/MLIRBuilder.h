@@ -92,6 +92,7 @@ private:
                          std::function<mlir::Value(mlir::Value)> body_fn);
 
   mlir::Value convertIntToFloat(mlir::Value intValue);
+  mlir::Value buildCast(mlir::Value sourceValue, mlir_edsl::ValueType targetType);
 
   // Internal function building (not exposed to Python)
   void createFunction(

@@ -66,6 +66,7 @@ message ASTNode {
     CallOp call_op = 6;
     ForLoopOp for_loop_op = 7;
     WhileLoopOp while_loop_op = 8;
+    CastOp cast_op = 9;
   }
 }
 
@@ -132,6 +133,12 @@ message WhileLoopOp {
   BinaryOpType operation = 3;      // Loop body operation
   ComparisonPredicate predicate = 4; // Comparison predicate enum
   ValueType result_type = 5;       // Result type (set by Python, init_value and target must match)
+}
+
+// Cast operation (explicit type conversion)
+message CastOp {
+  ASTNode value = 1;          // Value to cast
+  ValueType target_type = 2;  // Target type to cast to
 }
 
 // Root message for the entire AST

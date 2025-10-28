@@ -121,6 +121,11 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
     mlir::Value target = buildFromProtobufNode(whileloop.target());
     return buildWhileWithOp(init_value, target, whileloop.operation(),
                             whileloop.predicate());
+
+  } else if (node.has_cast_op()) {
+    const auto &cast = node.cast_op();
+    mlir::Value sourceValue = buildFromProtobufNode(cast.value());
+    return buildCast(sourceValue, cast.target_type());
   }
 
   throw std::runtime_error("Unknown protobuf node type");
@@ -216,6 +221,45 @@ mlir::Value MLIRBuilder::convertIntToFloat(mlir::Value intValue) {
   auto loc = builder->getUnknownLoc();
   auto floatType = getFloatType();
   return builder->create<mlir::arith::SIToFPOp>(loc, floatType, intValue);
+}
+
+mlir::Value MLIRBuilder::buildCast(mlir::Value sourceValue,
+                                   mlir_edsl::ValueType targetType) {
+  auto loc = builder->getUnknownLoc();
+  mlir::Type sourceType = sourceValue.getType();
+  mlir::Type targetMLIRType = protoTypeToMLIRType(targetType);
+
+  // Float to integer
+  if (isFloatType(sourceType) && isIntegerType(targetMLIRType)) {
+    return builder->create<mlir::arith::FPToSIOp>(loc, targetMLIRType,
+                                                  sourceValue);
+  }
+  // Integer to float
+  else if (isIntegerType(sourceType) && isFloatType(targetMLIRType)) {
+    return builder->create<mlir::arith::SIToFPOp>(loc, targetMLIRType,
+                                                  sourceValue);
+  }
+  // Integer to integer (different widths)
+  else if (isIntegerType(sourceType) && isIntegerType(targetMLIRType)) {
+    unsigned sourceBits = sourceType.getIntOrFloatBitWidth();
+    unsigned targetBits = targetMLIRType.getIntOrFloatBitWidth();
+
+    if (sourceBits < targetBits) {
+      return builder->create<mlir::arith::ExtSIOp>(loc, targetMLIRType,
+                                                   sourceValue);
+    } else if (sourceBits > targetBits) {
+      return builder->create<mlir::arith::TruncIOp>(loc, targetMLIRType,
+                                                    sourceValue);
+    } else {
+      return sourceValue; // Same width, no cast needed
+    }
+  }
+  // Float to float (same type, no cast needed)
+  else if (isFloatType(sourceType) && isFloatType(targetMLIRType)) {
+    return sourceValue;
+  }
+
+  throw std::runtime_error("Invalid cast: unsupported type combination");
 }
 
 mlir::Value MLIRBuilder::buildCompare(mlir_edsl::ComparisonPredicate predicate,
