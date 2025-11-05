@@ -8,7 +8,7 @@ Phase 3: C++ MLIR Backend
 - Fallback to string-based generation if C++ backend unavailable
 """
 
-from .types import I32, F32, I1, i32, f32, i1
+from .types import i32, f32, i1
 from .ops import add, sub, mul, div, lt, le, gt, ge, eq, ne, If, For, While, cast
 from .functions import ml_function
 from .ast import Value, Constant, BinaryOp, CastOp
@@ -26,8 +26,8 @@ __all__ = [
     # Main decorator
     "ml_function",
 
-    # Type system
-    "I32", "F32", "I1", "i32", "f32", "i1",
+    # Type system (only lowercase - user-facing type hints)
+    "i32", "f32", "i1",
 
     # Arithmetic operations
     "add", "sub", "mul", "div", "cast",

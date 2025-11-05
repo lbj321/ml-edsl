@@ -84,6 +84,11 @@ coverage.xml
 *.cover
 .hypothesis/
 
+# IR output from tests
+ir_output/
+ir_html/
+ir_html/
+
 # Documentation builds
 docs/_build/
 docs/build/

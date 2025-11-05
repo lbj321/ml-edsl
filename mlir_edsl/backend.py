@@ -1,7 +1,8 @@
 """C++ MLIR backend integration"""
+import ctypes
 from typing import Union
 from .ast import Value
-from .types import I32, F32, I1
+from .types import TYPE_TO_CTYPES
 
 try:
     from . import _mlir_backend
@@ -19,39 +20,8 @@ except ImportError:
 # Global instance to keep the builder alive
 _global_builder = None
 
-class MLIRValue(Value):
-    """Wrapper for C++ MLIR values"""
-
-    def __init__(self, cpp_value, builder, value_type: int):
-        """
-        Args:
-            cpp_value: C++ mlir::Value
-            builder: CppMLIRBuilder instance
-            value_type: Protobuf ValueType enum (I32=0, F32=1, I1=2)
-        """
-        self.cpp_value = cpp_value
-        self.builder = builder
-        self.value_type = value_type  # Store as enum int
-
-    @property
-    def type(self):
-        """Backward compatibility: returns enum"""
-        return self.value_type
-
-    def to_proto(self):
-        """MLIRValue cannot be serialized to protobuf - it's already compiled MLIR"""
-        raise RuntimeError("MLIRValue is already compiled MLIR and cannot be serialized to protobuf")
-
-    def to_mlir(self, ssa_counter: dict) -> tuple[list[str], str]:
-        """This should not be called when using C++ backend"""
-        raise RuntimeError("to_mlir() should not be called with C++ backend")
-
-class CppMLIRBuilder:
-    """Minimal schema-driven Python wrapper for C++ MLIR builder
-
-    All MLIR construction happens in C++ via protobuf AST serialization.
-    This wrapper only exposes essential compilation and inspection methods.
-    """
+class CppMLIRBackend:
+    """Schema-driven Python wrapper for C++ MLIR builder with ctypes execution"""
 
     def __init__(self):
         if not HAS_CPP_BACKEND:
@@ -61,6 +31,12 @@ class CppMLIRBuilder:
         self.builder.initialize_module()
         self.executor = _mlir_backend.MLIRExecutor()
         self.executor.initialize()
+
+        # Set default optimization level (O2 = balanced performance)
+        self.executor.set_optimization_level(2)
+
+        # Cache for ctypes function wrappers
+        self._function_cache = {}
 
     # ==================== CORE COMPILATION ====================
     def compile_function_from_ast(self, name: str, params: list,
@@ -90,45 +66,57 @@ class CppMLIRBuilder:
         # Add function body
         func_def.body.CopyFrom(ast_node.to_proto())
 
-        # Serialize everything to single buffer
-        buffer = func_def.SerializeToString()
+        # Serialize and compile (returns FunctionSignature protobuf)
+        func_def_bytes = func_def.SerializeToString()
+        sig_bytes = self.builder.compile_function(func_def_bytes)
 
-        # Single C++ call with single buffer - full schema enforcement!
-        self.builder.compile_function(buffer)
+        # Register signature with executor
+        self.executor.register_function_signature(sig_bytes)
 
-    def execute_function(self, name: str, result: Value,
-                        int_args: list = None, float_args: list = None) -> Union[int, float]:
-        """Execute compiled function via JIT
+    def execute_function(self, name: str, *args) -> Union[int, float, bool]:
+        """Execute compiled function via JIT with ctypes
 
         Args:
             name: Function name to execute
-            result: AST node for type inference
-            int_args: Integer arguments for function
-            float_args: Float arguments for function
+            *args: Arguments in declaration order
 
         Returns:
-            Execution result (int or float)
+            Execution result (int, float, or bool)
         """
-        llvm_ir = self.builder.get_llvm_ir_string()
-        self.executor.clear()
+        # Build ctypes function wrapper (cached)
+        if name not in self._function_cache:
+            # Get signature BEFORE clearing (it was registered during compile_function_from_ast)
+            sig_bytes = self.executor.get_function_signature(name)
+            sig = ast_pb2.FunctionSignature()
+            sig.ParseFromString(sig_bytes)
 
-        func_ptr = self.executor.compile_function(llvm_ir, name)
-        if func_ptr is None:
-            raise RuntimeError(f"JIT compilation failed: {self.executor.get_last_error()}")
+            # Get LLVM IR and JIT compile
+            llvm_ir = self.builder.get_llvm_ir_string()
+            self.executor.clear()
 
-        # Get return type directly from AST
-        result_type = result.infer_type()
+            func_ptr = self.executor.compile_function(llvm_ir, name)
+            if func_ptr is None:
+                raise RuntimeError(f"JIT compilation failed: {self.executor.get_last_error()}")
 
-        int_args = int_args or []
-        float_args = float_args or []
+            # Re-register signature (it was cleared by clear())
+            self.executor.register_function_signature(sig_bytes)
 
-        # Call appropriate JIT function variant
-        if result_type == I32:
-            return self.executor.call_int32_function(func_ptr, int_args, float_args)
-        elif result_type == F32:
-            return self.executor.call_float_function(func_ptr, int_args, float_args)
-        else:
-            raise RuntimeError(f"Unsupported return type enum: {result_type}")
+            # Get function pointer as integer
+            func_ptr_int = self.executor.get_function_pointer(name)
+
+            # Build ctypes function signature
+            c_return_type = TYPE_TO_CTYPES[sig.return_type]
+            c_param_types = [TYPE_TO_CTYPES[pt] for pt in sig.param_types]
+
+            # Create ctypes function wrapper
+            func_type = ctypes.CFUNCTYPE(c_return_type, *c_param_types)
+            ctypes_func = func_type(func_ptr_int)
+
+            # Cache it
+            self._function_cache[name] = ctypes_func
+
+        # Call the cached function
+        return self._function_cache[name](*args)
 
     # ==================== INSPECTION ====================
     def get_mlir_string(self) -> str:
@@ -151,14 +139,30 @@ class CppMLIRBuilder:
     def clear_module(self):
         """Clear all functions from module"""
         self.builder.clear_module()
+        self._function_cache.clear()
+
+    def set_optimization_level(self, level: int):
+        """Set LLVM optimization level
+
+        Args:
+            level: Optimization level (0=O0/none, 2=O2/default, 3=O3/aggressive)
+
+        Note:
+            Clears the function cache since optimization level affects compilation.
+            Cached functions will be recompiled with new optimization level on next call.
+        """
+        if level not in [0, 2, 3]:
+            raise ValueError(f"Invalid optimization level {level}. Must be 0, 2, or 3.")
+        self.executor.set_optimization_level(level)
+        self._function_cache.clear()
 
 def get_backend():
-    """Get the appropriate backend (C++ if available, fallback to string-based)"""
+    """Get the appropriate backend (C++ if available)"""
     global _global_builder
-    
+
     if HAS_CPP_BACKEND:
         if _global_builder is None:
-            _global_builder = CppMLIRBuilder()
+            _global_builder = CppMLIRBackend()
         return _global_builder
     else:
         return None

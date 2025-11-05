@@ -159,3 +159,10 @@ message FunctionDef {
   ValueType return_type = 3;          // Return type
   ASTNode body = 4;                   // Function body AST
 }
+
+// Function signature (lightweight version for executor registration)
+message FunctionSignature {
+  string name = 1;                    // Function name
+  repeated ValueType param_types = 2; // Parameter types (just enums)
+  ValueType return_type = 3;          // Return type
+}

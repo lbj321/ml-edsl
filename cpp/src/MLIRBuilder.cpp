@@ -14,6 +14,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <stdexcept>
+#include <cstdlib>
+#include <fstream>
 
 namespace mlir_edsl {
 
@@ -494,7 +496,7 @@ mlir::Value MLIRBuilder::getParameter(const std::string &name) {
   throw std::runtime_error("Parameter not found: " + name);
 }
 
-void MLIRBuilder::compileFunctionFromDef(const std::string &buffer) {
+std::string MLIRBuilder::compileFunctionFromDef(const std::string &buffer) {
   mlir_edsl::FunctionDef func_def;
 
   if (!func_def.ParseFromString(buffer)) {
@@ -511,6 +513,18 @@ void MLIRBuilder::compileFunctionFromDef(const std::string &buffer) {
   createFunction(func_def.name(), params, func_def.return_type());
   mlir::Value result = buildFromProtobufNode(func_def.body());
   finalizeFunction(func_def.name(), result);
+
+  // Build FunctionSignature protobuf to return
+  mlir_edsl::FunctionSignature sig;
+  sig.set_name(func_def.name());
+  sig.set_return_type(func_def.return_type());
+
+  for (const auto &param : func_def.params()) {
+    sig.add_param_types(param.type());
+  }
+
+  // Return serialized signature
+  return sig.SerializeAsString();
 }
 
 void MLIRBuilder::createFunction(
@@ -551,6 +565,17 @@ void MLIRBuilder::finalizeFunction(const std::string &name,
   }
   builder->create<mlir::func::ReturnOp>(builder->getUnknownLoc(), result);
   compiledFunctions.insert(name);
+
+  // Save MLIR to file if SAVE_IR environment variable is set
+  const bool saveIR = std::getenv("SAVE_IR") != nullptr;
+  if (saveIR) {
+    std::string filename = "ir_output/" + name + ".mlir";
+    std::error_code EC;
+    llvm::raw_fd_ostream outFile(filename, EC);
+    if (!EC) {
+      module.print(outFile);
+    }
+  }
 }
 
 mlir::Value MLIRBuilder::callFunction(const std::string &name,

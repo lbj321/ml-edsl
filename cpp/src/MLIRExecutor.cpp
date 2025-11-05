@@ -12,6 +12,9 @@
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/Mem2Reg.h"
 
+#include <stdexcept>
+#include <cstdlib>
+
 namespace mlir_edsl {
 
 MLIRExecutor::MLIRExecutor() {
@@ -58,7 +61,28 @@ void *MLIRExecutor::compileFunction(const std::string &llvmIR,
     return nullptr;
   }
 
+  // Save unoptimized LLVM IR if SAVE_IR environment variable is set
+  const bool saveIR = std::getenv("SAVE_IR") != nullptr;
+  if (saveIR) {
+    std::string filename = "ir_output/" + funcName + "_unopt.ll";
+    std::error_code EC;
+    llvm::raw_fd_ostream outFile(filename, EC);
+    if (!EC) {
+      module->print(outFile, nullptr);
+    }
+  }
+
   optimizeModule(module.get());
+
+  // Save optimized LLVM IR if SAVE_IR environment variable is set
+  if (saveIR) {
+    std::string filename = "ir_output/" + funcName + "_opt.ll";
+    std::error_code EC;
+    llvm::raw_fd_ostream outFile(filename, EC);
+    if (!EC) {
+      module->print(outFile, nullptr);
+    }
+  }
 
   auto tsm = llvm::orc::ThreadSafeModule(std::move(module),
                                          std::make_unique<llvm::LLVMContext>());
@@ -75,97 +99,51 @@ void *MLIRExecutor::compileFunction(const std::string &llvmIR,
     return nullptr;
   }
 
-  return (void *)symbolOrError->getValue();
+  void* funcPtr = (void *)symbolOrError->getValue();
+
+  // Store the function pointer
+  functionPointers[funcName] = funcPtr;
+
+  return funcPtr;
 }
 
-int32_t MLIRExecutor::callInt32Function(void *funcPtr,
-                                        const std::vector<int32_t> &intArgs,
-                                        const std::vector<float> &floatArgs) {
-  if (!funcPtr) {
-    lastError = "Null function pointer";
-    return 0;
+void MLIRExecutor::registerFunctionSignature(const std::string &signature_bytes) {
+  mlir_edsl::FunctionSignature sig;
+
+  if (!sig.ParseFromString(signature_bytes)) {
+    throw std::runtime_error("Failed to parse FunctionSignature protobuf");
   }
 
-  size_t totalArgs = intArgs.size() + floatArgs.size();
-
-  if (totalArgs == 0) {
-    typedef int32_t (*FuncType)();
-    auto func = reinterpret_cast<FuncType>(funcPtr);
-    return func();
-  } else if (intArgs.size() == 1 && floatArgs.empty()) {
-    typedef int32_t (*FuncType)(int32_t);
-    auto func = reinterpret_cast<FuncType>(funcPtr);
-    return func(intArgs[0]);
-  } else if (intArgs.size() == 2 && floatArgs.empty()) {
-    typedef int32_t (*FuncType)(int32_t, int32_t);
-    auto func = reinterpret_cast<FuncType>(funcPtr);
-    return func(intArgs[0], intArgs[1]);
-  } else if (intArgs.size() == 3 && floatArgs.empty()) {
-    typedef int32_t (*FuncType)(int32_t, int32_t, int32_t);
-    auto func = reinterpret_cast<FuncType>(funcPtr);
-    return func(intArgs[0], intArgs[1], intArgs[2]);
-  } else if (intArgs.size() == 4 && floatArgs.empty()) {
-    typedef int32_t (*FuncType)(int32_t, int32_t, int32_t, int32_t);
-    auto func = reinterpret_cast<FuncType>(funcPtr);
-    return func(intArgs[0], intArgs[1], intArgs[2], intArgs[3]);
-  } else if (intArgs.size() == 1 && floatArgs.size() == 1) {
-    typedef int32_t (*FuncType)(int32_t, float);
-    auto func = reinterpret_cast<FuncType>(funcPtr);
-    return func(intArgs[0], floatArgs[0]);
-  }
-
-  std::string error =
-      "Unsupported parameter combination: " + std::to_string(intArgs.size()) +
-      " int args, " + std::to_string(floatArgs.size()) + " float args";
-  lastError = error;
-  throw std::runtime_error(error);
+  // Store signature by function name
+  signatures[sig.name()] = sig;
 }
 
-float MLIRExecutor::callFloatFunction(void *funcPtr,
-                                      const std::vector<int32_t> &intArgs,
-                                      const std::vector<float> &floatArgs) {
-  if (!funcPtr) {
-    lastError = "Null function pointer";
-    return 0.0f;
+uintptr_t MLIRExecutor::getFunctionPointer(const std::string &name) {
+  // Check if function signature is registered
+  if (signatures.find(name) == signatures.end()) {
+    lastError = "Function signature not registered: " + name;
+    throw std::runtime_error(lastError);
   }
 
-  size_t totalArgs = intArgs.size() + floatArgs.size();
-
-  if (totalArgs == 0) {
-    typedef float (*FuncType)();
-    auto func = reinterpret_cast<FuncType>(funcPtr);
-    return func();
-  } else if (intArgs.size() == 1 && floatArgs.empty()) {
-    typedef float (*FuncType)(int32_t);
-    auto func = reinterpret_cast<FuncType>(funcPtr);
-    return func(intArgs[0]);
-  } else if (intArgs.size() == 2 && floatArgs.empty()) {
-    typedef float (*FuncType)(int32_t, int32_t);
-    auto func = reinterpret_cast<FuncType>(funcPtr);
-    return func(intArgs[0], intArgs[1]);
-  } else if (intArgs.size() == 3 && floatArgs.empty()) {
-    typedef float (*FuncType)(int32_t, int32_t, int32_t);
-    auto func = reinterpret_cast<FuncType>(funcPtr);
-    return func(intArgs[0], intArgs[1], intArgs[2]);
-  } else if (intArgs.size() == 4 && floatArgs.empty()) {
-    typedef float (*FuncType)(int32_t, int32_t, int32_t, int32_t);
-    auto func = reinterpret_cast<FuncType>(funcPtr);
-    return func(intArgs[0], intArgs[1], intArgs[2], intArgs[3]);
-  } else if (floatArgs.size() == 2 && intArgs.empty()) {
-    typedef float (*FuncType)(float, float);
-    auto func = reinterpret_cast<FuncType>(funcPtr);
-    return func(floatArgs[0], floatArgs[1]);
-  } else if (intArgs.size() == 1 && floatArgs.size() == 1) {
-    typedef float (*FuncType)(int32_t, float);
-    auto func = reinterpret_cast<FuncType>(funcPtr);
-    return func(intArgs[0], floatArgs[0]);
+  // Check if function pointer is available
+  auto it = functionPointers.find(name);
+  if (it == functionPointers.end()) {
+    lastError = "Function not compiled: " + name;
+    throw std::runtime_error(lastError);
   }
 
-  std::string error =
-      "Unsupported parameter combination: " + std::to_string(intArgs.size()) +
-      " int args, " + std::to_string(floatArgs.size()) + " float args";
-  lastError = error;
-  throw std::runtime_error(error);
+  // Return as uintptr_t for Python
+  return reinterpret_cast<uintptr_t>(it->second);
+}
+
+std::string MLIRExecutor::getFunctionSignature(const std::string &name) const {
+  auto it = signatures.find(name);
+  if (it == signatures.end()) {
+    throw std::runtime_error("Function signature not found: " + name);
+  }
+
+  // Return serialized protobuf
+  return it->second.SerializeAsString();
 }
 
 void MLIRExecutor::setOptimizationLevel(OptLevel level) {
@@ -182,6 +160,10 @@ void MLIRExecutor::clear() {
       lastError = "Failed to recreate LLJIT";
     }
   }
+
+  // Clear signatures and function pointers
+  signatures.clear();
+  functionPointers.clear();
 }
 
 void MLIRExecutor::optimizeModule(llvm::Module *module) {

@@ -34,12 +34,16 @@ add_library(mlir_edsl_executor STATIC
 
 target_include_directories(mlir_edsl_executor PUBLIC
     include
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
 )
 
 target_include_mlir_directories(mlir_edsl_executor)
 target_link_mlir_libraries(mlir_edsl_executor)
 
-# Executor doesn't need protobuf
+# Executor now needs protobuf for FunctionSignature
+target_link_libraries(mlir_edsl_executor PUBLIC
+    mlir_edsl_core
+)
 
 # Python bindings module
 add_library(_mlir_backend MODULE

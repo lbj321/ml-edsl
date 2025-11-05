@@ -30,8 +30,8 @@ public:
   void initializeModule();
 
   // ==================== CORE API (Exposed to Python) ====================
-  // Main compilation entry point - single protobuf buffer
-  void compileFunctionFromDef(const std::string &function_def_bytes);
+  // Main compilation entry point - takes FunctionDef, returns FunctionSignature
+  std::string compileFunctionFromDef(const std::string &function_def_bytes);
 
   // ==================== INSPECTION ====================
   std::string getMLIRString();

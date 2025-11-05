@@ -23,7 +23,10 @@ PYBIND11_MODULE(_mlir_backend, m) {
              "Initialize a new MLIR module")
 
         // ==================== CORE COMPILATION ====================
-        .def("compile_function", &mlir_edsl::MLIRBuilder::compileFunctionFromDef,
+        .def("compile_function", [](mlir_edsl::MLIRBuilder& self, const std::string& function_def_bytes) {
+            std::string result = self.compileFunctionFromDef(function_def_bytes);
+            return py::bytes(result);  // Return as bytes, not str
+        },
              py::arg("function_def_bytes"),
              "Compile complete function from protobuf FunctionDef (single buffer)")
 
@@ -48,12 +51,18 @@ PYBIND11_MODULE(_mlir_backend, m) {
         .def("compile_function", &mlir_edsl::MLIRExecutor::compileFunction,
              "Compile LLVM IR string to executable function",
              py::return_value_policy::reference)
-        .def("call_int32_function", &mlir_edsl::MLIRExecutor::callInt32Function,
-             "Execute compiled function returning int32",
-             py::arg("funcPtr"), py::arg("intArgs") = std::vector<int32_t>(), py::arg("floatArgs") = std::vector<float>())
-        .def("call_float_function", &mlir_edsl::MLIRExecutor::callFloatFunction,
-             "Execute compiled function returning float",
-             py::arg("funcPtr"), py::arg("intArgs") = std::vector<int32_t>(), py::arg("floatArgs") = std::vector<float>())
+        .def("register_function_signature", &mlir_edsl::MLIRExecutor::registerFunctionSignature,
+             py::arg("signature_bytes"),
+             "Register function signature from FunctionSignature protobuf")
+        .def("get_function_pointer", &mlir_edsl::MLIRExecutor::getFunctionPointer,
+             py::arg("name"),
+             "Get JIT-compiled function pointer as integer for ctypes")
+        .def("get_function_signature", [](mlir_edsl::MLIRExecutor& self, const std::string& name) {
+            std::string result = self.getFunctionSignature(name);
+            return py::bytes(result);  // Return as bytes, not str
+        },
+             py::arg("name"),
+             "Get function signature as FunctionSignature protobuf")
         .def("is_initialized", &mlir_edsl::MLIRExecutor::isInitialized,
              "Check if executor is initialized")
         .def("get_last_error", &mlir_edsl::MLIRExecutor::getLastError,

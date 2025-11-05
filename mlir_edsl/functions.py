@@ -3,8 +3,7 @@
 from typing import Callable, Any, Union, Tuple, Dict, get_type_hints
 from .backend import get_backend
 from .ast import Parameter, Constant, BinaryOp, CallOp, CompareOp, IfOp
-from .types import I32, F32, I1, type_to_string
-from .type_system import TypeSystem
+from .types import I32, F32, I1, type_to_string, TypeSystem
 import inspect
 
 
@@ -14,6 +13,8 @@ class MLFunction:
     def __init__(self, func: Callable):
         self.func = func
         self.func_name = func.__name__
+        self._backend = None  # Store backend reference for IR access
+        self._compiled = False  # Track compilation status
         # Validate type hints at decoration time, not execution time
         self._validate_type_hints()
         # Do a symbolic dry-run to catch type errors early
@@ -21,88 +22,88 @@ class MLFunction:
 
     def __call__(self, *args, **kwargs):
         """JIT compile and execute the function - returns numeric result"""
-
-        backend = get_backend()
-        if backend is None:
-            raise RuntimeError("C++ backend not available for JIT execution")
-
-        param_map, runtime_values = self._create_parameter_map(args, kwargs)
-        self._last_param_map = param_map
-
-        param_list = []
-        int_args = []
-        float_args = []
-        for param_name, param_obj in param_map.items():
-            param_list.append((param_name, param_obj.value_type))
-            if param_obj.value_type == I32:
-                int_args.append(runtime_values[param_name])
-            elif param_obj.value_type == F32:
-                float_args.append(runtime_values[param_name])
-
-        if not backend.has_function(self.func_name):
-            result_ast = self._execute_symbolic(param_map)
-            declared_type = self._get_return_type()
-            inferred_type = result_ast.infer_type()
-
-            # Validate types match
-            matches, error_msg = TypeSystem.types_match(inferred_type, declared_type)
-            if not matches:
-                raise TypeError(f"Return type mismatch in '{self.func_name}':\n{error_msg}")
-
-            backend.compile_function_from_ast(self.func_name, param_list, declared_type, result_ast)
-        else:
-            result_ast = self._execute_symbolic(param_map)
-
-        return backend.execute_function(self.func_name, result_ast, int_args, float_args)
+        self._ensure_compiled(args, kwargs)
+        return self._execute(args, kwargs)
     
     def execute(self) -> Union[int, float]:
         """Convenience method - same as calling the function directly"""
         # For zero-parameter functions, just call __call__ with no args
         return self.__call__()
 
-    def _validate_type_hints(self):
-        """Ensure all parameters and return type have type hints"""
+    # ==================== COMPILATION (Internal) ====================
+
+    def _ensure_compiled(self, args: tuple, kwargs: dict):
+        """Ensure function is compiled, compiling if necessary
+
+        This method is idempotent - safe to call multiple times.
+        Only compiles once, subsequent calls are no-ops.
+        """
+        backend = get_backend()
+        if backend is None:
+            raise RuntimeError("C++ backend not available for JIT execution")
+
+        self._backend = backend
+
+        # Already compiled? Skip.
+        if backend.has_function(self.func_name):
+            self._compiled = True
+            return
+
+        # Perform compilation
+        param_map, runtime_values = self._create_parameter_map(args, kwargs)
+        self._last_param_map = param_map
+
+        # Build parameter list
+        param_list = []
+        for param_name, param_obj in param_map.items():
+            param_list.append((param_name, param_obj.value_type))
+
+        # Execute symbolically to get AST
+        result_ast = self._execute_symbolic(param_map)
+
+        # Type validation
+        declared_type = self._get_return_type()
+        inferred_type = result_ast.infer_type()
+        matches, error_msg = TypeSystem.types_match(inferred_type, declared_type)
+        if not matches:
+            raise TypeError(f"Return type mismatch in '{self.func_name}':\n{error_msg}")
+
+        # Compile to backend
+        backend.compile_function_from_ast(
+            self.func_name,
+            param_list,
+            declared_type,
+            result_ast
+        )
+
+        self._compiled = True
+
+    # ==================== EXECUTION (Internal) ====================
+
+    def _execute(self, args: tuple, kwargs: dict) -> Union[int, float, bool]:
+        """Execute the compiled function
+
+        Precondition: Function must be compiled (call _ensure_compiled first)
+
+        Args:
+            args: Positional arguments
+            kwargs: Keyword arguments
+
+        Returns:
+            Execution result (int, float, or bool)
+        """
+        # Convert args/kwargs to ordered argument list
+        param_map, runtime_values = self._create_parameter_map(args, kwargs)
         signature = inspect.signature(self.func)
-        # Check parameters first (they come before return type in function signature)
-        for param_name, param in signature.parameters.items():
-            if param.annotation == inspect.Parameter.empty:
-                raise TypeError(f"@ml_function '{self.func_name}' parameter '{param_name}' missing type hint")
-        # Then check return type
-        if signature.return_annotation == inspect.Signature.empty:
-            raise TypeError(f"@ml_function '{self.func_name}' missing return type")
+        param_names = list(signature.parameters.keys())
+        ordered_args = [runtime_values[name] for name in param_names]
 
-    def _validate_function_body(self):
-        """Execute function symbolically to catch type errors at decoration time"""
-        signature = inspect.signature(self.func)
-        type_hints = self._get_type_hints()
+        # Execute
+        return self._backend.execute_function(self.func_name, *ordered_args)
+    
 
-        # Create dummy Parameter objects with correct types from hints
-        dummy_params = []
-        for param_name in signature.parameters.keys():
-            value_type = TypeSystem.parse_type_hint(
-                type_hints[param_name],
-                f"parameter '{param_name}'"
-            )
-            dummy_params.append(Parameter(param_name, value_type))
-
-        # Execute symbolically - this will trigger type checking in operations
-        try:
-            result_ast = self.func(*dummy_params)
-
-            # Also validate return type matches
-            declared_type = self._get_return_type()
-            inferred_type = result_ast.infer_type()
-            matches, error_msg = TypeSystem.types_match(inferred_type, declared_type)
-            if not matches:
-                raise TypeError(f"Return type mismatch in '{self.func_name}':\n{error_msg}")
-
-        except TypeError:
-            # Re-raise type errors (these are validation failures we want to catch)
-            raise
-        except Exception:
-            # Ignore other errors (e.g., backend issues, runtime problems)
-            # Those will be caught at execution time
-            pass
+    
+    # ==================== HELPER METHODS ====================
 
     def _get_type_hints(self) -> dict:
         """Get type hints with proper namespace for MLIR types"""
@@ -147,7 +148,7 @@ class MLFunction:
         return TypeSystem.parse_type_hint(type_hints['return'], "return type")
     
     def _execute_symbolic(self, param_map: Dict):
-        
+
         signature = inspect.signature(self.func)
         param_names = list(signature.parameters.keys())
 
@@ -157,9 +158,109 @@ class MLFunction:
                 symbolic_args.append(param_map[param_name])
             else:
                 raise ValueError(f"Missing parameter: {param_name}")
-        
+
         return self.func(*symbolic_args)
-    
+
+
+    # ==================== VALIDATION ====================
+
+    def _validate_type_hints(self):
+        """Ensure all parameters and return type have type hints"""
+        signature = inspect.signature(self.func)
+        # Check parameters first (they come before return type in function signature)
+        for param_name, param in signature.parameters.items():
+            if param.annotation == inspect.Parameter.empty:
+                raise TypeError(f"@ml_function '{self.func_name}' parameter '{param_name}' missing type hint")
+        # Then check return type
+        if signature.return_annotation == inspect.Signature.empty:
+            raise TypeError(f"@ml_function '{self.func_name}' missing return type")
+
+    def _validate_function_body(self):
+        """Execute function symbolically to catch type errors at decoration time"""
+        signature = inspect.signature(self.func)
+        type_hints = self._get_type_hints()
+
+        # Create dummy Parameter objects with correct types from hints
+        dummy_params = []
+        for param_name in signature.parameters.keys():
+            value_type = TypeSystem.parse_type_hint(
+                type_hints[param_name],
+                f"parameter '{param_name}'"
+            )
+            dummy_params.append(Parameter(param_name, value_type))
+
+        # Execute symbolically - this will trigger type checking in operations
+        try:
+            result_ast = self.func(*dummy_params)
+
+            # Also validate return type matches
+            declared_type = self._get_return_type()
+            inferred_type = result_ast.infer_type()
+            matches, error_msg = TypeSystem.types_match(inferred_type, declared_type)
+            if not matches:
+                raise TypeError(f"Return type mismatch in '{self.func_name}':\n{error_msg}")
+
+        except TypeError:
+            # Re-raise type errors (these are validation failures we want to catch)
+            raise
+        except Exception:
+            # Ignore other errors (e.g., backend issues, runtime problems)
+            # Those will be caught at execution time
+            pass
+        
+    # ==================== IR INSPECTION ====================
+
+    def get_mlir_string(self) -> str:
+        """Get MLIR IR for this function
+
+        Returns:
+            String containing the generated MLIR IR
+
+        Raises:
+            RuntimeError: If function hasn't been compiled yet
+        """
+        if not self._compiled or self._backend is None:
+            raise RuntimeError(
+                f"Function '{self.func_name}' not compiled yet. "
+                f"Call the function first to trigger compilation."
+            )
+        return self._backend.get_mlir_string()
+
+    def get_llvm_ir_string(self) -> str:
+        """Get LLVM IR for this function
+
+        Returns:
+            String containing the generated LLVM IR
+
+        Raises:
+            RuntimeError: If function hasn't been compiled yet
+        """
+        if not self._compiled or self._backend is None:
+            raise RuntimeError(
+                f"Function '{self.func_name}' not compiled yet. "
+                f"Call the function first to trigger compilation."
+            )
+        return self._backend.get_llvm_ir_string()
+
+    def print_ir(self, title: str = None):
+        """Print both MLIR and LLVM IR
+
+        Args:
+            title: Optional title to print before IR
+        """
+        if title:
+            print(f"\n{'='*60}")
+            print(title)
+
+        print(f"\n{'='*60}")
+        print("MLIR:")
+        print('='*60)
+        print(self.get_mlir_string())
+
+        print(f"\n{'='*60}")
+        print("LLVM IR:")
+        print('='*60)
+        print(self.get_llvm_ir_string())
 
 
 def ml_function(func: Callable) -> MLFunction:
