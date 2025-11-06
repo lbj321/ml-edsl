@@ -15,7 +15,6 @@
 #include <pybind11/stl.h>
 #include <stdexcept>
 #include <cstdlib>
-#include <fstream>
 
 namespace mlir_edsl {
 
