@@ -67,6 +67,8 @@ message ASTNode {
     ForLoopOp for_loop_op = 7;
     WhileLoopOp while_loop_op = 8;
     CastOp cast_op = 9;
+    LetBinding let_binding = 10;
+    ValueReference value_ref = 11;
   }
 }
 
@@ -139,6 +141,17 @@ message WhileLoopOp {
 message CastOp {
   ASTNode value = 1;          // Value to cast
   ValueType target_type = 2;  // Target type to cast to
+}
+
+// Let binding for SSA value reuse (marks first use of a shared value)
+message LetBinding {
+  int64 node_id = 1;  // Unique ID for this value
+  ASTNode value = 2;  // The expression to evaluate once
+}
+
+// Value reference for SSA value reuse (references a previously bound value)
+message ValueReference {
+  int64 node_id = 1;  // Reference to a let-bound value
 }
 
 // Root message for the entire AST

@@ -63,8 +63,8 @@ class CppMLIRBackend:
             param.name = param_name
             param.type = param_type  # Direct enum assignment!
 
-        # Add function body
-        func_def.body.CopyFrom(ast_node.to_proto())
+        # Add function body (with SSA value reuse detection)
+        func_def.body.CopyFrom(ast_node.to_proto_with_reuse())
 
         # Serialize and compile (returns FunctionSignature protobuf)
         func_def_bytes = func_def.SerializeToString()

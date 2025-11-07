@@ -118,6 +118,7 @@ private:
 
   std::unordered_map<std::string, mlir::Value> parameterMap;
   std::unordered_map<std::string, mlir::func::FuncOp> functionTable;
+  std::unordered_map<int64_t, mlir::Value> valueCache;  // SSA value cache for let bindings
 
   std::unordered_set<std::string> compiledFunctions;
 };

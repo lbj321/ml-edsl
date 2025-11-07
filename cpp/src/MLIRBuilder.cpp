@@ -45,6 +45,34 @@ void MLIRBuilder::initializeModule() {
 }
 
 mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
+  // ==================== Handle Let Bindings (SSA Value Reuse) ====================
+  if (node.has_let_binding()) {
+    int64_t nodeId = node.let_binding().node_id();
+
+    // Generate the MLIR value once
+    mlir::Value result = buildFromProtobufNode(node.let_binding().value());
+
+    // Cache it for future references
+    valueCache[nodeId] = result;
+
+    return result;
+  }
+
+  // ==================== Handle Value References (SSA Value Reuse) ====================
+  if (node.has_value_ref()) {
+    int64_t nodeId = node.value_ref().node_id();
+
+    // Look up the previously cached value
+    auto it = valueCache.find(nodeId);
+    if (it != valueCache.end()) {
+      return it->second;  // Return the cached SSA value - no new operation!
+    }
+
+    throw std::runtime_error("Reference to unbound value ID: " +
+                             std::to_string(nodeId));
+  }
+
+  // ==================== Handle All Other Node Types ====================
   if (node.has_constant()) {
     const auto &constant = node.constant();
     switch (constant.value_type()) {
@@ -424,6 +452,7 @@ void MLIRBuilder::reset() {
   // Reset builder state without destroying the module
   currentFunction = nullptr;
   parameterMap.clear();
+  valueCache.clear();  // Clear SSA value cache between functions
 
   // Move insertion point back to module level
   builder->setInsertionPointToEnd(module.getBody());

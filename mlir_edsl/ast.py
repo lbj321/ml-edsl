@@ -17,6 +17,41 @@ if TYPE_CHECKING:
     from ._mlir_backend import MLIRBuilder
 
 
+# ==================== SERIALIZATION CONTEXT ====================
+class SerializationContext:
+    """Tracks Value reuse during AST serialization for SSA value reuse"""
+
+    def __init__(self):
+        self.use_counts = {}     # value.id -> int (how many times referenced)
+        self.serialized = set()  # set of value.id that have been serialized
+
+    def count_uses(self, value: 'Value'):
+        """Recursively count how many times each Value appears in the tree"""
+        if value.id in self.use_counts:
+            # Already seen - increment count but don't traverse again
+            self.use_counts[value.id] += 1
+            return
+
+        # First encounter
+        self.use_counts[value.id] = 1
+
+        # Generic traversal - works for ALL node types!
+        for child in value.get_children():
+            self.count_uses(child)
+
+    def is_reused(self, value: 'Value') -> bool:
+        """Check if a value is used more than once"""
+        return self.use_counts.get(value.id, 0) > 1
+
+    def mark_serialized(self, value: 'Value'):
+        """Mark a value as already serialized"""
+        self.serialized.add(value.id)
+
+    def is_serialized(self, value: 'Value') -> bool:
+        """Check if a value has already been serialized"""
+        return value.id in self.serialized
+
+
 # ==================== PROTOBUF ENUM MAPPINGS ====================
 # These mappings convert string operations/predicates to protobuf enums
 # Shared across multiple AST node classes during serialization
@@ -54,6 +89,12 @@ def _predicate_to_proto(predicate: str):
 
 class Value(ABC):
     """Base class for all values in the EDSL"""
+    _next_id = 0
+
+    def __init__(self):
+        """Every Value gets a unique ID for reference tracking"""
+        self.id = Value._next_id
+        Value._next_id += 1
 
     @abstractmethod
     def infer_type(self) -> int:
@@ -65,13 +106,51 @@ class Value(ABC):
         raise NotImplementedError(f"{self.__class__.__name__} must implement infer_type()")
 
     @abstractmethod
-    def to_proto(self):
+    def to_proto(self, context: 'SerializationContext' = None):
         """Convert this AST node to protobuf Value message
+
+        Args:
+            context: Optional serialization context for SSA value reuse
 
         Raises:
             NotImplementedError: If subclass doesn't implement serialization
         """
         raise NotImplementedError(f"{self.__class__.__name__} must implement to_proto()")
+
+    def get_children(self) -> list['Value']:
+        """Return list of child Value nodes. Override in subclasses with children."""
+        return []  # Default: no children (for leaf nodes like Constant, Parameter)
+
+    def to_proto_with_reuse(self):
+        """Serialize with SSA value reuse detection (two-pass approach)"""
+        if ast_pb2 is None:
+            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
+
+        # Pass 1: Count how many times each Value is referenced
+        context = SerializationContext()
+        context.count_uses(self)
+
+        # Pass 2: Serialize with let bindings for reused values
+        return self._to_proto_impl(context)
+
+    def _to_proto_impl(self, context: 'SerializationContext'):
+        """Serialize this value, emitting let bindings or references as needed"""
+        # If this value was already serialized, emit a reference
+        if context.is_serialized(self):
+            pb_node = ast_pb2.ASTNode()
+            pb_node.value_ref.node_id = self.id
+            return pb_node
+
+        # If this value will be reused, wrap it in a let binding
+        if context.is_reused(self):
+            context.mark_serialized(self)
+            pb_node = ast_pb2.ASTNode()
+            pb_node.let_binding.node_id = self.id
+            pb_node.let_binding.value.CopyFrom(self.to_proto(context))
+            return pb_node
+
+        # Otherwise, inline it normally
+        return self.to_proto(context)
 
     # Arithmetic operators
     def __add__(self, other):
@@ -150,6 +229,7 @@ class Constant(Value):
     """Represents a constant integer or float value"""
 
     def __init__(self, value: Union[int, float], value_type=None):
+        super().__init__()
         self.value = value
         # Allow explicit type or infer from value
         if value_type is not None:
@@ -161,7 +241,7 @@ class Constant(Value):
         """Constants know their own type"""
         return self.value_type
 
-    def to_proto(self):
+    def to_proto(self, context: 'SerializationContext' = None):
         if ast_pb2 is None:
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
@@ -178,6 +258,7 @@ class BinaryOp(Value):
     """Represents a binary operation - STRICT TYPE MATCHING ENFORCED"""
 
     def __init__(self, op: str, left: Value, right: Value):
+        super().__init__()
         self.op = op
         self.left = left
         self.right = right
@@ -198,7 +279,10 @@ class BinaryOp(Value):
 
         return left_type
 
-    def to_proto(self):
+    def get_children(self) -> list['Value']:
+        return [self.left, self.right]
+
+    def to_proto(self, context: 'SerializationContext' = None):
         if ast_pb2 is None:
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
@@ -206,9 +290,14 @@ class BinaryOp(Value):
         pb_node.binary_op.op_type = _binary_op_to_proto(self.op)
         pb_node.binary_op.result_type = self.infer_type()
 
-        # Recursively serialize children
-        pb_node.binary_op.left.CopyFrom(self.left.to_proto())
-        pb_node.binary_op.right.CopyFrom(self.right.to_proto())
+        # Context-aware child serialization
+        if context:
+            pb_node.binary_op.left.CopyFrom(self.left._to_proto_impl(context))
+            pb_node.binary_op.right.CopyFrom(self.right._to_proto_impl(context))
+        else:
+            # Backward compatibility: no context = old behavior
+            pb_node.binary_op.left.CopyFrom(self.left.to_proto())
+            pb_node.binary_op.right.CopyFrom(self.right.to_proto())
 
         return pb_node
 
@@ -217,6 +306,7 @@ class Parameter(Value):
     """Represents a named parameter"""
 
     def __init__(self, name: str, value_type):
+        super().__init__()
         self.name = name
         self.value_type = value_type
 
@@ -224,7 +314,7 @@ class Parameter(Value):
         """Parameters have declared types"""
         return self.value_type
 
-    def to_proto(self):
+    def to_proto(self, context: 'SerializationContext' = None):
         if ast_pb2 is None:
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
@@ -239,6 +329,7 @@ class CompareOp(Value):
     """Represents a comparison operation"""
 
     def __init__(self, predicate: str, left: Value, right: Value):
+        super().__init__()
         self.predicate = predicate
         self.left = left
         self.right = right
@@ -260,15 +351,24 @@ class CompareOp(Value):
         """Comparisons always return bool"""
         return I1
 
-    def to_proto(self):
+    def get_children(self) -> list['Value']:
+        return [self.left, self.right]
+
+    def to_proto(self, context: 'SerializationContext' = None):
         if ast_pb2 is None:
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
         pb_node = ast_pb2.ASTNode()
         pb_node.compare_op.predicate = _predicate_to_proto(self.predicate)
         pb_node.compare_op.operand_type = self._operand_type
-        pb_node.compare_op.left.CopyFrom(self.left.to_proto())
-        pb_node.compare_op.right.CopyFrom(self.right.to_proto())
+
+        # Context-aware child serialization
+        if context:
+            pb_node.compare_op.left.CopyFrom(self.left._to_proto_impl(context))
+            pb_node.compare_op.right.CopyFrom(self.right._to_proto_impl(context))
+        else:
+            pb_node.compare_op.left.CopyFrom(self.left.to_proto())
+            pb_node.compare_op.right.CopyFrom(self.right.to_proto())
 
         return pb_node
 
@@ -277,6 +377,7 @@ class IfOp(Value):
     """Represents a conditional if-then-else operation"""
 
     def __init__(self, condition: Value, then_value: Value, else_value: Value):
+        super().__init__()
         self.condition = condition
         self.then_value = then_value
         self.else_value = else_value
@@ -299,14 +400,25 @@ class IfOp(Value):
         """Return the type of both branches (guaranteed same)"""
         return self._inferred_type
 
-    def to_proto(self):
+    def get_children(self) -> list['Value']:
+        return [self.condition, self.then_value, self.else_value]
+
+    def to_proto(self, context: 'SerializationContext' = None):
         if ast_pb2 is None:
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
         pb_node = ast_pb2.ASTNode()
-        pb_node.if_op.condition.CopyFrom(self.condition.to_proto())
-        pb_node.if_op.then_value.CopyFrom(self.then_value.to_proto())
-        pb_node.if_op.else_value.CopyFrom(self.else_value.to_proto())
+
+        # Context-aware child serialization
+        if context:
+            pb_node.if_op.condition.CopyFrom(self.condition._to_proto_impl(context))
+            pb_node.if_op.then_value.CopyFrom(self.then_value._to_proto_impl(context))
+            pb_node.if_op.else_value.CopyFrom(self.else_value._to_proto_impl(context))
+        else:
+            pb_node.if_op.condition.CopyFrom(self.condition.to_proto())
+            pb_node.if_op.then_value.CopyFrom(self.then_value.to_proto())
+            pb_node.if_op.else_value.CopyFrom(self.else_value.to_proto())
+
         pb_node.if_op.result_type = self._inferred_type
         return pb_node
 
@@ -315,6 +427,7 @@ class CallOp(Value):
     """Represents a function call operation"""
 
     def __init__(self, func_name: str, args: list[Value], return_type):
+        super().__init__()
         self.func_name = func_name
         self.args = args
         self.return_type = return_type
@@ -323,15 +436,25 @@ class CallOp(Value):
         """Return type is explicitly declared"""
         return self.return_type
 
-    def to_proto(self):
+    def get_children(self) -> list['Value']:
+        return self.args
+
+    def to_proto(self, context: 'SerializationContext' = None):
         if ast_pb2 is None:
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
         pb_node = ast_pb2.ASTNode()
         pb_node.call_op.func_name = self.func_name
         pb_node.call_op.return_type = self.return_type
-        for arg in self.args:
-            pb_node.call_op.args.append(arg.to_proto())
+
+        # Context-aware child serialization
+        if context:
+            for arg in self.args:
+                pb_node.call_op.args.append(arg._to_proto_impl(context))
+        else:
+            for arg in self.args:
+                pb_node.call_op.args.append(arg.to_proto())
+
         return pb_node
 
 
@@ -346,6 +469,7 @@ class ForLoopOp(Value):
 
     def __init__(self, start: Value, end: Value, step: Value,
                  init_value: Value, operation: str):
+        super().__init__()
         self.start = start
         self.end = end
         self.step = step
@@ -379,15 +503,27 @@ class ForLoopOp(Value):
         """Return the loop result type (same as all inputs)"""
         return self._inferred_type
 
-    def to_proto(self):
+    def get_children(self) -> list['Value']:
+        return [self.start, self.end, self.step, self.init_value]
+
+    def to_proto(self, context: 'SerializationContext' = None):
         if ast_pb2 is None:
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
         pb_node = ast_pb2.ASTNode()
-        pb_node.for_loop_op.start.CopyFrom(self.start.to_proto())
-        pb_node.for_loop_op.end.CopyFrom(self.end.to_proto())
-        pb_node.for_loop_op.step.CopyFrom(self.step.to_proto())
-        pb_node.for_loop_op.init_value.CopyFrom(self.init_value.to_proto())
+
+        # Context-aware child serialization
+        if context:
+            pb_node.for_loop_op.start.CopyFrom(self.start._to_proto_impl(context))
+            pb_node.for_loop_op.end.CopyFrom(self.end._to_proto_impl(context))
+            pb_node.for_loop_op.step.CopyFrom(self.step._to_proto_impl(context))
+            pb_node.for_loop_op.init_value.CopyFrom(self.init_value._to_proto_impl(context))
+        else:
+            pb_node.for_loop_op.start.CopyFrom(self.start.to_proto())
+            pb_node.for_loop_op.end.CopyFrom(self.end.to_proto())
+            pb_node.for_loop_op.step.CopyFrom(self.step.to_proto())
+            pb_node.for_loop_op.init_value.CopyFrom(self.init_value.to_proto())
+
         pb_node.for_loop_op.operation = _binary_op_to_proto(self.operation)
         pb_node.for_loop_op.result_type = self._inferred_type
 
@@ -405,6 +541,7 @@ class WhileLoopOp(Value):
 
     def __init__(self, init_value: Value, target: Value,
                  operation: str, predicate: str):
+        super().__init__()
         self.init_value = init_value
         self.target = target
         self.operation = operation
@@ -434,13 +571,23 @@ class WhileLoopOp(Value):
         """Return the loop result type (same as inputs)"""
         return self._inferred_type
 
-    def to_proto(self):
+    def get_children(self) -> list['Value']:
+        return [self.init_value, self.target]
+
+    def to_proto(self, context: 'SerializationContext' = None):
         if ast_pb2 is None:
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
         pb_node = ast_pb2.ASTNode()
-        pb_node.while_loop_op.init_value.CopyFrom(self.init_value.to_proto())
-        pb_node.while_loop_op.target.CopyFrom(self.target.to_proto())
+
+        # Context-aware child serialization
+        if context:
+            pb_node.while_loop_op.init_value.CopyFrom(self.init_value._to_proto_impl(context))
+            pb_node.while_loop_op.target.CopyFrom(self.target._to_proto_impl(context))
+        else:
+            pb_node.while_loop_op.init_value.CopyFrom(self.init_value.to_proto())
+            pb_node.while_loop_op.target.CopyFrom(self.target.to_proto())
+
         pb_node.while_loop_op.operation = _binary_op_to_proto(self.operation)
         pb_node.while_loop_op.predicate = _predicate_to_proto(self.predicate)
         pb_node.while_loop_op.result_type = self._inferred_type
@@ -458,6 +605,7 @@ class CastOp(Value):
             value: Value to cast
             target_type: Target MLIR type enum (I32, F32, I1)
         """
+        super().__init__()
         self.value = value
         self.target_type = target_type
 
@@ -465,11 +613,20 @@ class CastOp(Value):
         """Cast always produces the target type"""
         return self.target_type
 
-    def to_proto(self):
+    def get_children(self) -> list['Value']:
+        return [self.value]
+
+    def to_proto(self, context: 'SerializationContext' = None):
         if ast_pb2 is None:
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
         pb_node = ast_pb2.ASTNode()
-        pb_node.cast_op.value.CopyFrom(self.value.to_proto())
+
+        # Context-aware child serialization
+        if context:
+            pb_node.cast_op.value.CopyFrom(self.value._to_proto_impl(context))
+        else:
+            pb_node.cast_op.value.CopyFrom(self.value.to_proto())
+
         pb_node.cast_op.target_type = self.target_type
         return pb_node
