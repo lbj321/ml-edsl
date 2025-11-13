@@ -1,46 +1,60 @@
 #pragma once
 
-#include "llvm/ExecutionEngine/Orc/LLJIT.h"
-#include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Module.h"
-#include "llvm/Support/Error.h"
-#include "llvm/Support/TargetSelect.h"
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <cstdint>
+
+#include "llvm/ExecutionEngine/Orc/LLJIT.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "ast.pb.h"
 
 namespace mlir_edsl {
 
 class MLIRExecutor {
-public:
+   public:
     MLIRExecutor();
     ~MLIRExecutor() = default;
 
     // Initialize the JIT execution engine
     bool initialize();
-    
+
     // Compile LLVM IR string to executable function
-    void* compileFunction(const std::string& llvmIR, const std::string& funcName);
-    
-    // Execute compiled functions with different return types
-    int32_t callInt32Function(void* funcPtr);
-    float callFloatFunction(void* funcPtr);
-    
+    void *compileFunction(const std::string &llvmIR,
+                          const std::string &funcName);
+
+    // Register function signature from protobuf (serialized FunctionSignature)
+    void registerFunctionSignature(const std::string &signature_bytes);
+
+    // Get function pointer as integer (for Python ctypes)
+    uintptr_t getFunctionPointer(const std::string &name);
+
+    // Get function signature as protobuf (returns serialized FunctionSignature)
+    std::string getFunctionSignature(const std::string &name) const;
+
     // Utility methods
     bool isInitialized() const { return initialized; }
     std::string getLastError() const { return lastError; }
+    void clear(); // Clear the JIT engine
 
-    enum class OptLevel { O0, O2, O3};
+    enum class OptLevel { O0, O2, O3 };
     void setOptimizationLevel(OptLevel level);
 
-private:
+   private:
     std::unique_ptr<llvm::orc::LLJIT> jit;
     std::unique_ptr<llvm::LLVMContext> context;
     bool initialized;
     std::string lastError;
 
     OptLevel optimizationLevel;
-    void optimizeModule(llvm::Module* module);
+    void optimizeModule(llvm::Module *module);
+
+    // Store function signatures as protobuf objects
+    std::unordered_map<std::string, FunctionSignature> signatures;
+
+    // Store compiled function pointers
+    std::unordered_map<std::string, void*> functionPointers;
 };
 
-} // namespace mlir_edsl
+}  // namespace mlir_edsl

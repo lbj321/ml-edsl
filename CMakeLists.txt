@@ -8,6 +8,10 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 include(CompilerFlags)
 include(FindMLIR)
 include(MLIRDialects)
+include(ProtobufSchemas)
+
+# Find Protocol Buffers
+find_package(Protobuf REQUIRED)
 
 # Build C++ components
 add_subdirectory(cpp)

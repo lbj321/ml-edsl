@@ -19,31 +19,31 @@ PYBIND11_MODULE(_mlir_backend, m) {
     
     py::class_<mlir_edsl::MLIRBuilder>(m, "MLIRBuilder")
         .def(py::init<>())
-        .def("initialize_module", &mlir_edsl::MLIRBuilder::initializeModule, 
+        .def("initialize_module", &mlir_edsl::MLIRBuilder::initializeModule,
              "Initialize a new MLIR module")
-        .def("build_constant", 
-             py::overload_cast<int32_t>(&mlir_edsl::MLIRBuilder::buildConstant),
-             "Create integer constant")
-        .def("build_constant", 
-             py::overload_cast<float>(&mlir_edsl::MLIRBuilder::buildConstant),
-             "Create float constant")
-        .def("build_add", &mlir_edsl::MLIRBuilder::buildAdd,
-             "Create addition operation")
-        .def("build_sub", &mlir_edsl::MLIRBuilder::buildSub,
-             "Create subtraction operation")
-        .def("build_mul", &mlir_edsl::MLIRBuilder::buildMul,
-             "Create multiplication operation")
-        .def("build_div", &mlir_edsl::MLIRBuilder::buildDiv,
-             "Create division operation")
-        .def("create_function", &mlir_edsl::MLIRBuilder::createFunction,
-             "Create function with given name and result value")
+
+        // ==================== CORE COMPILATION ====================
+        .def("compile_function", [](mlir_edsl::MLIRBuilder& self, const std::string& function_def_bytes) {
+            std::string result = self.compileFunctionFromDef(function_def_bytes);
+            return py::bytes(result);  // Return as bytes, not str
+        },
+             py::arg("function_def_bytes"),
+             "Compile complete function from protobuf FunctionDef (single buffer)")
+
+        // ==================== INSPECTION ====================
         .def("get_mlir_string", &mlir_edsl::MLIRBuilder::getMLIRString,
-             "Get generated MLIR as string")
+             "Get generated MLIR IR as string")
         .def("get_llvm_ir_string", &mlir_edsl::MLIRBuilder::getLLVMIRString,
              "Get generated LLVM IR as string")
-        .def("reset", &mlir_edsl::MLIRBuilder::reset,
-             "Reset builder for new function");
-    
+
+        // ==================== MANAGEMENT ====================
+        .def("has_function", &mlir_edsl::MLIRBuilder::hasFunction,
+             "Check if function is already compiled")
+        .def("list_functions", &mlir_edsl::MLIRBuilder::listFunctions,
+             "List all compiled function names")
+        .def("clear_module", &mlir_edsl::MLIRBuilder::clearModule,
+             "Clear all compiled functions");
+
     py::class_<mlir_edsl::MLIRExecutor>(m, "MLIRExecutor")
         .def(py::init<>())
         .def("initialize", &mlir_edsl::MLIRExecutor::initialize,
@@ -51,14 +51,24 @@ PYBIND11_MODULE(_mlir_backend, m) {
         .def("compile_function", &mlir_edsl::MLIRExecutor::compileFunction,
              "Compile LLVM IR string to executable function",
              py::return_value_policy::reference)
-        .def("call_int32_function", &mlir_edsl::MLIRExecutor::callInt32Function,
-             "Execute compiled function returning int32")
-        .def("call_float_function", &mlir_edsl::MLIRExecutor::callFloatFunction,
-             "Execute compiled function returning float")
+        .def("register_function_signature", &mlir_edsl::MLIRExecutor::registerFunctionSignature,
+             py::arg("signature_bytes"),
+             "Register function signature from FunctionSignature protobuf")
+        .def("get_function_pointer", &mlir_edsl::MLIRExecutor::getFunctionPointer,
+             py::arg("name"),
+             "Get JIT-compiled function pointer as integer for ctypes")
+        .def("get_function_signature", [](mlir_edsl::MLIRExecutor& self, const std::string& name) {
+            std::string result = self.getFunctionSignature(name);
+            return py::bytes(result);  // Return as bytes, not str
+        },
+             py::arg("name"),
+             "Get function signature as FunctionSignature protobuf")
         .def("is_initialized", &mlir_edsl::MLIRExecutor::isInitialized,
              "Check if executor is initialized")
         .def("get_last_error", &mlir_edsl::MLIRExecutor::getLastError,
              "Get last error message")
+        .def("clear", &mlir_edsl::MLIRExecutor::clear,
+             "Clear JIT engine")
         .def("set_optimization_level", [](mlir_edsl::MLIRExecutor& self, int level) {
             mlir_edsl::MLIRExecutor::OptLevel opt;
             if (level == 0) opt = mlir_edsl::MLIRExecutor::OptLevel::O0;

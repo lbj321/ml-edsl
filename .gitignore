@@ -12,7 +12,6 @@ CMakeCache.txt
 cmake_install.cmake
 CTestTestfile.cmake
 Makefile
-*.cmake
 
 # C++ compiled objects
 *.o
@@ -67,6 +66,7 @@ MANIFEST
 # IDE and editor files
 .vscode/
 .idea/
+.clangd
 *.swp
 *.swo
 *~
@@ -83,6 +83,11 @@ htmlcov/
 coverage.xml
 *.cover
 .hypothesis/
+
+# IR output from tests
+ir_output/
+ir_html/
+ir_html/
 
 # Documentation builds
 docs/_build/
@@ -125,3 +130,7 @@ yarn-error.log*
 # Generated Python bindings
 *.so
 pybind11/
+
+
+# Protocol buffer generated files
+*_pb2.py

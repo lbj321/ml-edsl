@@ -97,7 +97,8 @@ def optimization_level_comparison():
         e = builder.build_add(d, c250)
         result = builder.build_sub(e, c500)
         
-        builder.create_function('bench_fn', result)
+        builder.create_function_with_params_setup([])
+        builder.finalize_function_with_params('bench_fn', result)
         llvm_ir = builder.get_llvm_ir_string()
         
         executor = _mlir_backend.MLIRExecutor()

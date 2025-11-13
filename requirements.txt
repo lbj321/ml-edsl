@@ -1,9 +1,0 @@
-# Core Python dependencies for ML-EDSL
-pybind11>=2.10.0
-numpy>=1.20.0
-
-# Testing and development
-pytest>=6.0.0
-
-# Note: MLIR/LLVM dependencies are installed via system package manager
-# See requirements-cpp.txt for system dependency information

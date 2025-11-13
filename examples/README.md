@@ -108,7 +108,8 @@ c2 = builder.build_constant(3)
 result = builder.build_add(c1, c2)
 
 # JIT compile and execute
-builder.create_function("test", result)
+builder.create_function_with_params_setup([])
+builder.finalize_function_with_params("test", result)
 llvm_ir = builder.get_llvm_ir_string()
 func_ptr = executor.compile_function(llvm_ir, "test")
 value = executor.call_int32_function(func_ptr)

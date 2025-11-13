@@ -1,10 +1,5 @@
-# C++ Backend Dependencies for ML-EDSL Phase 4+
-# This file documents system-level dependencies for the MLIR backend
-
-# Python packages (also listed in requirements.txt)
-pybind11>=2.10.0
-numpy>=1.20.0
-pytest>=6.0.0
+# C++ System Dependencies for ML-EDSL
+# Install these system packages before building the C++ backend
 
 # System Dependencies (install via package manager):
 
@@ -12,25 +7,32 @@ pytest>=6.0.0
 # sudo apt update
 # sudo apt install cmake build-essential
 # sudo apt install llvm-18-dev mlir-18-tools libmlir-18-dev
+# sudo apt install protobuf-compiler libprotobuf-dev
 # OR for latest: sudo apt install llvm-dev mlir-tools libmlir-dev
 
 # macOS:
-# brew install cmake llvm@18
-# OR for latest: brew install cmake llvm
+# brew install cmake llvm@18 protobuf
+# OR for latest: brew install cmake llvm protobuf
 
 # Fedora/CentOS/RHEL:
 # sudo dnf install cmake gcc-c++
 # sudo dnf install llvm-devel mlir-devel
+# sudo dnf install protobuf-devel protobuf-compiler
 
 # Minimum Required Versions:
 # - CMake >= 3.20
 # - LLVM/MLIR >= 18 (Phase 4 tested with LLVM 18)
+# - Protocol Buffers >= 3.0 (for AST serialization)
 # - C++17 compatible compiler (GCC 9+, Clang 10+, MSVC 2019+)
-# - Python >= 3.8
 
 # Build Process:
 # 1. Install system dependencies above
-# 2. pip install -r requirements.txt
-# 3. mkdir build && cd build
-# 4. cmake .. && make
-# 5. cd .. && python -m pytest tests/ -v
+# 2. Install Python dependencies: pip install -e .
+# 3. cd cpp && mkdir -p build && cd build
+# 4. cmake .. && make -j$(nproc)
+# 5. cd ../.. && python -m pytest tests/ -v
+
+# Troubleshooting:
+# - If LLVM not found: export LLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+# - If Protobuf not found: sudo apt install protobuf-compiler libprotobuf-dev
+# - Clean rebuild: rm -rf cpp/build && repeat steps 3-4
