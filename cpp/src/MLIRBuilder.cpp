@@ -331,6 +331,7 @@ mlir::Value MLIRBuilder::buildForWithOp(mlir::Value start, mlir::Value end,
 
   auto body_fn = [this, operation](mlir::Value iv,
                                    mlir::Value iter_arg) -> mlir::Value {
+
     switch (operation) {
     case mlir_edsl::BinaryOpType::ADD:
       return buildAdd(iter_arg, iv);
@@ -430,6 +431,8 @@ MLIRBuilder::buildWhile(mlir::Value init,
   auto newValue = body_fn(loopVar);
 
   builder->create<mlir::scf::YieldOp>(loc, newValue);
+
+  builder->setInsertionPointAfter(whileOp);
   return whileOp.getResult(0);
 }
 

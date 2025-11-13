@@ -9,7 +9,7 @@ Phase 3: C++ MLIR Backend
 """
 
 from .types import i32, f32, i1
-from .ops import add, sub, mul, div, lt, le, gt, ge, eq, ne, If, For, While, cast
+from .ops import add, sub, mul, div, lt, le, gt, ge, eq, ne, If, For, While, cast, call
 from .functions import ml_function
 from .ast import Value, Constant, BinaryOp, CastOp
 
@@ -37,6 +37,9 @@ __all__ = [
 
     # Control flow
     "If", "For", "While",
+
+    # Function calls (for recursion)
+    "call",
 
     # AST classes (for advanced usage)
     "Value",

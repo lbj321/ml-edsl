@@ -97,8 +97,52 @@ class TypeSystem:
 
 # ==================== UTILITIES ====================
 
+def is_numeric_type(ty: int) -> bool:
+    """Check if type is numeric (integer or float)
+
+    Args:
+        ty: Type enum value to check
+
+    Returns:
+        True if type is I32 or F32
+
+    Example:
+        >>> is_numeric_type(I32)
+        True
+        >>> is_numeric_type(F32)
+        True
+        >>> is_numeric_type(I1)
+        False
+    """
+    return ty in (I32, F32)
+
+def is_integer_type(ty: int) -> bool:
+    """Check if type is integer
+
+    Args:
+        ty: Type enum value to check
+
+    Returns:
+        True if type is I32
+    """
+    return ty == I32
+
+def is_float_type(ty: int) -> bool:
+    """Check if type is float
+
+    Args:
+        ty: Type enum value to check
+
+    Returns:
+        True if type is F32
+    """
+    return ty == F32
+
 def type_to_string(value_type):
-    """Convert protobuf enum to string (for C++ boundary only)"""
+    """Convert type to string (for C++ boundary only)
+    """
+
+    # Handle enum values
     if value_type == I32:
         return "i32"
     elif value_type == F32:

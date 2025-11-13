@@ -5,9 +5,10 @@ It uses AST nodes directly rather than @ml_function to isolate backend testing.
 """
 
 import pytest
-from mlir_edsl.backend import HAS_CPP_BACKEND, get_backend, CppMLIRBuilder
+from mlir_edsl.backend import HAS_CPP_BACKEND, get_backend, CppMLIRBackend
 from mlir_edsl.ast import Constant, BinaryOp, CompareOp, IfOp, ForLoopOp, WhileLoopOp, Parameter
 from mlir_edsl.types import I32, F32, I1
+from mlir_edsl import cast
 
 # Skip all tests if C++ backend is not available
 pytestmark = pytest.mark.skipif(not HAS_CPP_BACKEND, reason="C++ backend not available")
@@ -27,18 +28,18 @@ def test_backend_availability():
     """Test that C++ backend is available and can be instantiated"""
     backend = get_backend()
     assert backend is not None
-    assert isinstance(backend, CppMLIRBuilder)
+    assert isinstance(backend, CppMLIRBackend)
 
 
 def test_backend_error_handling():
     """Test error handling when C++ backend is used incorrectly"""
     if not HAS_CPP_BACKEND:
-        # Test that CppMLIRBuilder raises error when backend unavailable
+        # Test that CppMLIRBackend raises error when backend unavailable
         with pytest.raises(RuntimeError, match="C++ backend not available"):
-            CppMLIRBuilder()
+            CppMLIRBackend()
     else:
         # If backend is available, this should not raise
-        backend = CppMLIRBuilder()
+        backend = CppMLIRBackend()
         assert backend is not None
 
 
@@ -63,7 +64,7 @@ def test_constant_addition(backend):
     assert "arith.addi" in mlir_code
 
     # Test JIT execution
-    executed_result = backend.execute_function("test_add", result)
+    executed_result = backend.execute_function("test_add")
     assert executed_result == 8
 
 
@@ -72,22 +73,22 @@ def test_constant_operations(backend):
     # Addition
     add_result = BinaryOp("add", Constant(10), Constant(5))
     backend.compile_function_from_ast("test_ops_add", [], I32, add_result)
-    assert backend.execute_function("test_ops_add", add_result) == 15
+    assert backend.execute_function("test_ops_add") == 15
 
     # Subtraction
     sub_result = BinaryOp("sub", Constant(10), Constant(3))
     backend.compile_function_from_ast("test_ops_sub", [], I32, sub_result)
-    assert backend.execute_function("test_ops_sub", sub_result) == 7
+    assert backend.execute_function("test_ops_sub") == 7
 
     # Multiplication
     mul_result = BinaryOp("mul", Constant(6), Constant(4))
     backend.compile_function_from_ast("test_ops_mul", [], I32, mul_result)
-    assert backend.execute_function("test_ops_mul", mul_result) == 24
+    assert backend.execute_function("test_ops_mul") == 24
 
     # Division
     div_result = BinaryOp("div", Constant(20), Constant(4))
     backend.compile_function_from_ast("test_ops_div", [], I32, div_result)
-    assert backend.execute_function("test_ops_div", div_result) == 5
+    assert backend.execute_function("test_ops_div") == 5
 
 
 def test_float_operations(backend):
@@ -105,7 +106,7 @@ def test_float_operations(backend):
     assert "arith.addf" in mlir_code
 
     # Test execution
-    executed_result = backend.execute_function("test_float_add", result)
+    executed_result = backend.execute_function("test_float_add")
     assert abs(executed_result - 8.0) < 0.001
 
 
@@ -113,13 +114,13 @@ def test_type_promotion(backend):
     """Test mixed type promotion (int + float = float)"""
     int_val = Constant(5)
     float_val = Constant(2.5)
-    result = BinaryOp("add", int_val, float_val)
+    result = BinaryOp("add", cast(int_val, F32), float_val)
 
     # Result should be float
     assert result.infer_type() == F32
 
     backend.compile_function_from_ast("test_promotion", [], F32, result)
-    executed_result = backend.execute_function("test_promotion", result)
+    executed_result = backend.execute_function("test_promotion")
     assert abs(executed_result - 7.5) < 0.001
 
 
@@ -142,7 +143,7 @@ def test_complex_expression(backend):
     assert mlir_code.count("arith.") >= 3
 
     # Test execution: (5 + 3) * 2 = 16
-    executed_result = backend.execute_function("test_complex", final_result)
+    executed_result = backend.execute_function("test_complex")
     assert executed_result == 16
 
 
@@ -166,8 +167,8 @@ def test_parameterized_function(backend):
     assert "func.func @test_param_add(%arg0: i32, %arg1: i32)" in mlir_code
 
     # Test with different arguments
-    assert backend.execute_function("test_param_add", result, int_args=[10, 5]) == 15
-    assert backend.execute_function("test_param_add", result, int_args=[100, 200]) == 300
+    assert backend.execute_function("test_param_add", 10, 5) == 15
+    assert backend.execute_function("test_param_add", 100, 200) == 300
 
 
 def test_float_parameters(backend):
@@ -183,7 +184,7 @@ def test_float_parameters(backend):
         result
     )
 
-    executed_result = backend.execute_function("test_float_param", result, float_args=[2.5, 4.0])
+    executed_result = backend.execute_function("test_float_param", 2.5, 4.0)
     assert abs(executed_result - 10.0) < 0.001
 
 
@@ -207,7 +208,7 @@ def test_comparison_compilation(backend):
     assert "scf.if" in mlir_code
 
     # 5 > 3 is true, so return 1
-    executed_result = backend.execute_function("test_compare", result)
+    executed_result = backend.execute_function("test_compare")
     assert executed_result == 1
 
 
@@ -225,7 +226,7 @@ def test_if_else_compilation(backend):
     assert "scf.yield" in mlir_code
 
     # 10 > 5 is true, return 100
-    executed_result = backend.execute_function("test_if", result)
+    executed_result = backend.execute_function("test_if")
     assert executed_result == 100
 
 
@@ -249,7 +250,7 @@ def test_for_loop_compilation(backend):
     assert "scf.yield" in mlir_code
     assert "arith.addi" in mlir_code
 
-    executed_result = backend.execute_function("test_for", result)
+    executed_result = backend.execute_function("test_for")
     assert executed_result == 20
 
 
@@ -269,7 +270,7 @@ def test_while_loop_compilation(backend):
     assert "scf.condition" in mlir_code
     assert "scf.yield" in mlir_code
 
-    executed_result = backend.execute_function("test_while", result)
+    executed_result = backend.execute_function("test_while")
     assert executed_result == 5
 
 

@@ -1,245 +1,203 @@
-"""Tests for recursive function support in MLIR EDSL"""
+"""Tests for recursive function support in MLIR EDSL
+
+This test suite validates recursive function capabilities:
+- Basic recursive functions (factorial, fibonacci, countdown)
+- Tail recursion patterns with accumulators
+- Symbol resolution for self-referencing functions
+- MLIR/LLVM code generation for recursive calls
+
+Recursion uses the `call()` function with explicit function name references.
+"""
 
 import pytest
-from mlir_edsl.backend import HAS_CPP_BACKEND, get_backend
-
-# Skip all tests if C++ backend is not available
-pytestmark = pytest.mark.skipif(not HAS_CPP_BACKEND, reason="C++ backend not available")
-
-
-@pytest.fixture
-def backend():
-    """Provide a clean backend instance for each test"""
-    backend_instance = get_backend()
-    backend_instance.reset()
-    return backend_instance
+from mlir_edsl import ml_function, add, sub, mul, eq, le, If, call
+from mlir_edsl import i32, i1
+from mlir_edsl.backend import HAS_CPP_BACKEND
+from tests.test_base import MLIRTestBase
 
 
-def test_simple_recursive_factorial(backend):
-    """Test basic recursive factorial function: fact(n) = n == 0 ? 1 : n * fact(n-1)"""
-    # Create function with signature
-    backend.create_function("factorial", [("n", "i32")], "i32")
-    
-    # Get function parameter
-    n = backend.get_parameter("n")
-    
-    # Base case: n == 0
-    zero = backend.constant(0)
-    one = backend.constant(1)
-    is_zero = backend.compare("eq", n, zero)
-    
-    # Recursive case: n * factorial(n-1)
-    n_minus_one = backend.sub(n, one)
-    recursive_call = backend.call_function("factorial", [n_minus_one])
-    recursive_result = backend.mul(n, recursive_call)
-    
-    # Conditional: is_zero ? 1 : recursive_result
-    result = backend.if_else(is_zero, one, recursive_result)
-    
-    backend.add_return(result)
-    mlir_code = backend.get_mlir_string()
-    
-    # Verify MLIR contains expected elements
-    assert '"func.func"' in mlir_code and "factorial" in mlir_code
-    assert '"func.call"' in mlir_code and "@factorial" in mlir_code
-    assert '"scf.if"' in mlir_code
-    assert '"func.return"' in mlir_code
+# ==================== BASIC RECURSION ====================
+
+class TestBasicRecursion(MLIRTestBase):
+    """Test basic recursive function patterns"""
+
+    def test_simple_recursive_factorial(self):
+        """Test basic recursive factorial: fact(n) = n == 0 ? 1 : n * fact(n-1)"""
+        @ml_function
+        def factorial(n: int) -> int:
+            return If(eq(n, 0),
+                      1,
+                      mul(n, call("factorial", [sub(n, 1)], i32)))
+
+        result = factorial(5)
+        assert result == 120
+
+    def test_fibonacci_recursion(self):
+        """Test fibonacci: fib(n) = n <= 1 ? n : fib(n-1) + fib(n-2)"""
+        @ml_function
+        def fibonacci(n: int) -> int:
+            return If(le(n, 1),
+                      n,
+                      add(call("fibonacci", [sub(n, 1)], i32),
+                          call("fibonacci", [sub(n, 2)], i32)))
+
+        result = fibonacci(7)
+        assert result == 13
+
+    def test_countdown_recursion(self):
+        """Test simple countdown: countdown(n) = n <= 0 ? 0 : countdown(n-1)"""
+        @ml_function
+        def countdown(n: int) -> int:
+            return If(le(n, 0),
+                      0,
+                      call("countdown", [sub(n, 1)], i32))
+
+        result = countdown(10)
+        assert result == 0
 
 
-def test_fibonacci_recursion(backend):
-    """Test fibonacci function: fib(n) = n <= 1 ? n : fib(n-1) + fib(n-2)"""
-    # Create function with signature
-    backend.create_function("fibonacci", [("n", "i32")], "i32")
-    
-    n = backend.get_parameter("n")
-    zero = backend.constant(0)
-    one = backend.constant(1)
-    two = backend.constant(2)
-    
-    # Base cases: n <= 1 (simplified: just n == 0 or n == 1)
-    is_zero = backend.compare("eq", n, zero)
-    is_one = backend.compare("eq", n, one)
-    
-    # For base cases, return n itself
-    # For recursive case: fib(n-1) + fib(n-2)
-    n_minus_one = backend.sub(n, one)
-    n_minus_two = backend.sub(n, two)
-    fib_n_1 = backend.call_function("fibonacci", [n_minus_one])
-    fib_n_2 = backend.call_function("fibonacci", [n_minus_two])
-    recursive_result = backend.add(fib_n_1, fib_n_2)
-    
-    # Nested conditionals: is_zero ? 0 : (is_one ? 1 : recursive_result)
-    inner_result = backend.if_else(is_one, one, recursive_result)
-    result = backend.if_else(is_zero, zero, inner_result)
-    
-    backend.add_return(result)
-    mlir_code = backend.get_mlir_string()
-    
-    # Verify MLIR contains expected elements
-    assert '"func.func"' in mlir_code and "fibonacci" in mlir_code
-    assert '"func.call"' in mlir_code and "@fibonacci" in mlir_code
-    assert '"scf.if"' in mlir_code
-    assert '"func.return"' in mlir_code
+# ==================== TAIL RECURSION ====================
+
+class TestTailRecursion(MLIRTestBase):
+    """Test tail recursive patterns with accumulators"""
+
+    def test_tail_recursive_sum(self):
+        """Test tail recursive sum: sum(n, acc) = n == 0 ? acc : sum(n-1, acc+n)"""
+        @ml_function
+        def tail_sum(n: int, acc: int) -> int:
+            return If(eq(n, 0),
+                      acc,
+                      call("tail_sum", [sub(n, 1), add(acc, n)], i32))
+
+        result = tail_sum(10, 0)
+        assert result == 55  # 1+2+3+...+10
+
+    def test_tail_recursive_factorial(self):
+        """Test tail recursive factorial with accumulator"""
+        @ml_function
+        def tail_factorial(n: int, acc: int) -> int:
+            return If(eq(n, 0),
+                      acc,
+                      call("tail_factorial", [sub(n, 1), mul(acc, n)], i32))
+
+        result = tail_factorial(5, 1)
+        assert result == 120
 
 
-def test_countdown_recursion(backend):
-    """Test simple countdown: countdown(n) = n <= 0 ? 0 : countdown(n-1)"""
-    # Create function with signature
-    backend.create_function("countdown", [("n", "i32")], "i32")
-    
-    n = backend.get_parameter("n")
-    zero = backend.constant(0)
-    one = backend.constant(1)
-    
-    # Base case: n <= 0 (using n == 0 for simplicity)
-    is_done = backend.compare("sle", n, zero)  # signed less or equal
-    n_minus_one = backend.sub(n, one)
-    recursive_call = backend.call_function("countdown", [n_minus_one])
-    
-    result = backend.if_else(is_done, zero, recursive_call)
-    backend.add_return(result)
-    mlir_code = backend.get_mlir_string()
-    
-    # Verify MLIR contains expected elements
-    assert '"func.func"' in mlir_code and "countdown" in mlir_code
-    assert '"func.call"' in mlir_code and "@countdown" in mlir_code
-    assert '"scf.if"' in mlir_code
-    assert '"func.return"' in mlir_code
+# ==================== SYMBOL RESOLUTION ====================
+
+class TestRecursionSymbolResolution(MLIRTestBase):
+    """Test symbol table handling for recursive function definitions"""
+
+    def test_recursive_function_symbol_resolution(self):
+        """Test that recursive functions can reference themselves during definition"""
+        # This tests that a function is available in the symbol table
+        # while its body is being defined, allowing self-reference
+        @ml_function
+        def self_test(x: int) -> int:
+            # Self-reference during definition
+            # Using If to avoid infinite recursion at runtime
+            return If(eq(x, 0),
+                      x,
+                      add(x, call("self_test", [sub(x, 1)], i32)))
+
+        # Compilation should succeed
+        result = self_test(3)
+        assert result == 6  # 3 + 2 + 1 + 0
+
+    def test_nested_recursive_calls(self):
+        """Test multiple recursive calls in a single expression"""
+        @ml_function
+        def nested_fib(n: int) -> int:
+            # Multiple recursive calls in one expression
+            return If(le(n, 1),
+                      n,
+                      add(call("nested_fib", [sub(n, 1)], i32),
+                          call("nested_fib", [sub(n, 2)], i32)))
+
+        result = nested_fib(6)
+        assert result == 8  # Fibonacci(6) = 8
 
 
-def test_tail_recursive_sum(backend):
-    """Test tail recursive sum with accumulator: sum(n, acc) = n == 0 ? acc : sum(n-1, acc+n)"""
-    # Create function with signature (two parameters)
-    backend.create_function("tail_sum", [("n", "i32"), ("acc", "i32")], "i32")
-    
-    n = backend.get_parameter("n")
-    acc = backend.get_parameter("acc")
-    zero = backend.constant(0)
-    one = backend.constant(1)
-    
-    # Base case: n == 0
-    is_done = backend.compare("eq", n, zero)
-    n_minus_one = backend.sub(n, one)
-    new_acc = backend.add(acc, n)
-    recursive_call = backend.call_function("tail_sum", [n_minus_one, new_acc])
-    
-    result = backend.if_else(is_done, acc, recursive_call)
-    backend.add_return(result)
-    mlir_code = backend.get_mlir_string()
-    
-    # Verify MLIR contains expected elements
-    assert '"func.func"' in mlir_code and "tail_sum" in mlir_code
-    assert '"func.call"' in mlir_code and "@tail_sum" in mlir_code
-    assert '"scf.if"' in mlir_code
-    assert '"func.return"' in mlir_code
+# ==================== MUTUAL RECURSION ====================
+
+class TestMutualRecursion(MLIRTestBase):
+    """Test mutually recursive functions calling each other"""
+
+    def test_mutual_recursion_even_odd(self):
+        """Test mutually recursive is_even/is_odd functions"""
+        pytest.skip("Mutual recursion requires multiple function definitions in single compilation")
+
+        # Future implementation pattern:
+        # @ml_function
+        # def is_even(n: int) -> bool:
+        #     return If(eq(n, 0), True, call("is_odd", [sub(n, 1)], i1))
+        #
+        # @ml_function
+        # def is_odd(n: int) -> bool:
+        #     return If(eq(n, 0), False, call("is_even", [sub(n, 1)], i1))
 
 
-def test_mutual_recursion_even_odd(backend):
-    """Test mutually recursive functions: is_even/is_odd"""
-    # More complex case: functions calling each other
-    # is_even(n) = n == 0 ? true : is_odd(n-1)
-    # is_odd(n) = n == 0 ? false : is_even(n-1)
-    
-    # This tests:
-    # 1. Multiple function definitions
-    # 2. Forward references
-    # 3. Cross-function calls
-    
-    # Expected pattern for is_even:
-    # backend.start_function("is_even", [("n", "i32")], "i1")  # i1 for boolean
-    # n = backend.get_param("n")
-    # zero = backend.constant(0)
-    # one = backend.constant(1)
-    # true_val = backend.constant_bool(True)
-    # false_val = backend.constant_bool(False)
-    # 
-    # is_zero = backend.compare_eq(n, zero)
-    # n_minus_one = backend.sub(n, one)
-    # odd_call = backend.call_function("is_odd", [n_minus_one])
-    # 
-    # result = backend.if_else(is_zero, true_val, odd_call)
-    # backend.finish_function(result)
-    
-    # Similar pattern for is_odd...
-    
-    pytest.skip("Mutual recursion not yet implemented")
+# ==================== MLIR/LLVM OUTPUT VALIDATION ====================
+
+class TestRecursionCodeGeneration(MLIRTestBase):
+    """Test MLIR and LLVM IR generation for recursive functions"""
+
+    def test_recursive_factorial_compiles(self):
+        """Test that recursive factorial compiles without errors"""
+        @ml_function
+        def fact(n: int) -> int:
+            return If(eq(n, 0), 1, mul(n, call("fact", [sub(n, 1)], i32)))
+
+        # Just verify compilation succeeds
+        result = fact(4)
+        assert result == 24
+
+    def test_recursive_llvm_ir_generation(self):
+        """Test LLVM IR generation from recursive MLIR functions"""
+        pytest.skip("LLVM IR inspection not yet implemented")
+
+        # When implemented, verify:
+        # - Proper function declaration
+        # - Call instructions
+        # - Stack frame management
+        # - Return value handling
 
 
-def test_recursive_factorial_mlir_output(backend):
-    """Test that recursive factorial generates correct MLIR structure"""
-    # Create a simple factorial function
-    backend.create_function("fact", [("n", "i32")], "i32")
-    
-    n = backend.get_parameter("n")
-    zero = backend.constant(0)
-    one = backend.constant(1)
-    
-    is_zero = backend.compare("eq", n, zero)
-    n_minus_one = backend.sub(n, one)
-    recursive_call = backend.call_function("fact", [n_minus_one])
-    recursive_result = backend.mul(n, recursive_call)
-    
-    result = backend.if_else(is_zero, one, recursive_result)
-    backend.add_return(result)
-    
-    mlir_code = backend.get_mlir_string()
-    
-    # Print MLIR for debugging
-    print("Generated MLIR:")
-    print(mlir_code)
-    
-    # Detailed MLIR structure verification
-    assert "function_type = (i32) -> i32" in mlir_code  # Function signature
-    assert 'sym_name = "fact"' in mlir_code  # Function name
-    assert "%arg0: i32" in mlir_code  # Parameter
-    assert '"arith.cmpi"' in mlir_code  # Comparison operation
-    # Look for function call in any format
-    assert ("func.call" in mlir_code and "fact" in mlir_code) or ("@fact" in mlir_code)  # Recursive call
-    assert '"arith.muli"' in mlir_code  # Multiplication
-    assert '"scf.if"' in mlir_code  # Conditional
-    assert '"func.return"' in mlir_code  # Return statement
+# ==================== EDGE CASES ====================
 
+class TestRecursionEdgeCases(MLIRTestBase):
+    """Test edge cases and boundary conditions for recursion"""
 
-def test_recursive_function_symbol_resolution(backend):
-    """Test that recursive functions can reference themselves during definition"""
-    # This tests the core symbol table challenge:
-    # Function must be callable from within its own definition
-    
-    # Create function - it should be immediately available for self-calls
-    backend.create_function("self_test", [("x", "i32")], "i32")
-    
-    x = backend.get_parameter("x")
-    one = backend.constant(1)
-    
-    # The fact that we can call the function being defined proves symbol resolution works
-    self_call = backend.call_function("self_test", [one])  # This should not fail
-    result = backend.add(x, self_call)  # Simple operation to avoid infinite recursion in test
-    
-    backend.add_return(result)
-    mlir_code = backend.get_mlir_string()
-    
-    # Print MLIR for debugging
-    print("Generated MLIR:")
-    print(mlir_code)
-    
-    # Verify the function can call itself (look for any function call format)
-    assert ("func.call" in mlir_code and "self_test" in mlir_code) or ("@self_test" in mlir_code)
+    def test_recursion_base_case_immediate(self):
+        """Test recursion where base case is hit immediately"""
+        @ml_function
+        def factorial(n: int) -> int:
+            return If(eq(n, 0), 1, mul(n, call("factorial", [sub(n, 1)], i32)))
 
+        # Base case: n = 0
+        result = factorial(0)
+        assert result == 1
 
-def test_recursive_llvm_ir_generation(backend):
-    """Test LLVM IR generation from recursive MLIR functions"""
-    # Verify that recursive MLIR lowers correctly to LLVM IR
-    # Should contain proper function calls and stack management
-    
-    pytest.skip("LLVM lowering for recursion not yet implemented")
+    def test_recursion_single_level(self):
+        """Test recursion with single recursive call"""
+        @ml_function
+        def factorial(n: int) -> int:
+            return If(eq(n, 0), 1, mul(n, call("factorial", [sub(n, 1)], i32)))
 
+        # One level of recursion: n = 1 -> factorial(0)
+        result = factorial(1)
+        assert result == 1
 
-def test_deep_recursion_stack_safety(backend):
-    """Test that deep recursion doesn't break compilation"""
-    # Not testing runtime stack overflow, just compilation correctness
-    # For very deep call chains in generated IR
-    
-    pytest.skip("Deep recursion compilation not yet implemented")
+    def test_deep_recursion_compilation(self):
+        """Test that deeper recursion compiles correctly"""
+        @ml_function
+        def factorial(n: int) -> int:
+            return If(eq(n, 0), 1, mul(n, call("factorial", [sub(n, 1)], i32)))
+
+        # Test with moderate depth (10 levels)
+        result = factorial(10)
+        assert result == 3628800
 
 
 if __name__ == "__main__":

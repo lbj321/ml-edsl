@@ -92,6 +92,11 @@ def call(func_name: str, args: list[Union[int, float, Value]], return_type) -> C
     Returns:
         CallOp representing the function call
     """
+
+    from .types import MLIRType
+    if isinstance(return_type, MLIRType):
+        return_type = return_type.enum_value
+
     # Convert primitive types to Constants
     converted_args = []
     for arg in args:
@@ -279,11 +284,11 @@ def If(condition: Value, then_value: Union[int, float, Value],
     return IfOp(condition, then_value, else_value)
 
 
-def For(start: Union[int, float, Value],
-        end: Union[int, float, Value],
+def For(start: Union[int, Value],
+        end: Union[int, Value],
         init: Union[int, float, Value],
         operation: str = "add",
-        step: Union[int, float, Value] = 1):
+        step: Union[int, Value] = 1):
     """Create a for loop: for(i = start; i < end; i += step) { accumulator op= i }
 
     Args:

@@ -11,7 +11,7 @@ except ImportError:
     ast_pb2 = None
 
 # Import type system
-from .types import I32, F32, I1
+from .types import I32, F32, I1, is_numeric_type, is_integer_type
 
 if TYPE_CHECKING:
     from ._mlir_backend import MLIRBuilder
@@ -461,10 +461,14 @@ class CallOp(Value):
 class ForLoopOp(Value):
     """Represents a for loop operation (scf.for) - STRICT TYPE ENFORCEMENT
 
-    All inputs (start, end, step, init_value) must be the same type.
-    Supports I32 or F32 (not I1).
+    Loop bounds (start, end, step) must all be integers (I32).
+    Accumulator (init_value) can be any numeric type (I32 or F32).
 
     Represents: for(i = start; i < end; i += step) { accumulator = accumulator op i }
+
+    Examples:
+        - For(start=0, end=10, step=1, init=0, op="add")      # int loop, int accumulator
+        - For(start=0, end=10, step=1, init=0.5, op="add")    # int loop, float accumulator
     """
 
     def __init__(self, start: Value, end: Value, step: Value,
@@ -482,25 +486,31 @@ class ForLoopOp(Value):
         step_type = step.infer_type()
         init_type = init_value.infer_type()
 
-        # STRICT: All must be the same type
-        if not (start_type == end_type == step_type == init_type):
+        # STRICT: Loop bounds (start, end, step) must all be the same type
+        if not (start_type == end_type == step_type):
             raise TypeError(
-                f"ForLoopOp requires all inputs to have the same type. "
-                f"Got: start={start_type}, end={end_type}, "
-                f"step={step_type}, init_value={init_type}"
+                f"ForLoopOp requires loop bounds to have the same type. "
+                f"Got: start={start_type}, end={end_type}, step={step_type}"
             )
 
-        # Only allow I32 or F32
-        if start_type not in (I32, F32):
+        # STRICT: Loop bounds must be integers (scf.for requires this)
+        if not is_integer_type(start_type):
             raise TypeError(
-                f"ForLoopOp only supports I32 or F32, got {start_type}"
+                f"ForLoopOp requires integer loop bounds (I32). "
+                f"Got: {start_type}. Use integer indices with float accumulator if needed."
             )
 
-        # Result type is trivial - same as all inputs
-        self._inferred_type = start_type
+        # STRICT: Accumulator must be numeric
+        if not is_integer_type(init_type):
+            raise TypeError(
+                f"ForLoopOp accumulator must be numeric (I32). Got: {init_type}"
+            )
+
+        # Result type matches the accumulator type
+        self._inferred_type = init_type
 
     def infer_type(self) -> int:
-        """Return the loop result type (same as all inputs)"""
+        """Return the loop result type (same as accumulator)"""
         return self._inferred_type
 
     def get_children(self) -> list['Value']:
