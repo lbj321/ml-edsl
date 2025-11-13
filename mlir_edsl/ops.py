@@ -1,7 +1,7 @@
 """Basic arithmetic operations for the EDSL"""
 
 from typing import Union
-from .ast import BinaryOp, Constant, Value, CallOp, CompareOp
+from .ast import BinaryOp, Constant, Value, CallOp, CompareOp, CastOp
 from .types import I32
 
 
@@ -372,7 +372,7 @@ def While(init: Union[int, float, Value],
     return WhileLoopOp(init, target, operation, predicate)
 
 
-def cast(value: Union[int, float, Value], target_type) -> 'CastOp':
+def cast(value: Union[int, float, Value], target_type) -> CastOp:
     """Explicitly cast a value to a different type
 
     Args:

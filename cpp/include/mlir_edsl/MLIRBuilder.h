@@ -75,8 +75,10 @@ private:
   mlir::Value buildDiv(mlir::Value lhs, mlir::Value rhs);
   mlir::Value buildCompare(mlir_edsl::ComparisonPredicate predicate,
                            mlir::Value lhs, mlir::Value rhs);
-  mlir::Value buildIf(mlir::Value condition, mlir::Value thenValue,
-                      mlir::Value elseValue);
+  mlir::Value buildIf(mlir::Value condition,
+                      std::function<mlir::Value()> buildThen,
+                      std::function<mlir::Value()> buildElse,
+                      mlir::Type resultType);
   mlir::Value buildFor(
       mlir::Value start, mlir::Value end, mlir::Value step,
       mlir::Value init_value,

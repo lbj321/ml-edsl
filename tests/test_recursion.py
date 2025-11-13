@@ -153,16 +153,6 @@ class TestRecursionCodeGeneration(MLIRTestBase):
         result = fact(4)
         assert result == 24
 
-    def test_recursive_llvm_ir_generation(self):
-        """Test LLVM IR generation from recursive MLIR functions"""
-        pytest.skip("LLVM IR inspection not yet implemented")
-
-        # When implemented, verify:
-        # - Proper function declaration
-        # - Call instructions
-        # - Stack frame management
-        # - Return value handling
-
 
 # ==================== EDGE CASES ====================
 

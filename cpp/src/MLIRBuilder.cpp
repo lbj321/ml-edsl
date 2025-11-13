@@ -124,9 +124,17 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
   } else if (node.has_if_op()) {
     const auto &ifop = node.if_op();
     mlir::Value cond = buildFromProtobufNode(ifop.condition());
-    mlir::Value thenVal = buildFromProtobufNode(ifop.then_value());
-    mlir::Value elseVal = buildFromProtobufNode(ifop.else_value());
-    return buildIf(cond, thenVal, elseVal);
+    mlir::Type resultType = protoTypeToMLIRType(ifop.result_type());
+
+    // Create callbacks that capture the protobuf nodes
+    auto buildThen = [this, &ifop]() {
+      return buildFromProtobufNode(ifop.then_value());
+    };
+    auto buildElse = [this, &ifop]() {
+      return buildFromProtobufNode(ifop.else_value());
+    };
+
+    return buildIf(cond, buildThen, buildElse, resultType);
 
   } else if (node.has_call_op()) {
     const auto &call = node.call_op();
@@ -304,21 +312,30 @@ mlir::Value MLIRBuilder::buildCompare(mlir_edsl::ComparisonPredicate predicate,
   return builder->create<mlir::arith::CmpFOp>(loc, pred, lhs, rhs);
 }
 
-mlir::Value MLIRBuilder::buildIf(mlir::Value condition, mlir::Value thenValue,
-                                 mlir::Value elseValue) {
+mlir::Value MLIRBuilder::buildIf(mlir::Value condition,
+                                 std::function<mlir::Value()> buildThen,
+                                 std::function<mlir::Value()> buildElse,
+                                 mlir::Type resultType) {
   auto loc = builder->getUnknownLoc();
-  auto resultType = thenValue.getType();
 
   auto ifOp = builder->create<mlir::scf::IfOp>(loc, resultType, condition,
-                                               /*withElseRegion*/ true);
+                                               /*withElseRegion=*/true);
 
-  auto *thenBlock = &ifOp.getThenRegion().front();
-  builder->setInsertionPointToStart(thenBlock);
-  builder->create<mlir::scf::YieldOp>(loc, thenValue);
+  // Build THEN region
+  {
+    mlir::OpBuilder::InsertionGuard guard(*builder);
+    builder->setInsertionPointToStart(&ifOp.getThenRegion().front());
+    mlir::Value thenVal = buildThen();  // Callback executes here
+    builder->create<mlir::scf::YieldOp>(loc, thenVal);
+  }
 
-  auto *elseBlock = &ifOp.getElseRegion().front();
-  builder->setInsertionPointToStart(elseBlock);
-  builder->create<mlir::scf::YieldOp>(loc, elseValue);
+  // Build ELSE region
+  {
+    mlir::OpBuilder::InsertionGuard guard(*builder);
+    builder->setInsertionPointToStart(&ifOp.getElseRegion().front());
+    mlir::Value elseVal = buildElse();  // Callback executes here
+    builder->create<mlir::scf::YieldOp>(loc, elseVal);
+  }
 
   builder->setInsertionPointAfter(ifOp);
   return ifOp.getResult(0);
