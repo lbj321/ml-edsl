@@ -93,8 +93,8 @@ def call(func_name: str, args: list[Union[int, float, Value]], return_type) -> C
         CallOp representing the function call
     """
 
-    from .types import MLIRType
-    if isinstance(return_type, MLIRType):
+    from .types import ScalarType
+    if isinstance(return_type, ScalarType):
         return_type = return_type.enum_value
 
     # Convert primitive types to Constants
@@ -389,12 +389,12 @@ def cast(value: Union[int, float, Value], target_type) -> CastOp:
         result = add(cast(a, f32), b)  # a is i32, b is f32
     """
     from .ast import CastOp
-    from .types import MLIRType
+    from .types import ScalarType
 
     if isinstance(value, (int, float)):
         value = Constant(value)
 
-    if isinstance(target_type, MLIRType):
+    if isinstance(target_type, ScalarType):
         target_type = target_type.enum_value
 
     return CastOp(value, target_type)

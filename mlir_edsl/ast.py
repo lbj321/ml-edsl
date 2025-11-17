@@ -342,6 +342,7 @@ class CompareOp(Value):
 
         # Compute promoted operand type (same rule as BinaryOp)
         # F32 + anything = F32, otherwise I32
+        # TODO: Fix
         if left_type == F32 or right_type == F32:
             self._operand_type = F32
         else:

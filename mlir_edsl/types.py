@@ -12,7 +12,7 @@ I1 = ast_pb2.I1
 
 # ==================== TYPE HINTS (Public API) ====================
 
-class MLIRType:
+class ScalarType:
     """Type hint object for MLIR types"""
     def __init__(self, name: str, enum_value: int):
         self.name = name
@@ -29,14 +29,14 @@ class MLIRType:
 if TYPE_CHECKING:
     # For type checkers, these are type aliases
     from typing import TypeAlias
-    i32: TypeAlias = MLIRType
-    f32: TypeAlias = MLIRType
-    i1: TypeAlias = MLIRType
+    i32: TypeAlias = ScalarType
+    f32: TypeAlias = ScalarType
+    i1: TypeAlias = ScalarType
 else:
     # At runtime, these are MLIRType instances
-    i32 = MLIRType("i32", I32)
-    f32 = MLIRType("f32", F32)
-    i1 = MLIRType("i1", I1)
+    i32 = ScalarType("i32", I32)
+    f32 = ScalarType("f32", F32)
+    i1 = ScalarType("i1", I1)
 
 # ==================== TYPE SYSTEM ====================
 
@@ -56,7 +56,7 @@ class TypeSystem:
 
         Supports: int, float, bool, i32, f32, i1
         """
-        if isinstance(hint, MLIRType):
+        if isinstance(hint, ScalarType):
             return hint.enum_value
 
         if hint in cls.PYTHON_TYPE_MAP:
