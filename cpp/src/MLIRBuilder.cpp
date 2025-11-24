@@ -1,8 +1,10 @@
 #include "mlir_edsl/MLIRBuilder.h"
+#include "mlir_edsl/MemRefBuilder.h"
 
 #include "ast.pb.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -24,8 +26,12 @@ MLIRBuilder::MLIRBuilder() {
   context->getOrLoadDialect<mlir::arith::ArithDialect>();
   context->getOrLoadDialect<mlir::func::FuncDialect>();
   context->getOrLoadDialect<mlir::scf::SCFDialect>();
+  context->getOrLoadDialect<mlir::memref::MemRefDialect>();
 
   builder = std::make_unique<mlir::OpBuilder>(context.get());
+
+  // Initialize dialect builders
+  memrefBuilder = std::make_unique<mlir_edsl::MemRefBuilder>(*builder, context.get(), this);
 }
 
 MLIRBuilder::~MLIRBuilder() {
@@ -163,6 +169,15 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
     const auto &cast = node.cast_op();
     mlir::Value sourceValue = buildFromProtobufNode(cast.value());
     return buildCast(sourceValue, cast.target_type());
+
+  } else if (node.has_array_literal()) {
+    return memrefBuilder->buildArrayLiteral(node.array_literal());
+
+  } else if (node.has_array_access()) {
+    return memrefBuilder->buildArrayAccess(node.array_access());
+
+  } else if (node.has_array_store()) {
+    return memrefBuilder->buildArrayStore(node.array_store());
   }
 
   throw std::runtime_error("Unknown protobuf node type");

@@ -51,14 +51,24 @@ class TypeSystem:
     }
 
     @classmethod
-    def parse_type_hint(cls, hint, context: str = "parameter") -> int:
-        """Parse type hint to MLIR type enum
+    def parse_type_hint(cls, hint, context: str = "parameter"):
+        """Parse type hint to MLIR type enum OR ArrayType
 
-        Supports: int, float, bool, i32, f32, i1
+        Supports: int, float, bool, i32, f32, i1, Array[N, dtype]
+
+        Returns:
+            - For scalars: int (protobuf enum)
+            - For arrays: ArrayType instance
         """
+        # Handle ScalarType instances (i32, f32, i1)
         if isinstance(hint, ScalarType):
             return hint.enum_value
 
+        # Handle ArrayType instances (Array[10, i32])
+        if isinstance(hint, ArrayType):
+            return hint  # Return the ArrayType directly, not an enum
+
+        # Handle Python built-in types (int, float, bool)
         if hint in cls.PYTHON_TYPE_MAP:
             return cls.PYTHON_TYPE_MAP[hint]
 
@@ -171,3 +181,132 @@ TYPE_TO_CTYPES = {
     F32: ctypes.c_float,
     I1: ctypes.c_bool,
 }
+
+# ==================== ARRAY TYPES ====================
+
+class ArrayType:
+    """
+    Represents a fixed-size array type: memref<NxT>
+
+    Used for type hints in function signatures.
+
+    Example:
+        def foo(arr: Array[10, i32]) -> Array[10, i32]:
+            ...
+    """
+
+    def __init__(self, size: int, element_type: ScalarType):
+        if not isinstance(size, int) or size <= 0:
+            raise TypeError(f"Array size must be positive integer, got {size}")
+
+        if not isinstance(element_type, ScalarType):
+            raise TypeError(
+                f"Array element type must be ScalarType (i32, f32, i1), got {element_type}"
+            )
+
+        self.size = size
+        self.element_type = element_type  # This is a ScalarType instance (i32, f32, i1)
+        self.element_enum = element_type.enum_value  # Store the protobuf enum too
+
+    def __call__(self, elements: list):
+        """
+        Enable Array[4, i32]([1, 2, 3, 4]) construction syntax.
+
+        This creates an ArrayLiteral AST node (will be implemented in Step 2).
+        For now, we'll just validate and prepare for later.
+        """
+        # Import here to avoid circular dependency
+        # (We'll implement ArrayLiteral in Step 2)
+        try:
+            from .ast import ArrayLiteral
+            return ArrayLiteral(elements, self)
+        except (ImportError, AttributeError):
+            # During initial implementation, ast.ArrayLiteral doesn't exist yet
+            raise NotImplementedError(
+                "ArrayLiteral not yet implemented. "
+                "This will be added in Step 2 (AST extensions)."
+            )
+
+    def to_mlir_string(self) -> str:
+        """Convert to MLIR type string: memref<10xi32>"""
+        elem_name = self.element_type.name  # "i32", "f32", or "i1"
+        return f"memref<{self.size}x{elem_name}>"
+
+    def __repr__(self):
+        return f"Array[{self.size}, {self.element_type.name}]"
+
+    def __eq__(self, other):
+        """Enable type equality checking for strict type system"""
+        if not isinstance(other, ArrayType):
+            return False
+        return (self.size == other.size and
+                self.element_enum == other.element_enum)
+
+    def __hash__(self):
+        """Enable use as dict key"""
+        return hash((self.size, self.element_enum))
+
+
+class ArrayMeta(type):
+    """
+    Metaclass to enable Array[size, dtype] subscript syntax.
+
+    This makes Array[10, i32] work even though Array is a class.
+    """
+
+    def __getitem__(cls, params):
+        """
+        Handle Array[10, i32] syntax.
+
+        Args:
+            params: Either a tuple (size, dtype) or error
+
+        Returns:
+            ArrayType instance
+        """
+        # Ensure we got exactly 2 parameters
+        if not isinstance(params, tuple):
+            raise TypeError(
+                f"Array requires 2 parameters: Array[size, element_type]. "
+                f"Example: Array[10, i32]"
+            )
+
+        if len(params) != 2:
+            raise TypeError(
+                f"Array requires exactly 2 parameters, got {len(params)}. "
+                f"Usage: Array[size, element_type]"
+            )
+
+        size, dtype = params
+
+        # Validate size
+        if not isinstance(size, int) or size <= 0:
+            raise TypeError(
+                f"Array size must be positive integer, got {size!r}"
+            )
+
+        # Validate dtype is one of i32, f32, i1
+        if not isinstance(dtype, ScalarType):
+            raise TypeError(
+                f"Array element type must be i32, f32, or i1, got {dtype!r}"
+            )
+
+        # Create and return ArrayType instance
+        return ArrayType(size, dtype)
+
+
+class Array(metaclass=ArrayMeta):
+    """
+    Fixed-size array type for memref dialect.
+
+    Usage as type hint:
+        def foo(arr: Array[10, i32]) -> Array[10, i32]:
+            ...
+
+    Usage for construction (inside @ml_function):
+        arr = Array[4, i32]([1, 2, 3, 4])
+
+    The Array class itself is never instantiated - it's just a namespace
+    for the subscript syntax enabled by ArrayMeta.
+    """
+    pass

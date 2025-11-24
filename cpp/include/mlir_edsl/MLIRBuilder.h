@@ -13,6 +13,11 @@
 #include <pybind11/pybind11.h>
 #include <unordered_set>
 
+// Forward declaration for MemRefBuilder
+namespace mlir_edsl {
+class MemRefBuilder;
+}
+
 namespace mlir_edsl {
 
 // Forward declarations for protobuf types
@@ -42,6 +47,10 @@ public:
   void clearModule();
   std::vector<std::string> listFunctions() const;
 
+  // ==================== PUBLIC UTILITIES (for dialect builders) ====================
+  mlir::Type protoTypeToMLIRType(mlir_edsl::ValueType protoType) const;
+  mlir::Value buildFromProtobufNode(const mlir_edsl::ASTNode &node);
+
 private:
   std::unique_ptr<mlir::MLIRContext> context;
   std::unique_ptr<mlir::OpBuilder> builder;
@@ -59,8 +68,6 @@ private:
   protobufToIntPredicate(mlir_edsl::ComparisonPredicate pred) const;
   mlir::arith::CmpFPredicate
   protobufToFloatPredicate(mlir_edsl::ComparisonPredicate pred) const;
-
-  mlir::Value buildFromProtobufNode(const mlir_edsl::ASTNode &node);
 
   // Template helper for binary operations (assumes operands already promoted)
   template <typename IntOp, typename FloatOp>
@@ -114,9 +121,11 @@ private:
   promoteToType(mlir::Value lhs, mlir::Value rhs, mlir::Type targetType);
   mlir::Type getPromotedType(mlir::Type lhs, mlir::Type rhs) const;
 
-  // Type conversion from protobuf AST
-  mlir::Type protoTypeToMLIRType(mlir_edsl::ValueType protoType) const;
+  // Type conversion helper
   mlir_edsl::ValueType mlirTypeToProtoEnum(mlir::Type type) const;
+
+  // Dialect builders
+  std::unique_ptr<mlir_edsl::MemRefBuilder> memrefBuilder;
 
   std::unordered_map<std::string, mlir::Value> parameterMap;
   std::unordered_map<std::string, mlir::func::FuncOp> functionTable;

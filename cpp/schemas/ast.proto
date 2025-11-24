@@ -69,6 +69,9 @@ message ASTNode {
     CastOp cast_op = 9;
     LetBinding let_binding = 10;
     ValueReference value_ref = 11;
+    ArrayLiteral array_literal = 12;
+    ArrayAccess array_access = 13;
+    ArrayStore array_store = 14;
   }
 }
 
@@ -77,6 +80,12 @@ message Constant {
   int32 int_value = 1;
   float float_value = 2;
   ValueType value_type = 3;
+}
+
+// Array type specification (size and element type)
+message ArrayTypeSpec {
+  int32 size = 1;              // Array size (number of elements)
+  ValueType element_type = 2;  // Element type (I32, F32, I1)
 }
 
 // Named parameter with value
@@ -141,6 +150,25 @@ message WhileLoopOp {
 message CastOp {
   ASTNode value = 1;          // Value to cast
   ValueType target_type = 2;  // Target type to cast to
+}
+
+// Array literal creation: Array[4, i32]([1, 2, 3, 4])
+message ArrayLiteral {
+  ArrayTypeSpec array_type = 1;  // Array type (size + element type)
+  repeated ASTNode elements = 2;  // Array elements (must match array_type.size)
+}
+
+// Array element access: arr[index]
+message ArrayAccess {
+  ASTNode array = 1;   // Array to index into (must be ArrayLiteral or array-typed value)
+  ASTNode index = 2;   // Index value (must be I32)
+}
+
+// Array element store: arr[index] = value
+message ArrayStore {
+  ASTNode array = 1;   // Array to store into
+  ASTNode index = 2;   // Index value (must be I32)
+  ASTNode value = 3;   // Value to store (must match array element type)
 }
 
 // Let binding for SSA value reuse (marks first use of a shared value)

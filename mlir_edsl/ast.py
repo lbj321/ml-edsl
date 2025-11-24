@@ -11,7 +11,7 @@ except ImportError:
     ast_pb2 = None
 
 # Import type system
-from .types import I32, F32, I1, is_numeric_type, is_integer_type
+from .types import I32, F32, I1, is_numeric_type, is_integer_type, ArrayType
 
 if TYPE_CHECKING:
     from ._mlir_backend import MLIRBuilder
@@ -87,6 +87,73 @@ def _predicate_to_proto(predicate: str):
     return pred_map[predicate]
 
 
+# ==================== JAX-STYLE .at[] SYNTAX ====================
+
+class _AtIndexer:
+    """Helper class for .at[] syntax (JAX-style)
+
+    This enables: arr.at[index].set(value)
+
+    When you write arr.at[index], this class captures the index
+    and returns an _AtSetter that provides the .set() method.
+    """
+
+    def __init__(self, array: 'Value'):
+        self._array = array
+
+    def __getitem__(self, index):
+        """Capture the index when user writes arr.at[index]
+
+        Returns:
+            _AtSetter object that provides .set() method
+        """
+        return _AtSetter(self._array, index)
+
+
+class _AtSetter:
+    """Helper class for .at[idx].set() syntax
+
+    This is returned by _AtIndexer.__getitem__ and provides
+    the .set() method for functional array updates.
+    """
+
+    def __init__(self, array: 'Value', index):
+        self._array = array
+        self._index = index
+
+    def set(self, value):
+        """Functional array update - returns new array with element set
+
+        This creates an ArrayStore node representing the updated array.
+        Since MLIR uses SSA (Static Single Assignment), arrays are immutable,
+        so this returns a new array rather than modifying the original.
+
+        Args:
+            value: The value to store (can be Python literal or Value node)
+
+        Returns:
+            ArrayStore node representing the updated array
+
+        Example:
+            arr = Array[4, i32]([1, 2, 3, 4])
+            arr = arr.at[1].set(99)  # Returns new array [1, 99, 3, 4]
+        """
+        return ArrayStore(self._array, self._index, value)
+
+    def get(self):
+        """Explicit element access: arr.at[i].get()
+
+        This is equivalent to arr[i] but follows the .at[] convention.
+
+        Returns:
+            ArrayAccess node for reading the element
+
+        Example:
+            value = arr.at[1].get()  # Same as arr[1]
+        """
+        return ArrayAccess(self._array, self._index)
+
+
 class Value(ABC):
     """Base class for all values in the EDSL"""
     _next_id = 0
@@ -97,11 +164,17 @@ class Value(ABC):
         Value._next_id += 1
 
     @abstractmethod
-    def infer_type(self) -> int:
-        """Infer the type of this value (returns I32, F32, or I1 enum)
+    def infer_type(self) -> Union[int, ArrayType]:
+        """Infer the type of this value.
 
         Returns:
-            int: Protobuf ValueType enum (I32=0, F32=1, I1=2)
+            int: Protobuf ValueType enum (I32=0, F32=1, I1=2) for scalar values
+            ArrayType: For array values with size and element type
+
+        Examples:
+            Constant(5).infer_type()           # Returns 0 (I32)
+            Constant(3.14).infer_type()        # Returns 1 (F32)
+            ArrayLiteral([1,2,3], ...).infer_type()  # Returns ArrayType instance
         """
         raise NotImplementedError(f"{self.__class__.__name__} must implement infer_type()")
 
@@ -223,6 +296,44 @@ class Value(ABC):
         """Overload != operator: x != y"""
         from .ops import ne
         return ne(self, other)
+
+    # Array subscript operators
+    def __getitem__(self, index):
+        """Enable arr[i] syntax for array element reads"""
+        return ArrayAccess(self, index)
+
+    def __setitem__(self, index, value):
+        """Block direct assignment with helpful error message
+
+        Direct assignment arr[i] = value doesn't work in SSA form
+        because Python discards the return value of __setitem__.
+
+        Instead, use the functional .at[] syntax:
+            arr = arr.at[i].set(value)
+        """
+        raise TypeError(
+            f"MLIR arrays use SSA (Static Single Assignment) and cannot be mutated in-place.\n"
+            f"\n"
+            f"❌ Instead of:  arr[{index}] = {value}\n"
+            f"✅ Use:         arr = arr.at[{index}].set({value})\n"
+            f"\n"
+            f"The .at[] syntax returns a new array, which you must assign back.\n"
+            f"This makes the SSA semantics explicit and matches JAX's design."
+        )
+
+    @property
+    def at(self):
+        """Enable arr.at[i].set(v) syntax (JAX-style)
+
+        Returns:
+            _AtIndexer object that captures the index
+
+        Example:
+            arr = Array[4, i32]([10, 20, 30, 40])
+            arr = arr.at[1].set(99)       # Returns new array
+            arr = arr.at[2].set(88)       # Can chain updates
+        """
+        return _AtIndexer(self)
 
 
 class Constant(Value):
@@ -640,4 +751,293 @@ class CastOp(Value):
             pb_node.cast_op.value.CopyFrom(self.value.to_proto())
 
         pb_node.cast_op.target_type = self.target_type
+        return pb_node
+
+
+# ==================== ARRAY OPERATIONS ====================
+
+class ArrayLiteral(Value):
+    """
+    Array creation: Array[4, i32]([1, 2, 3, 4])
+
+    Compile-time type checking:
+    - Validates size matches number of elements
+    - Validates all elements match declared element type (strict!)
+    """
+
+    def __init__(self, elements: list, array_type: ArrayType):
+        super().__init__()
+        self.elements = elements
+        self.array_type = array_type
+
+        # COMPILE-TIME TYPE CHECKING
+        self._validate_size()
+        self._validate_element_types()
+
+    def _validate_size(self):
+        """Ensure number of elements matches declared size"""
+        if len(self.elements) != self.array_type.size:
+            raise TypeError(
+                f"Array size mismatch: declared Array[{self.array_type.size}, ...] "
+                f"but got {len(self.elements)} elements"
+            )
+
+    def _validate_element_types(self):
+        """Ensure all elements match the declared element type (strict!)"""
+        expected_enum = self.array_type.element_enum
+
+        for i, elem in enumerate(self.elements):
+            # Convert Python literals to AST nodes if needed
+            elem_node = self._ensure_ast_node(elem)
+            self.elements[i] = elem_node  # Update with AST node
+
+            # Infer element type
+            elem_type = elem_node.infer_type()
+
+            # Strict type checking - must be scalar and match exactly
+            if isinstance(elem_type, ArrayType):
+                raise TypeError(
+                    f"Array element at index {i} cannot be an array. "
+                    f"Nested arrays not supported yet."
+                )
+
+            if elem_type != expected_enum:
+                raise TypeError(
+                    f"Array element type mismatch at index {i}: "
+                    f"expected {self.array_type.element_type.name}, "
+                    f"got {self._enum_to_name(elem_type)}. "
+                    f"Use cast() for explicit type conversion."
+                )
+
+    def _ensure_ast_node(self, elem):
+        """Convert Python literal to AST node if needed"""
+        if isinstance(elem, Value):
+            return elem
+
+        # Convert Python literals
+        if isinstance(elem, bool):
+            # Must check bool before int (bool is subclass of int)
+            return Constant(elem, I1)
+        elif isinstance(elem, int):
+            return Constant(elem, I32)
+        elif isinstance(elem, float):
+            return Constant(elem, F32)
+        else:
+            raise TypeError(f"Invalid array element: {elem}")
+
+    def _enum_to_name(self, enum_val):
+        """Helper: convert enum to readable name"""
+        return {I32: "i32", F32: "f32", I1: "i1"}.get(enum_val, f"unknown({enum_val})")
+
+    def infer_type(self) -> Union[int, ArrayType]:
+        """ArrayLiteral returns its full ArrayType"""
+        return self.array_type  # Returns ArrayType instance, not int!
+
+    def get_children(self) -> list['Value']:
+        """Return element nodes for serialization traversal"""
+        return self.elements
+
+    def to_proto(self, context: 'SerializationContext' = None):
+        """Serialize ArrayLiteral to protobuf"""
+        if ast_pb2 is None:
+            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
+
+        pb_node = ast_pb2.ASTNode()
+
+        # Set array type specification
+        pb_node.array_literal.array_type.size = self.array_type.size
+        pb_node.array_literal.array_type.element_type = self.array_type.element_enum
+
+        # Serialize each element (with context-aware serialization)
+        for elem in self.elements:
+            if context:
+                pb_node.array_literal.elements.append(elem._to_proto_impl(context))
+            else:
+                pb_node.array_literal.elements.append(elem.to_proto())
+
+        return pb_node
+
+
+class ArrayAccess(Value):
+    """
+    Array element read: arr[index]
+
+    Compile-time type checking:
+    - Array must be ArrayType
+    - Index must be i32
+    - Result type is the array's element type
+    """
+
+    def __init__(self, array: Value, index):
+        super().__init__()
+        self.array = array
+
+        # Convert index to AST node if it's a Python int
+        if isinstance(index, int):
+            self.index = Constant(index, I32)
+        elif isinstance(index, Value):
+            self.index = index
+        else:
+            raise TypeError(f"Array index must be int or Value, got {type(index)}")
+
+        # COMPILE-TIME TYPE CHECKING
+        self._validate_types()
+
+    def _validate_types(self):
+        """Validate array access is type-safe"""
+        # Check that we're indexing an array
+        array_type = self.array.infer_type()
+        if not isinstance(array_type, ArrayType):
+            raise TypeError(
+                f"Cannot index into non-array type. "
+                f"Expected array, got {self._type_to_str(array_type)}"
+            )
+
+        # Check that index is i32
+        index_type = self.index.infer_type()
+        if isinstance(index_type, ArrayType) or index_type != I32:
+            raise TypeError(
+                f"Array index must be i32, got {self._type_to_str(index_type)}. "
+                f"Use cast() to convert to i32."
+            )
+
+        # Store the array type for infer_type()
+        self._array_type = array_type
+
+    def _type_to_str(self, typ):
+        """Helper: convert type to readable string"""
+        if isinstance(typ, ArrayType):
+            return repr(typ)
+        return {I32: "i32", F32: "f32", I1: "i1"}.get(typ, f"unknown({typ})")
+
+    def infer_type(self) -> Union[int, ArrayType]:
+        """Array access returns the element type (scalar enum)"""
+        # If we index into Array[10, i32], we get back i32
+        return self._array_type.element_enum  # Returns I32/F32/I1 (int)
+
+    def get_children(self) -> list['Value']:
+        """Return child nodes"""
+        return [self.array, self.index]
+
+    def to_proto(self, context: 'SerializationContext' = None):
+        """Serialize ArrayAccess to protobuf"""
+        if ast_pb2 is None:
+            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
+
+        pb_node = ast_pb2.ASTNode()
+
+        # Serialize array and index (context-aware)
+        if context:
+            pb_node.array_access.array.CopyFrom(self.array._to_proto_impl(context))
+            pb_node.array_access.index.CopyFrom(self.index._to_proto_impl(context))
+        else:
+            pb_node.array_access.array.CopyFrom(self.array.to_proto())
+            pb_node.array_access.index.CopyFrom(self.index.to_proto())
+
+        return pb_node
+
+
+class ArrayStore(Value):
+    """
+    Array element write: arr[index] = value
+
+    Compile-time type checking:
+    - Array must be ArrayType
+    - Index must be i32
+    - Value type must match array element type exactly
+    """
+
+    def __init__(self, array: Value, index, value):
+        super().__init__()
+        self.array = array
+
+        # Convert index to AST node
+        if isinstance(index, int):
+            self.index = Constant(index, I32)
+        elif isinstance(index, Value):
+            self.index = index
+        else:
+            raise TypeError(f"Array index must be int or Value")
+
+        # Convert value to AST node if needed
+        if isinstance(value, bool):
+            # Must check bool before int (bool is subclass of int)
+            self.value = Constant(value, I1)
+        elif isinstance(value, int):
+            self.value = Constant(value, I32)
+        elif isinstance(value, float):
+            self.value = Constant(value, F32)
+        elif isinstance(value, Value):
+            self.value = value
+        else:
+            raise TypeError(f"Array value must be int/float/bool or Value")
+
+        # COMPILE-TIME TYPE CHECKING
+        self._validate_types()
+
+    def _validate_types(self):
+        """Validate array store is type-safe"""
+        # Check that we're indexing an array
+        array_type = self.array.infer_type()
+        if not isinstance(array_type, ArrayType):
+            raise TypeError(
+                f"Cannot use []= on non-array type: {self._type_to_str(array_type)}"
+            )
+
+        # Check index is i32
+        index_type = self.index.infer_type()
+        if isinstance(index_type, ArrayType) or index_type != I32:
+            raise TypeError(f"Array index must be i32, got {self._type_to_str(index_type)}")
+
+        # Check value type matches array element type (STRICT!)
+        expected_enum = array_type.element_enum
+        actual_type = self.value.infer_type()
+
+        if isinstance(actual_type, ArrayType):
+            raise TypeError(
+                f"Cannot store array into array element. "
+                f"Expected {array_type.element_type.name}, got {actual_type}"
+            )
+
+        if actual_type != expected_enum:
+            raise TypeError(
+                f"Cannot store {self._type_to_str(actual_type)} into "
+                f"Array[..., {array_type.element_type.name}]. "
+                f"Use cast() for explicit conversion."
+            )
+
+        # Store array type for later
+        self._array_type = array_type
+
+    def _type_to_str(self, typ):
+        """Helper: convert type to readable string"""
+        if isinstance(typ, ArrayType):
+            return repr(typ)
+        return {I32: "i32", F32: "f32", I1: "i1"}.get(typ, f"unknown({typ})")
+
+    def infer_type(self) -> Union[int, ArrayType]:
+        """Store doesn't produce a value, but return array type for consistency"""
+        return self._array_type
+
+    def get_children(self) -> list['Value']:
+        """Return child nodes"""
+        return [self.array, self.index, self.value]
+
+    def to_proto(self, context: 'SerializationContext' = None):
+        """Serialize ArrayStore to protobuf"""
+        if ast_pb2 is None:
+            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
+
+        pb_node = ast_pb2.ASTNode()
+
+        # Serialize array, index, and value (context-aware)
+        if context:
+            pb_node.array_store.array.CopyFrom(self.array._to_proto_impl(context))
+            pb_node.array_store.index.CopyFrom(self.index._to_proto_impl(context))
+            pb_node.array_store.value.CopyFrom(self.value._to_proto_impl(context))
+        else:
+            pb_node.array_store.array.CopyFrom(self.array.to_proto())
+            pb_node.array_store.index.CopyFrom(self.index.to_proto())
+            pb_node.array_store.value.CopyFrom(self.value.to_proto())
+
         return pb_node

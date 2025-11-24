@@ -3,10 +3,15 @@
 import os
 import shutil
 from mlir_edsl.backend import get_backend
+from google.protobuf import text_format, json_format
 
 
 # Module-level flag to track if we've cleared ir_output this session
 _IR_OUTPUT_CLEARED = False
+_AST_OUTPUT_CLEARED = False
+
+# Storage for captured ASTs during tests
+_captured_asts = {}  # {func_name: [protobuf_ast, ...]}
 
 
 class MLIRTestBase:
@@ -17,6 +22,9 @@ class MLIRTestBase:
         SAVE_IR: Set to "1" to save IR files
             - Raw IR files saved to ir_output/ (.mlir, _unopt.ll, _opt.ll)
             - HTML reports saved to ir_html/ (.html)
+        PRINT_AST: Set to "1" to print protobuf AST after each test
+        SAVE_AST: Set to "1" to save protobuf AST to files
+            - Protobuf AST saved to ast_output/ (.pb.txt, .pb.json)
 
     Usage:
         class TestMyFeature(MLIRTestBase):
@@ -27,22 +35,25 @@ class MLIRTestBase:
 
                 result = my_func(10)
                 assert result == 15
-                # IR automatically printed/saved if env vars set
+                # IR/AST automatically printed/saved if env vars set
     """
 
     @classmethod
     def setup_class(cls):
         """Class-level setup - runs once per test class"""
-        global _IR_OUTPUT_CLEARED
+        global _IR_OUTPUT_CLEARED, _AST_OUTPUT_CLEARED
 
         cls.backend = get_backend()
         cls.print_ir = os.getenv("PRINT_IR", "").lower() in ("1", "true", "yes")
         cls.save_ir = os.getenv("SAVE_IR", "").lower() in ("1", "true", "yes")
+        cls.print_ast = os.getenv("PRINT_AST", "").lower() in ("1", "true", "yes")
+        cls.save_ast = os.getenv("SAVE_AST", "").lower() in ("1", "true", "yes")
 
         # Use ir_output and ir_html in project root (tests/ is sibling to mlir_edsl/)
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         cls.ir_output_dir = os.path.join(project_root, "ir_output")
         cls.ir_html_dir = os.path.join(project_root, "ir_html")
+        cls.ast_output_dir = os.path.join(project_root, "ast_output")
 
         if cls.save_ir:
             # Clear directories once per test session (not per class)
@@ -57,10 +68,24 @@ class MLIRTestBase:
             os.makedirs(cls.ir_output_dir, exist_ok=True)
             os.makedirs(cls.ir_html_dir, exist_ok=True)
 
+        if cls.save_ast:
+            # Clear AST output directory once per test session
+            if not _AST_OUTPUT_CLEARED:
+                if os.path.exists(cls.ast_output_dir):
+                    shutil.rmtree(cls.ast_output_dir)
+                _AST_OUTPUT_CLEARED = True
+
+            # Create fresh directory
+            os.makedirs(cls.ast_output_dir, exist_ok=True)
+
     def setup_method(self):
         """Test-level setup - runs before each test method"""
         if self.backend:
             self.backend.clear_module()
+
+        # Install AST capture hook if AST printing/saving is enabled
+        if self.print_ast or self.save_ast:
+            self._install_ast_capture()
 
     def teardown_method(self, method):
         """Test-level teardown - runs after each test method"""
@@ -71,13 +96,17 @@ class MLIRTestBase:
         test_name = method.__name__ if method else "unknown"
 
         try:
+            if self.print_ast:
+                self._print_ast(test_name)
+            if self.save_ast:
+                self._save_ast_files(test_name)
             if self.print_ir:
                 self._print_ir()
             if self.save_ir:
                 self._save_ir(test_name)
         except Exception as e:
-            # Don't fail test if IR printing fails
-            print(f"\nWarning: Could not output IR: {e}")
+            # Don't fail test if IR/AST printing fails
+            print(f"\nWarning: Could not output IR/AST: {e}")
 
     def _print_ir(self):
         """Print MLIR and LLVM IR to stdout"""
@@ -125,6 +154,67 @@ class MLIRTestBase:
 
         print(f"\nSaved HTML: {html_path}")
         print(f"Raw IR files: ir_output/{func_name}.{{mlir,_unopt.ll,_opt.ll}}")
+
+    def _install_ast_capture(self):
+        """Monkey-patch backend to capture protobuf ASTs during compilation"""
+        global _captured_asts
+        _captured_asts.clear()
+
+        # Save original method
+        if not hasattr(self.backend, '_original_compile_function'):
+            self.backend._original_compile_function = self.backend.compile_function_from_ast
+
+        # Wrap to capture AST
+        def capture_wrapper(name, params, return_type, ast_node):
+            # Serialize AST with SSA reuse
+            protobuf_ast = ast_node.to_proto_with_reuse()
+
+            # Store for later printing/saving
+            if name not in _captured_asts:
+                _captured_asts[name] = []
+            _captured_asts[name].append(protobuf_ast)
+
+            # Call original
+            return self.backend._original_compile_function(name, params, return_type, ast_node)
+
+        self.backend.compile_function_from_ast = capture_wrapper
+
+    def _print_ast(self, test_name):
+        """Print captured protobuf ASTs to stdout"""
+        if not _captured_asts:
+            print(f"\n{'='*60}")
+            print(f"No ASTs captured for test: {test_name}")
+            print('='*60)
+            return
+
+        for func_name, ast_list in _captured_asts.items():
+            for i, ast in enumerate(ast_list):
+                print(f"\n{'='*60}")
+                print(f"PROTOBUF AST: {func_name} (capture {i+1})")
+                print('='*60)
+                print(text_format.MessageToString(ast, indent=2))
+
+    def _save_ast_files(self, test_name):
+        """Save captured protobuf ASTs to files"""
+        if not _captured_asts:
+            print(f"\nWarning: No ASTs captured for test {test_name}")
+            return
+
+        for func_name, ast_list in _captured_asts.items():
+            for i, ast in enumerate(ast_list):
+                # Save text format (human-readable)
+                txt_filename = f"{func_name}_{i}.pb.txt" if len(ast_list) > 1 else f"{func_name}.pb.txt"
+                txt_path = os.path.join(self.ast_output_dir, txt_filename)
+                with open(txt_path, 'w') as f:
+                    f.write(text_format.MessageToString(ast, indent=2))
+
+                # Save JSON format
+                json_filename = f"{func_name}_{i}.pb.json" if len(ast_list) > 1 else f"{func_name}.pb.json"
+                json_path = os.path.join(self.ast_output_dir, json_filename)
+                with open(json_path, 'w') as f:
+                    f.write(json_format.MessageToJson(ast, indent=2))
+
+            print(f"\nAST saved to {self.ast_output_dir}/{func_name}.*")
 
     def _read_file(self, path):
         """Read file contents, return empty string if file doesn't exist"""

@@ -40,6 +40,7 @@ set(MLIR_SCF_LIBS
 # Memory and tensor dialects (for Phase 7)
 set(MLIR_MEMORY_LIBS
     MLIRMemRefDialect
+    MLIRMemRefToLLVM
     MLIRTensorDialect
     MLIRLinalgDialect
     MLIRBufferizationDialect
@@ -52,6 +53,7 @@ set(MLIR_CURRENT_LIBS
     ${MLIR_FUNC_LIBS}
     ${MLIR_LLVM_LIBS}
     ${MLIR_SCF_LIBS}
+    ${MLIR_MEMORY_LIBS}
     MLIRReconcileUnrealizedCasts
 )
 
