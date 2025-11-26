@@ -13,8 +13,9 @@
 #include <pybind11/pybind11.h>
 #include <unordered_set>
 
-// Forward declaration for MemRefBuilder
+// Forward declarations for dialect builders
 namespace mlir_edsl {
+class ArithBuilder;
 class MemRefBuilder;
 }
 
@@ -64,16 +65,7 @@ private:
   bool isIntegerType(mlir::Type type) const;
   bool isFloatType(mlir::Type type) const;
 
-  mlir::arith::CmpIPredicate
-  protobufToIntPredicate(mlir_edsl::ComparisonPredicate pred) const;
-  mlir::arith::CmpFPredicate
-  protobufToFloatPredicate(mlir_edsl::ComparisonPredicate pred) const;
-
-  // Template helper for binary operations (assumes operands already promoted)
-  template <typename IntOp, typename FloatOp>
-  mlir::Value buildBinaryOp(mlir::Value lhs, mlir::Value rhs);
-
-  // Internal MLIR building operations (not exposed to Python)
+  // Internal MLIR building operations (delegated to dialect builders)
   mlir::Value buildConstant(int32_t value);
   mlir::Value buildConstant(float value);
   mlir::Value buildAdd(mlir::Value lhs, mlir::Value rhs);
@@ -125,6 +117,7 @@ private:
   mlir_edsl::ValueType mlirTypeToProtoEnum(mlir::Type type) const;
 
   // Dialect builders
+  std::unique_ptr<mlir_edsl::ArithBuilder> arithBuilder;
   std::unique_ptr<mlir_edsl::MemRefBuilder> memrefBuilder;
 
   std::unordered_map<std::string, mlir::Value> parameterMap;

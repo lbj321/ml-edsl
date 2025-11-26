@@ -283,7 +283,7 @@ class TestSubscriptSyntax:
     def test_setitem_creates_array_store(self):
         """Test that arr[i] = value creates ArrayStore node"""
         arr = ArrayLiteral([1, 2, 3], Array[3, i32])
-        store = arr.__setitem__(0, 99)
+        store = arr.at[0].set(99)
 
         assert isinstance(store, ArrayStore)
         assert store.array == arr
@@ -300,7 +300,7 @@ class TestSubscriptSyntax:
 
         # This should fail - wrong value type
         with pytest.raises(TypeError, match="Cannot store f32"):
-            arr.__setitem__(0, 3.14)
+            arr.at[0].set(3.14)
 
 
 # ==================== GET_CHILDREN FOR SERIALIZATION ====================

@@ -7,6 +7,7 @@ find_package(pybind11 REQUIRED)
 add_library(mlir_edsl_core STATIC
     src/MLIRBuilder.cpp
     src/MLIRLowering.cpp
+    src/builders/ArithBuilder.cpp
     src/builders/MemRefBuilder.cpp
 )
 

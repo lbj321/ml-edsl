@@ -1,4 +1,5 @@
 #include "mlir_edsl/MLIRBuilder.h"
+#include "mlir_edsl/ArithBuilder.h"
 #include "mlir_edsl/MemRefBuilder.h"
 
 #include "ast.pb.h"
@@ -31,6 +32,7 @@ MLIRBuilder::MLIRBuilder() {
   builder = std::make_unique<mlir::OpBuilder>(context.get());
 
   // Initialize dialect builders
+  arithBuilder = std::make_unique<mlir_edsl::ArithBuilder>(*builder, context.get(), this);
   memrefBuilder = std::make_unique<mlir_edsl::MemRefBuilder>(*builder, context.get(), this);
 }
 
@@ -83,9 +85,9 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
     const auto &constant = node.constant();
     switch (constant.value_type()) {
     case mlir_edsl::ValueType::I32:
-      return buildConstant(constant.int_value());
+      return arithBuilder->buildConstant(constant.int_value());
     case mlir_edsl::ValueType::F32:
-      return buildConstant(constant.float_value());
+      return arithBuilder->buildConstant(constant.float_value());
     default:
       throw std::runtime_error("Unsupported constant type");
     }
@@ -105,13 +107,13 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
 
     switch (binop.op_type()) {
     case mlir_edsl::BinaryOpType::ADD:
-      return buildAdd(promotedLeft, promotedRight);
+      return arithBuilder->buildAdd(promotedLeft, promotedRight);
     case mlir_edsl::BinaryOpType::SUB:
-      return buildSub(promotedLeft, promotedRight);
+      return arithBuilder->buildSub(promotedLeft, promotedRight);
     case mlir_edsl::BinaryOpType::MUL:
-      return buildMul(promotedLeft, promotedRight);
+      return arithBuilder->buildMul(promotedLeft, promotedRight);
     case mlir_edsl::BinaryOpType::DIV:
-      return buildDiv(promotedLeft, promotedRight);
+      return arithBuilder->buildDiv(promotedLeft, promotedRight);
     default:
       throw std::runtime_error("Unsupported binary operation");
     }
@@ -125,7 +127,7 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
     mlir::Type targetType = protoTypeToMLIRType(cmp.operand_type());
     auto [promotedLhs, promotedRhs] = promoteToType(left, right, targetType);
 
-    return buildCompare(cmp.predicate(), promotedLhs, promotedRhs);
+    return arithBuilder->buildCompare(cmp.predicate(), promotedLhs, promotedRhs);
 
   } else if (node.has_if_op()) {
     const auto &ifop = node.if_op();
@@ -168,7 +170,7 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
   } else if (node.has_cast_op()) {
     const auto &cast = node.cast_op();
     mlir::Value sourceValue = buildFromProtobufNode(cast.value());
-    return buildCast(sourceValue, cast.target_type());
+    return arithBuilder->buildCast(sourceValue, cast.target_type());
 
   } else if (node.has_array_literal()) {
     return memrefBuilder->buildArrayLiteral(node.array_literal());
@@ -183,148 +185,43 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
   throw std::runtime_error("Unknown protobuf node type");
 }
 
-mlir::arith::CmpIPredicate
-MLIRBuilder::protobufToIntPredicate(mlir_edsl::ComparisonPredicate pred) const {
-  switch (pred) {
-  case mlir_edsl::ComparisonPredicate::SGT:
-    return mlir::arith::CmpIPredicate::sgt;
-  case mlir_edsl::ComparisonPredicate::SLT:
-    return mlir::arith::CmpIPredicate::slt;
-  case mlir_edsl::ComparisonPredicate::EQ:
-    return mlir::arith::CmpIPredicate::eq;
-  case mlir_edsl::ComparisonPredicate::NE:
-    return mlir::arith::CmpIPredicate::ne;
-  case mlir_edsl::ComparisonPredicate::SGE:
-    return mlir::arith::CmpIPredicate::sge;
-  case mlir_edsl::ComparisonPredicate::SLE:
-    return mlir::arith::CmpIPredicate::sle;
-  default:
-    throw std::runtime_error(
-        "Invalid or unsupported integer comparison predicate");
-  }
-}
-
-mlir::arith::CmpFPredicate MLIRBuilder::protobufToFloatPredicate(
-    mlir_edsl::ComparisonPredicate pred) const {
-  switch (pred) {
-  case mlir_edsl::ComparisonPredicate::OGT:
-    return mlir::arith::CmpFPredicate::OGT;
-  case mlir_edsl::ComparisonPredicate::OLT:
-    return mlir::arith::CmpFPredicate::OLT;
-  case mlir_edsl::ComparisonPredicate::OEQ:
-    return mlir::arith::CmpFPredicate::OEQ;
-  case mlir_edsl::ComparisonPredicate::ONE:
-    return mlir::arith::CmpFPredicate::ONE;
-  case mlir_edsl::ComparisonPredicate::OGE:
-    return mlir::arith::CmpFPredicate::OGE;
-  case mlir_edsl::ComparisonPredicate::OLE:
-    return mlir::arith::CmpFPredicate::OLE;
-  default:
-    throw std::runtime_error(
-        "Invalid or unsupported float comparison predicate");
-  }
-}
-
+// ==================== Delegation wrappers to ArithBuilder ====================
 mlir::Value MLIRBuilder::buildConstant(int32_t value) {
-  auto loc = builder->getUnknownLoc();
-  auto type = getIntegerType();
-  auto attr = builder->getI32IntegerAttr(value);
-
-  return builder->create<mlir::arith::ConstantOp>(loc, type, attr);
+  return arithBuilder->buildConstant(value);
 }
 
 mlir::Value MLIRBuilder::buildConstant(float value) {
-  auto loc = builder->getUnknownLoc();
-  auto type = getFloatType();
-  auto attr = builder->getF32FloatAttr(value);
-
-  return builder->create<mlir::arith::ConstantOp>(loc, type, attr);
+  return arithBuilder->buildConstant(value);
 }
 
-// Template helper for binary operations - assumes operands already same type
-template <typename IntOp, typename FloatOp>
-mlir::Value MLIRBuilder::buildBinaryOp(mlir::Value lhs, mlir::Value rhs) {
-  auto loc = builder->getUnknownLoc();
-
-  if (isIntegerType(lhs.getType())) {
-    return builder->create<IntOp>(loc, lhs, rhs);
-  }
-  return builder->create<FloatOp>(loc, lhs, rhs);
-}
-
-// Public interface - uses template helper
 mlir::Value MLIRBuilder::buildAdd(mlir::Value lhs, mlir::Value rhs) {
-  return buildBinaryOp<mlir::arith::AddIOp, mlir::arith::AddFOp>(lhs, rhs);
+  return arithBuilder->buildAdd(lhs, rhs);
 }
 
 mlir::Value MLIRBuilder::buildSub(mlir::Value lhs, mlir::Value rhs) {
-  return buildBinaryOp<mlir::arith::SubIOp, mlir::arith::SubFOp>(lhs, rhs);
+  return arithBuilder->buildSub(lhs, rhs);
 }
 
 mlir::Value MLIRBuilder::buildMul(mlir::Value lhs, mlir::Value rhs) {
-  return buildBinaryOp<mlir::arith::MulIOp, mlir::arith::MulFOp>(lhs, rhs);
+  return arithBuilder->buildMul(lhs, rhs);
 }
 
 mlir::Value MLIRBuilder::buildDiv(mlir::Value lhs, mlir::Value rhs) {
-  return buildBinaryOp<mlir::arith::DivSIOp, mlir::arith::DivFOp>(lhs, rhs);
+  return arithBuilder->buildDiv(lhs, rhs);
 }
 
 mlir::Value MLIRBuilder::convertIntToFloat(mlir::Value intValue) {
-  auto loc = builder->getUnknownLoc();
-  auto floatType = getFloatType();
-  return builder->create<mlir::arith::SIToFPOp>(loc, floatType, intValue);
+  return arithBuilder->convertIntToFloat(intValue);
 }
 
 mlir::Value MLIRBuilder::buildCast(mlir::Value sourceValue,
                                    mlir_edsl::ValueType targetType) {
-  auto loc = builder->getUnknownLoc();
-  mlir::Type sourceType = sourceValue.getType();
-  mlir::Type targetMLIRType = protoTypeToMLIRType(targetType);
-
-  // Float to integer
-  if (isFloatType(sourceType) && isIntegerType(targetMLIRType)) {
-    return builder->create<mlir::arith::FPToSIOp>(loc, targetMLIRType,
-                                                  sourceValue);
-  }
-  // Integer to float
-  else if (isIntegerType(sourceType) && isFloatType(targetMLIRType)) {
-    return builder->create<mlir::arith::SIToFPOp>(loc, targetMLIRType,
-                                                  sourceValue);
-  }
-  // Integer to integer (different widths)
-  else if (isIntegerType(sourceType) && isIntegerType(targetMLIRType)) {
-    unsigned sourceBits = sourceType.getIntOrFloatBitWidth();
-    unsigned targetBits = targetMLIRType.getIntOrFloatBitWidth();
-
-    if (sourceBits < targetBits) {
-      return builder->create<mlir::arith::ExtSIOp>(loc, targetMLIRType,
-                                                   sourceValue);
-    } else if (sourceBits > targetBits) {
-      return builder->create<mlir::arith::TruncIOp>(loc, targetMLIRType,
-                                                    sourceValue);
-    } else {
-      return sourceValue; // Same width, no cast needed
-    }
-  }
-  // Float to float (same type, no cast needed)
-  else if (isFloatType(sourceType) && isFloatType(targetMLIRType)) {
-    return sourceValue;
-  }
-
-  throw std::runtime_error("Invalid cast: unsupported type combination");
+  return arithBuilder->buildCast(sourceValue, targetType);
 }
 
 mlir::Value MLIRBuilder::buildCompare(mlir_edsl::ComparisonPredicate predicate,
                                       mlir::Value lhs, mlir::Value rhs) {
-  auto loc = builder->getUnknownLoc();
-
-  if (isIntegerType(lhs.getType())) {
-    auto pred = protobufToIntPredicate(predicate);
-    return builder->create<mlir::arith::CmpIOp>(loc, pred, lhs, rhs);
-  }
-
-  auto pred = protobufToFloatPredicate(predicate);
-  return builder->create<mlir::arith::CmpFOp>(loc, pred, lhs, rhs);
+  return arithBuilder->buildCompare(predicate, lhs, rhs);
 }
 
 mlir::Value MLIRBuilder::buildIf(mlir::Value condition,
