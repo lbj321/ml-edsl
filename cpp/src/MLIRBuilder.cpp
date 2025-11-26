@@ -1,5 +1,6 @@
 #include "mlir_edsl/MLIRBuilder.h"
 #include "mlir_edsl/ArithBuilder.h"
+#include "mlir_edsl/SCFBuilder.h"
 #include "mlir_edsl/MemRefBuilder.h"
 
 #include "ast.pb.h"
@@ -33,6 +34,7 @@ MLIRBuilder::MLIRBuilder() {
 
   // Initialize dialect builders
   arithBuilder = std::make_unique<mlir_edsl::ArithBuilder>(*builder, context.get(), this);
+  scfBuilder = std::make_unique<mlir_edsl::SCFBuilder>(*builder, context.get(), this, arithBuilder.get());
   memrefBuilder = std::make_unique<mlir_edsl::MemRefBuilder>(*builder, context.get(), this);
 }
 
@@ -142,7 +144,7 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
       return buildFromProtobufNode(ifop.else_value());
     };
 
-    return buildIf(cond, buildThen, buildElse, resultType);
+    return scfBuilder->buildIf(cond, buildThen, buildElse, resultType);
 
   } else if (node.has_call_op()) {
     const auto &call = node.call_op();
@@ -158,14 +160,14 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
     mlir::Value end = buildFromProtobufNode(forloop.end());
     mlir::Value step = buildFromProtobufNode(forloop.step());
     mlir::Value init_value = buildFromProtobufNode(forloop.init_value());
-    return buildForWithOp(start, end, step, init_value, forloop.operation());
+    return scfBuilder->buildForWithOp(start, end, step, init_value, forloop.operation());
 
   } else if (node.has_while_loop_op()) {
     const auto &whileloop = node.while_loop_op();
     mlir::Value init_value = buildFromProtobufNode(whileloop.init_value());
     mlir::Value target = buildFromProtobufNode(whileloop.target());
-    return buildWhileWithOp(init_value, target, whileloop.operation(),
-                            whileloop.predicate());
+    return scfBuilder->buildWhileWithOp(init_value, target, whileloop.operation(),
+                                        whileloop.predicate());
 
   } else if (node.has_cast_op()) {
     const auto &cast = node.cast_op();
@@ -183,186 +185,6 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
   }
 
   throw std::runtime_error("Unknown protobuf node type");
-}
-
-// ==================== Delegation wrappers to ArithBuilder ====================
-mlir::Value MLIRBuilder::buildConstant(int32_t value) {
-  return arithBuilder->buildConstant(value);
-}
-
-mlir::Value MLIRBuilder::buildConstant(float value) {
-  return arithBuilder->buildConstant(value);
-}
-
-mlir::Value MLIRBuilder::buildAdd(mlir::Value lhs, mlir::Value rhs) {
-  return arithBuilder->buildAdd(lhs, rhs);
-}
-
-mlir::Value MLIRBuilder::buildSub(mlir::Value lhs, mlir::Value rhs) {
-  return arithBuilder->buildSub(lhs, rhs);
-}
-
-mlir::Value MLIRBuilder::buildMul(mlir::Value lhs, mlir::Value rhs) {
-  return arithBuilder->buildMul(lhs, rhs);
-}
-
-mlir::Value MLIRBuilder::buildDiv(mlir::Value lhs, mlir::Value rhs) {
-  return arithBuilder->buildDiv(lhs, rhs);
-}
-
-mlir::Value MLIRBuilder::convertIntToFloat(mlir::Value intValue) {
-  return arithBuilder->convertIntToFloat(intValue);
-}
-
-mlir::Value MLIRBuilder::buildCast(mlir::Value sourceValue,
-                                   mlir_edsl::ValueType targetType) {
-  return arithBuilder->buildCast(sourceValue, targetType);
-}
-
-mlir::Value MLIRBuilder::buildCompare(mlir_edsl::ComparisonPredicate predicate,
-                                      mlir::Value lhs, mlir::Value rhs) {
-  return arithBuilder->buildCompare(predicate, lhs, rhs);
-}
-
-mlir::Value MLIRBuilder::buildIf(mlir::Value condition,
-                                 std::function<mlir::Value()> buildThen,
-                                 std::function<mlir::Value()> buildElse,
-                                 mlir::Type resultType) {
-  auto loc = builder->getUnknownLoc();
-
-  auto ifOp = builder->create<mlir::scf::IfOp>(loc, resultType, condition,
-                                               /*withElseRegion=*/true);
-
-  // Build THEN region
-  {
-    mlir::OpBuilder::InsertionGuard guard(*builder);
-    builder->setInsertionPointToStart(&ifOp.getThenRegion().front());
-    mlir::Value thenVal = buildThen();  // Callback executes here
-    builder->create<mlir::scf::YieldOp>(loc, thenVal);
-  }
-
-  // Build ELSE region
-  {
-    mlir::OpBuilder::InsertionGuard guard(*builder);
-    builder->setInsertionPointToStart(&ifOp.getElseRegion().front());
-    mlir::Value elseVal = buildElse();  // Callback executes here
-    builder->create<mlir::scf::YieldOp>(loc, elseVal);
-  }
-
-  builder->setInsertionPointAfter(ifOp);
-  return ifOp.getResult(0);
-}
-
-mlir::Value MLIRBuilder::buildForWithOp(mlir::Value start, mlir::Value end,
-                                        mlir::Value step,
-                                        mlir::Value init_value,
-                                        mlir_edsl::BinaryOpType operation) {
-
-  auto body_fn = [this, operation](mlir::Value iv,
-                                   mlir::Value iter_arg) -> mlir::Value {
-
-    switch (operation) {
-    case mlir_edsl::BinaryOpType::ADD:
-      return buildAdd(iter_arg, iv);
-    case mlir_edsl::BinaryOpType::MUL:
-      return buildMul(iter_arg, iv);
-    case mlir_edsl::BinaryOpType::SUB:
-      return buildSub(iter_arg, iv);
-    case mlir_edsl::BinaryOpType::DIV:
-      return buildDiv(iter_arg, iv);
-    default:
-      throw std::runtime_error("Unsupported binary operation in for loop");
-    }
-  };
-
-  return buildFor(start, end, step, init_value, body_fn);
-}
-
-mlir::Value MLIRBuilder::buildFor(
-    mlir::Value start, mlir::Value end, mlir::Value step,
-    mlir::Value init_value,
-    std::function<mlir::Value(mlir::Value iv, mlir::Value iter_arg)> body_fn) {
-
-  auto loc = builder->getUnknownLoc();
-  auto forOp =
-      builder->create<mlir::scf::ForOp>(loc, start, end, step, init_value);
-
-  mlir::Block *body = forOp.getBody();
-  builder->setInsertionPointToStart(body);
-
-  mlir::Value inductionVar = body->getArgument(0);
-  mlir::Value iterArg = body->getArgument(1);
-
-  mlir::Value newIterArg = body_fn(inductionVar, iterArg);
-
-  builder->create<mlir::scf::YieldOp>(loc, newIterArg);
-
-  builder->setInsertionPointAfter(forOp);
-
-  return forOp.getResult(0);
-}
-
-mlir::Value
-MLIRBuilder::buildWhileWithOp(mlir::Value init, mlir::Value target,
-                              mlir_edsl::BinaryOpType operation,
-                              mlir_edsl::ComparisonPredicate condition) {
-
-  auto condition_fn = [this, condition,
-                       target](mlir::Value current) -> mlir::Value {
-    return buildCompare(condition, current, target); // Now uses enum!
-  };
-
-  auto body_fn = [this, operation](mlir::Value current) -> mlir::Value {
-    switch (operation) {
-    case mlir_edsl::BinaryOpType::ADD:
-      return buildAdd(current, buildConstant(1));
-    case mlir_edsl::BinaryOpType::MUL:
-      return buildMul(current, buildConstant(2));
-    case mlir_edsl::BinaryOpType::SUB:
-      return buildSub(current, buildConstant(1));
-    case mlir_edsl::BinaryOpType::DIV:
-      return buildDiv(current, buildConstant(2));
-    default:
-      throw std::runtime_error("Unsupported binary operation");
-    }
-  };
-
-  return buildWhile(init, condition_fn, body_fn);
-}
-
-mlir::Value
-MLIRBuilder::buildWhile(mlir::Value init,
-                        std::function<mlir::Value(mlir::Value)> condition_fn,
-                        std::function<mlir::Value(mlir::Value)> body_fn) {
-
-  auto loc = builder->getUnknownLoc();
-  auto resultType = init.getType();
-
-  auto whileOp = builder->create<mlir::scf::WhileOp>(
-      loc, mlir::TypeRange{resultType}, init);
-
-  auto &beforeRegion = whileOp.getBefore();
-  auto *beforeBlock = builder->createBlock(&beforeRegion, beforeRegion.end(),
-                                           {resultType}, {loc});
-  builder->setInsertionPointToStart(beforeBlock);
-
-  auto current = beforeBlock->getArgument(0);
-  auto condition = condition_fn(current);
-
-  builder->create<mlir::scf::ConditionOp>(loc, condition, current);
-
-  auto &afterRegion = whileOp.getAfter();
-  auto *afterBlock = builder->createBlock(&afterRegion, afterRegion.end(),
-                                          {resultType}, {loc});
-  builder->setInsertionPointToStart(afterBlock);
-
-  auto loopVar = afterBlock->getArgument(0);
-  auto newValue = body_fn(loopVar);
-
-  builder->create<mlir::scf::YieldOp>(loc, newValue);
-
-  builder->setInsertionPointAfter(whileOp);
-  return whileOp.getResult(0);
 }
 
 std::string MLIRBuilder::getMLIRString() {
@@ -414,13 +236,13 @@ MLIRBuilder::promoteToType(mlir::Value lhs, mlir::Value rhs,
   // Promote left operand if needed
   if (lhsType != targetType && isIntegerType(lhsType) &&
       isFloatType(targetType)) {
-    lhs = convertIntToFloat(lhs);
+    lhs = arithBuilder->convertIntToFloat(lhs);
   }
 
   // Promote right operand if needed
   if (rhsType != targetType && isIntegerType(rhsType) &&
       isFloatType(targetType)) {
-    rhs = convertIntToFloat(rhs);
+    rhs = arithBuilder->convertIntToFloat(rhs);
   }
 
   return {lhs, rhs};

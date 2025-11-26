@@ -16,6 +16,7 @@
 // Forward declarations for dialect builders
 namespace mlir_edsl {
 class ArithBuilder;
+class SCFBuilder;
 class MemRefBuilder;
 }
 
@@ -65,36 +66,6 @@ private:
   bool isIntegerType(mlir::Type type) const;
   bool isFloatType(mlir::Type type) const;
 
-  // Internal MLIR building operations (delegated to dialect builders)
-  mlir::Value buildConstant(int32_t value);
-  mlir::Value buildConstant(float value);
-  mlir::Value buildAdd(mlir::Value lhs, mlir::Value rhs);
-  mlir::Value buildSub(mlir::Value lhs, mlir::Value rhs);
-  mlir::Value buildMul(mlir::Value lhs, mlir::Value rhs);
-  mlir::Value buildDiv(mlir::Value lhs, mlir::Value rhs);
-  mlir::Value buildCompare(mlir_edsl::ComparisonPredicate predicate,
-                           mlir::Value lhs, mlir::Value rhs);
-  mlir::Value buildIf(mlir::Value condition,
-                      std::function<mlir::Value()> buildThen,
-                      std::function<mlir::Value()> buildElse,
-                      mlir::Type resultType);
-  mlir::Value buildFor(
-      mlir::Value start, mlir::Value end, mlir::Value step,
-      mlir::Value init_value,
-      std::function<mlir::Value(mlir::Value iv, mlir::Value iter_arg)> body_fn);
-  mlir::Value buildForWithOp(mlir::Value start, mlir::Value end,
-                             mlir::Value step, mlir::Value init_value,
-                             mlir_edsl::BinaryOpType operation);
-  mlir::Value buildWhileWithOp(mlir::Value init, mlir::Value target,
-                               mlir_edsl::BinaryOpType operation,
-                               mlir_edsl::ComparisonPredicate condition);
-  mlir::Value buildWhile(mlir::Value init,
-                         std::function<mlir::Value(mlir::Value)> condition_fn,
-                         std::function<mlir::Value(mlir::Value)> body_fn);
-
-  mlir::Value convertIntToFloat(mlir::Value intValue);
-  mlir::Value buildCast(mlir::Value sourceValue, mlir_edsl::ValueType targetType);
-
   // Internal function building (not exposed to Python)
   void createFunction(
       const std::string &name,
@@ -106,8 +77,6 @@ private:
   mlir::Value getParameter(const std::string &name);
   void reset();
 
-  std::string mapComparisonPredicate(mlir_edsl::ComparisonPredicate pred);
-
   // Type promotion helper (explicit target type from Python)
   std::pair<mlir::Value, mlir::Value>
   promoteToType(mlir::Value lhs, mlir::Value rhs, mlir::Type targetType);
@@ -118,6 +87,7 @@ private:
 
   // Dialect builders
   std::unique_ptr<mlir_edsl::ArithBuilder> arithBuilder;
+  std::unique_ptr<mlir_edsl::SCFBuilder> scfBuilder;
   std::unique_ptr<mlir_edsl::MemRefBuilder> memrefBuilder;
 
   std::unordered_map<std::string, mlir::Value> parameterMap;
