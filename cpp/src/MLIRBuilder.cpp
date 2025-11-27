@@ -232,12 +232,6 @@ void MLIRBuilder::reset() {
   builder->setInsertionPointToEnd(module.getBody());
 }
 
-mlir::Type MLIRBuilder::getIntegerType() const { return builder->getI32Type(); }
-
-mlir::Type MLIRBuilder::getFloatType() const { return builder->getF32Type(); }
-
-mlir::Type MLIRBuilder::getBoolType() const { return builder->getI1Type(); }
-
 bool MLIRBuilder::isIntegerType(mlir::Type type) const {
   return mlir::isa<mlir::IntegerType>(type);
 }
@@ -270,20 +264,20 @@ MLIRBuilder::promoteToType(mlir::Value lhs, mlir::Value rhs,
 
 mlir::Type MLIRBuilder::getPromotedType(mlir::Type lhs, mlir::Type rhs) const {
   if (isFloatType(lhs) || isFloatType(rhs)) {
-    return getFloatType();
+    return builder->getF32Type();
   }
-  return getIntegerType();
+  return builder->getI32Type();
 }
 
 mlir::Type
 MLIRBuilder::protoTypeToMLIRType(mlir_edsl::ValueType protoType) const {
   switch (protoType) {
   case mlir_edsl::ValueType::I32:
-    return getIntegerType();
+    return builder->getI32Type();
   case mlir_edsl::ValueType::F32:
-    return getFloatType();
+    return builder->getF32Type();
   case mlir_edsl::ValueType::I1:
-    return getBoolType();
+    return builder->getI1Type();
   default:
     throw std::runtime_error("Unknown protobuf type value: " +
                              std::to_string(static_cast<int>(protoType)));

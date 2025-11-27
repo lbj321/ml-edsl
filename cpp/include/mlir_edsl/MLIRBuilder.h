@@ -63,9 +63,6 @@ private:
   mlir::func::FuncOp currentFunction;
 
   // Helper methods
-  mlir::Type getIntegerType() const;
-  mlir::Type getFloatType() const;
-  mlir::Type getBoolType() const;
   bool isIntegerType(mlir::Type type) const;
   bool isFloatType(mlir::Type type) const;
 
