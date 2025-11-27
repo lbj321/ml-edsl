@@ -32,9 +32,6 @@ private:
   mlir::OpBuilder& builder;
   mlir::MLIRContext* context;
   MLIRBuilder* parent;  // Back-reference to MLIRBuilder for dispatching
-
-  /// Helper: Convert index to MLIR index type if needed
-  mlir::Value ensureIndexType(mlir::Value indexValue);
 };
 
 } // namespace mlir_edsl

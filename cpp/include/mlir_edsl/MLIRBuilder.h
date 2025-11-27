@@ -4,7 +4,6 @@
 #include <string>
 #include <unordered_map>
 
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -52,6 +51,10 @@ public:
   // ==================== PUBLIC UTILITIES (for dialect builders) ====================
   mlir::Type protoTypeToMLIRType(mlir_edsl::ValueType protoType) const;
   mlir::Value buildFromProtobufNode(const mlir_edsl::ASTNode &node);
+
+  // Infrastructure utilities (used by multiple dialect builders)
+  mlir::Value buildIndexConstant(int64_t value);
+  mlir::Value castToIndexType(mlir::Value value);
 
 private:
   std::unique_ptr<mlir::MLIRContext> context;

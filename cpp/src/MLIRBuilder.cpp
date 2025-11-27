@@ -290,6 +290,29 @@ MLIRBuilder::protoTypeToMLIRType(mlir_edsl::ValueType protoType) const {
   }
 }
 
+// ==================== Infrastructure Utilities ====================
+
+mlir::Value MLIRBuilder::buildIndexConstant(int64_t value) {
+  auto loc = builder->getUnknownLoc();
+  return builder->create<mlir::arith::ConstantIndexOp>(loc, value);
+}
+
+mlir::Value MLIRBuilder::castToIndexType(mlir::Value value) {
+  // If already index type, return as-is
+  if (value.getType().isIndex()) {
+    return value;
+  }
+
+  // Convert integer to index type
+  if (mlir::isa<mlir::IntegerType>(value.getType())) {
+    auto loc = builder->getUnknownLoc();
+    return builder->create<mlir::arith::IndexCastOp>(
+        loc, builder->getIndexType(), value);
+  }
+
+  throw std::runtime_error("Cannot cast to index type: unsupported source type");
+}
+
 mlir::Value MLIRBuilder::getParameter(const std::string &name) {
   auto it = parameterMap.find(name);
   if (it != parameterMap.end()) {

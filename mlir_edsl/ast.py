@@ -574,13 +574,12 @@ class ForLoopOp(Value):
     """Represents a for loop operation (scf.for) - STRICT TYPE ENFORCEMENT
 
     Loop bounds (start, end, step) must all be integers (I32).
-    Accumulator (init_value) can be any numeric type (I32 or F32).
+    Accumulator (init_value) must all be integers (I32).
 
     Represents: for(i = start; i < end; i += step) { accumulator = accumulator op i }
 
     Examples:
         - For(start=0, end=10, step=1, init=0, op="add")      # int loop, int accumulator
-        - For(start=0, end=10, step=1, init=0.5, op="add")    # int loop, float accumulator
     """
 
     def __init__(self, start: Value, end: Value, step: Value,
