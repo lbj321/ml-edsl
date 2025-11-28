@@ -262,13 +262,6 @@ MLIRBuilder::promoteToType(mlir::Value lhs, mlir::Value rhs,
   return {lhs, rhs};
 }
 
-mlir::Type MLIRBuilder::getPromotedType(mlir::Type lhs, mlir::Type rhs) const {
-  if (isFloatType(lhs) || isFloatType(rhs)) {
-    return builder->getF32Type();
-  }
-  return builder->getI32Type();
-}
-
 mlir::Type
 MLIRBuilder::protoTypeToMLIRType(mlir_edsl::ValueType protoType) const {
   switch (protoType) {

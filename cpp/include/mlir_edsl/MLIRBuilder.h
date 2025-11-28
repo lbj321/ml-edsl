@@ -80,7 +80,6 @@ private:
   // Type promotion helper (explicit target type from Python)
   std::pair<mlir::Value, mlir::Value>
   promoteToType(mlir::Value lhs, mlir::Value rhs, mlir::Type targetType);
-  mlir::Type getPromotedType(mlir::Type lhs, mlir::Type rhs) const;
 
   // Type conversion helper
   mlir_edsl::ValueType mlirTypeToProtoEnum(mlir::Type type) const;
