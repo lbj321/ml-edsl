@@ -1,84 +1,156 @@
 """Basic arithmetic operations for the EDSL"""
 
 from typing import Union
-from .ast import BinaryOp, Constant, Value, CallOp, CompareOp, CastOp
+from .ast import BinaryOp, Constant, Value, CallOp, CompareOp, CastOp, ArrayBinaryOp
 from .types import I32
 
 
-def add(left: Union[int, float, Value], right: Union[int, float, Value]) -> BinaryOp:
+def add(left: Union[int, float, Value], right: Union[int, float, Value]) -> Union[BinaryOp, ArrayBinaryOp]:
     """Create an addition operation
-    
+
+    Automatically dispatches to:
+    - BinaryOp: For scalar + scalar
+    - ArrayBinaryOp: For array operations (array + array, array + scalar, scalar + array)
+
     Args:
         left: Left operand (integer, float, or Value)
         right: Right operand (integer, float, or Value)
-        
-    Returns:
-        BinaryOp representing the addition
-    """
 
+    Returns:
+        BinaryOp or ArrayBinaryOp depending on operand types
+    """
+    from .ast import ArrayBinaryOp
+    from .types import ArrayType
+
+    # Convert primitives to Constants
     if isinstance(left, (int, float)):
         left = Constant(left)
     if isinstance(right, (int, float)):
         right = Constant(right)
 
-    return BinaryOp("add", left, right)
+    # Determine if either operand is an array
+    left_type = left.infer_type()
+    right_type = right.infer_type()
+
+    left_is_array = isinstance(left_type, ArrayType)
+    right_is_array = isinstance(right_type, ArrayType)
+
+    # Dispatch to appropriate node type
+    if left_is_array or right_is_array:
+        return ArrayBinaryOp("add", left, right)
+    else:
+        return BinaryOp("add", left, right)
 
 
-def sub(left: Union[int, float, Value], right: Union[int, float, Value]) -> BinaryOp:
+def sub(left: Union[int, float, Value], right: Union[int, float, Value]) -> Union[BinaryOp, ArrayBinaryOp]:
     """Create a subtraction operation
-    
+
+    Automatically dispatches to:
+    - BinaryOp: For scalar - scalar
+    - ArrayBinaryOp: For array operations (array - array, array - scalar, scalar - array)
+
     Args:
         left: Left operand (integer, float, or Value)
         right: Right operand (integer, float, or Value)
-        
-    Returns:
-        BinaryOp representing the subtraction
-    """
 
+    Returns:
+        BinaryOp or ArrayBinaryOp depending on operand types
+    """
+    from .ast import ArrayBinaryOp
+    from .types import ArrayType
+
+    # Convert primitives to Constants
     if isinstance(left, (int, float)):
         left = Constant(left)
     if isinstance(right, (int, float)):
         right = Constant(right)
 
-    return BinaryOp("sub", left, right)
+    # Determine if either operand is an array
+    left_type = left.infer_type()
+    right_type = right.infer_type()
+
+    left_is_array = isinstance(left_type, ArrayType)
+    right_is_array = isinstance(right_type, ArrayType)
+
+    # Dispatch to appropriate node type
+    if left_is_array or right_is_array:
+        return ArrayBinaryOp("sub", left, right)
+    else:
+        return BinaryOp("sub", left, right)
 
 
-def mul(left: Union[int, float, Value], right: Union[int, float, Value]) -> BinaryOp:
+def mul(left: Union[int, float, Value], right: Union[int, float, Value]) -> Union[BinaryOp, ArrayBinaryOp]:
     """Create a multiplication operation
-    
+
+    Automatically dispatches to:
+    - BinaryOp: For scalar * scalar
+    - ArrayBinaryOp: For array operations (array * array, array * scalar, scalar * array)
+
     Args:
         left: Left operand (integer, float, or Value)
         right: Right operand (integer, float, or Value)
-        
-    Returns:
-        BinaryOp representing the multiplication
-    """
 
+    Returns:
+        BinaryOp or ArrayBinaryOp depending on operand types
+    """
+    from .ast import ArrayBinaryOp
+    from .types import ArrayType
+
+    # Convert primitives to Constants
     if isinstance(left, (int, float)):
         left = Constant(left)
     if isinstance(right, (int, float)):
         right = Constant(right)
 
-    return BinaryOp("mul", left, right)
+    # Determine if either operand is an array
+    left_type = left.infer_type()
+    right_type = right.infer_type()
+
+    left_is_array = isinstance(left_type, ArrayType)
+    right_is_array = isinstance(right_type, ArrayType)
+
+    # Dispatch to appropriate node type
+    if left_is_array or right_is_array:
+        return ArrayBinaryOp("mul", left, right)
+    else:
+        return BinaryOp("mul", left, right)
 
 
-def div(left: Union[int, float, Value], right: Union[int, float, Value]) -> BinaryOp:
+def div(left: Union[int, float, Value], right: Union[int, float, Value]) -> Union[BinaryOp, ArrayBinaryOp]:
     """Create a division operation
-    
+
+    Automatically dispatches to:
+    - BinaryOp: For scalar / scalar
+    - ArrayBinaryOp: For array operations (array / array, array / scalar, scalar / array)
+
     Args:
         left: Left operand (integer, float, or Value)
         right: Right operand (integer, float, or Value)
-        
-    Returns:
-        BinaryOp representing the division
-    """
 
+    Returns:
+        BinaryOp or ArrayBinaryOp depending on operand types
+    """
+    from .ast import ArrayBinaryOp
+    from .types import ArrayType
+
+    # Convert primitives to Constants
     if isinstance(left, (int, float)):
         left = Constant(left)
     if isinstance(right, (int, float)):
         right = Constant(right)
 
-    return BinaryOp("div", left, right)
+    # Determine if either operand is an array
+    left_type = left.infer_type()
+    right_type = right.infer_type()
+
+    left_is_array = isinstance(left_type, ArrayType)
+    right_is_array = isinstance(right_type, ArrayType)
+
+    # Dispatch to appropriate node type
+    if left_is_array or right_is_array:
+        return ArrayBinaryOp("div", left, right)
+    else:
+        return BinaryOp("div", left, right)
 
 
 def call(func_name: str, args: list[Union[int, float, Value]], return_type) -> CallOp:

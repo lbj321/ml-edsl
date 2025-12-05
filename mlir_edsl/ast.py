@@ -1040,3 +1040,119 @@ class ArrayStore(Value):
             pb_node.array_store.value.CopyFrom(self.value.to_proto())
 
         return pb_node
+
+
+class ArrayBinaryOp(Value):
+    """Element-wise binary operation on arrays with broadcasting support
+
+    Supports three modes:
+    - Array + Array: Element-wise with matching shapes
+    - Array + Scalar: Broadcasting scalar to all elements
+    - Scalar + Array: Broadcasting scalar to all elements
+
+    Examples:
+        arr1 + arr2          # Array[4,i32] + Array[4,i32] -> Array[4,i32]
+        arr * 2              # Array[4,i32] * Constant(2) -> Array[4,i32]
+        3.0 + arr            # Constant(3.0) + Array[4,f32] -> Array[4,f32]
+    """
+
+    def __init__(self, op: str, left: Value, right: Value):
+        super().__init__()
+        self.op = op
+        self.left = left
+        self.right = right
+
+        # Type inference and validation
+        left_type = left.infer_type()
+        right_type = right.infer_type()
+
+        # Determine operation mode and result type
+        self._infer_broadcast_mode(left_type, right_type)
+
+    def _infer_broadcast_mode(self, left_type, right_type):
+        """Determine broadcasting mode and validate types"""
+        left_is_array = isinstance(left_type, ArrayType)
+        right_is_array = isinstance(right_type, ArrayType)
+
+        if left_is_array and right_is_array:
+            # ARRAY + ARRAY: Shapes must match exactly
+            if left_type != right_type:
+                raise TypeError(
+                    f"Array shapes must match for element-wise {self.op}.\n"
+                    f"  Left:  {left_type}\n"
+                    f"  Right: {right_type}"
+                )
+            self._result_type = left_type
+            self._broadcast_mode = "NONE"
+
+        elif left_is_array and not right_is_array:
+            # ARRAY + SCALAR: Validate scalar type matches array element type
+            if right_type != left_type.element_enum:
+                raise TypeError(
+                    f"Scalar type must match array element type.\n"
+                    f"  Array element type: {left_type.element_type.name}\n"
+                    f"  Scalar type: {self._enum_to_name(right_type)}\n"
+                    f"  Use cast() for explicit conversion"
+                )
+            self._result_type = left_type
+            self._broadcast_mode = "SCALAR_RIGHT"
+
+        elif not left_is_array and right_is_array:
+            # SCALAR + ARRAY: Validate scalar type matches array element type
+            if left_type != right_type.element_enum:
+                raise TypeError(
+                    f"Scalar type must match array element type.\n"
+                    f"  Scalar type: {self._enum_to_name(left_type)}\n"
+                    f"  Array element type: {right_type.element_type.name}\n"
+                    f"  Use cast() for explicit conversion"
+                )
+            self._result_type = right_type
+            self._broadcast_mode = "SCALAR_LEFT"
+
+        else:
+            # SCALAR + SCALAR: This should use BinaryOp, not ArrayBinaryOp
+            raise TypeError(
+                f"ArrayBinaryOp requires at least one array operand.\n"
+                f"For scalar operations, use BinaryOp instead."
+            )
+
+    def _enum_to_name(self, enum_val):
+        """Helper: convert enum to readable name"""
+        return {I32: "i32", F32: "f32", I1: "i1"}.get(enum_val, f"unknown({enum_val})")
+
+    def infer_type(self) -> ArrayType:
+        """Element-wise operations preserve array type"""
+        return self._result_type
+
+    def get_children(self) -> list['Value']:
+        return [self.left, self.right]
+
+    def to_proto(self, context: 'SerializationContext' = None):
+        """Serialize to protobuf"""
+        if ast_pb2 is None:
+            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
+
+        pb_node = ast_pb2.ASTNode()
+        pb_node.array_binary_op.op_type = _binary_op_to_proto(self.op)
+
+        # Set result type (array shape)
+        pb_node.array_binary_op.result_type.size = self._result_type.size
+        pb_node.array_binary_op.result_type.element_type = self._result_type.element_enum
+
+        # Set broadcast mode
+        broadcast_map = {
+            "NONE": ast_pb2.NONE,
+            "SCALAR_LEFT": ast_pb2.SCALAR_LEFT,
+            "SCALAR_RIGHT": ast_pb2.SCALAR_RIGHT,
+        }
+        pb_node.array_binary_op.broadcast = broadcast_map[self._broadcast_mode]
+
+        # Context-aware child serialization
+        if context:
+            pb_node.array_binary_op.left.CopyFrom(self.left._to_proto_impl(context))
+            pb_node.array_binary_op.right.CopyFrom(self.right._to_proto_impl(context))
+        else:
+            pb_node.array_binary_op.left.CopyFrom(self.left.to_proto())
+            pb_node.array_binary_op.right.CopyFrom(self.right.to_proto())
+
+        return pb_node

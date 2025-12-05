@@ -20,6 +20,13 @@ enum BinaryOpType {
   DIV = 3;
 }
 
+// Broadcast modes for array-scalar operations
+enum BroadcastMode {
+  NONE = 0;          // Both operands are arrays (same shape)
+  SCALAR_LEFT = 1;   // Left operand is scalar, right is array
+  SCALAR_RIGHT = 2;  // Left operand is array, right is scalar
+}
+
 // Comparison predicates
 enum ComparisonPredicate {
   // Generic (maps to signed int or ordered float)
@@ -72,6 +79,7 @@ message ASTNode {
     ArrayLiteral array_literal = 12;
     ArrayAccess array_access = 13;
     ArrayStore array_store = 14;
+    ArrayBinaryOp array_binary_op = 15;
   }
 }
 
@@ -169,6 +177,15 @@ message ArrayStore {
   ASTNode array = 1;   // Array to store into
   ASTNode index = 2;   // Index value (must be I32)
   ASTNode value = 3;   // Value to store (must match array element type)
+}
+
+// Element-wise binary operation on arrays
+message ArrayBinaryOp {
+  BinaryOpType op_type = 1;        // ADD, SUB, MUL, DIV
+  ASTNode left = 2;                // Left operand (array or scalar)
+  ASTNode right = 3;               // Right operand (array or scalar)
+  ArrayTypeSpec result_type = 4;   // Result array shape (size + element type)
+  BroadcastMode broadcast = 5;     // Broadcasting mode
 }
 
 // Let binding for SSA value reuse (marks first use of a shared value)

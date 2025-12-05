@@ -76,6 +76,7 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
   if (node.has_array_literal()) return handleArrayLiteral(node);
   if (node.has_array_access()) return handleArrayAccess(node);
   if (node.has_array_store()) return handleArrayStore(node);
+  if (node.has_array_binary_op()) return handleArrayBinaryOp(node);
 
   throw std::runtime_error("Unknown protobuf node type");
 }
@@ -205,6 +206,10 @@ mlir::Value MLIRBuilder::handleArrayAccess(const mlir_edsl::ASTNode &node) {
 
 mlir::Value MLIRBuilder::handleArrayStore(const mlir_edsl::ASTNode &node) {
   return memrefBuilder->buildArrayStore(node.array_store());
+}
+
+mlir::Value MLIRBuilder::handleArrayBinaryOp(const mlir_edsl::ASTNode &node) {
+  return memrefBuilder->buildArrayBinaryOp(node.array_binary_op());
 }
 
 std::string MLIRBuilder::getMLIRString() {

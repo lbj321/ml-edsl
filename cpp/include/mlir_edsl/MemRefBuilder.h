@@ -28,6 +28,9 @@ public:
   /// Build array store (memref.store)
   mlir::Value buildArrayStore(const ArrayStore& store);
 
+  /// Build element-wise binary operation on arrays
+  mlir::Value buildArrayBinaryOp(const ArrayBinaryOp& op);
+
 private:
   mlir::OpBuilder& builder;
   mlir::MLIRContext* context;

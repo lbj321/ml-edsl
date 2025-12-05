@@ -68,6 +68,8 @@ void MLIRLowering::addConversionPasses() {
   passManager.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
   passManager.addPass(mlir::createConvertControlFlowToLLVMPass());
   passManager.addPass(mlir::createConvertFuncToLLVMPass());
+
+  passManager.addPass(mlir::createReconcileUnrealizedCastsPass());
 }
 
 bool MLIRLowering::runLoweringPipeline(mlir::ModuleOp module) {

@@ -81,9 +81,6 @@ private:
   std::pair<mlir::Value, mlir::Value>
   promoteToType(mlir::Value lhs, mlir::Value rhs, mlir::Type targetType);
 
-  // Type conversion helper
-  mlir_edsl::ValueType mlirTypeToProtoEnum(mlir::Type type) const;
-
   // AST node handlers
   mlir::Value handleLetBinding(const mlir_edsl::ASTNode &node);
   mlir::Value handleValueRef(const mlir_edsl::ASTNode &node);
@@ -99,6 +96,7 @@ private:
   mlir::Value handleArrayLiteral(const mlir_edsl::ASTNode &node);
   mlir::Value handleArrayAccess(const mlir_edsl::ASTNode &node);
   mlir::Value handleArrayStore(const mlir_edsl::ASTNode &node);
+  mlir::Value handleArrayBinaryOp(const mlir_edsl::ASTNode &node);
 
   // Dialect builders
   std::unique_ptr<mlir_edsl::ArithBuilder> arithBuilder;
