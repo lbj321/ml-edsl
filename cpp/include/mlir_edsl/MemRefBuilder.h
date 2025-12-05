@@ -8,13 +8,14 @@
 
 namespace mlir_edsl {
 
-// Forward declaration to avoid circular dependency
+// Forward declarations to avoid circular dependency
 class MLIRBuilder;
+class ArithBuilder;
 
 /// Builder for memref dialect operations (arrays)
 class MemRefBuilder {
 public:
-  MemRefBuilder(mlir::OpBuilder& builder, mlir::MLIRContext* context, MLIRBuilder* parent);
+  MemRefBuilder(mlir::OpBuilder& builder, mlir::MLIRContext* context, MLIRBuilder* parent, ArithBuilder* arithBuilder);
 
   /// Build memref type from protobuf ArrayTypeSpec
   mlir::MemRefType buildMemRefType(const ArrayTypeSpec& spec);
@@ -34,7 +35,8 @@ public:
 private:
   mlir::OpBuilder& builder;
   mlir::MLIRContext* context;
-  MLIRBuilder* parent;  // Back-reference to MLIRBuilder for dispatching
+  MLIRBuilder* parent;           // Back-reference to MLIRBuilder for dispatching
+  ArithBuilder* arithBuilder;    // For arithmetic operations
 };
 
 } // namespace mlir_edsl

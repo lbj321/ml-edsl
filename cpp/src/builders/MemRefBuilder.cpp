@@ -1,6 +1,6 @@
 // cpp/src/builders/MemRefBuilder.cpp
 #include "mlir_edsl/MemRefBuilder.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir_edsl/ArithBuilder.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir_edsl/MLIRBuilder.h"
@@ -8,8 +8,10 @@
 namespace mlir_edsl {
 
 MemRefBuilder::MemRefBuilder(mlir::OpBuilder &builder,
-                             mlir::MLIRContext *context, MLIRBuilder *parent)
-    : builder(builder), context(context), parent(parent) {}
+                             mlir::MLIRContext *context, MLIRBuilder *parent,
+                             ArithBuilder *arithBuilder)
+    : builder(builder), context(context), parent(parent),
+      arithBuilder(arithBuilder) {}
 
 mlir::MemRefType MemRefBuilder::buildMemRefType(const ArrayTypeSpec &spec) {
   // Reuse parent's type converter - no duplication!
@@ -126,50 +128,20 @@ mlir::Value MemRefBuilder::buildArrayBinaryOp(const ArrayBinaryOp &op) {
           throw std::runtime_error("Unknown broadcast mode");
         }
 
+        // Perform element-wise operation using ArithBuilder
         mlir::Value result;
-        mlir::Type elementType = resultType.getElementType();
-        bool isFloat = elementType.isF32();
-
         switch (op.op_type()) {
         case mlir_edsl::BinaryOpType::ADD:
-          result =
-              isFloat
-                  ? builder
-                        .create<mlir::arith::AddFOp>(loc, leftElem, rightElem)
-                        .getResult()
-                  : builder
-                        .create<mlir::arith::AddIOp>(loc, leftElem, rightElem)
-                        .getResult();
+          result = arithBuilder->buildAdd(leftElem, rightElem);
           break;
         case mlir_edsl::BinaryOpType::SUB:
-          result =
-              isFloat
-                  ? builder
-                        .create<mlir::arith::SubFOp>(loc, leftElem, rightElem)
-                        .getResult()
-                  : builder
-                        .create<mlir::arith::SubIOp>(loc, leftElem, rightElem)
-                        .getResult();
+          result = arithBuilder->buildSub(leftElem, rightElem);
           break;
         case mlir_edsl::BinaryOpType::MUL:
-          result =
-              isFloat
-                  ? builder
-                        .create<mlir::arith::MulFOp>(loc, leftElem, rightElem)
-                        .getResult()
-                  : builder
-                        .create<mlir::arith::MulIOp>(loc, leftElem, rightElem)
-                        .getResult();
+          result = arithBuilder->buildMul(leftElem, rightElem);
           break;
         case mlir_edsl::BinaryOpType::DIV:
-          result =
-              isFloat
-                  ? builder
-                        .create<mlir::arith::DivFOp>(loc, leftElem, rightElem)
-                        .getResult()
-                  : builder
-                        .create<mlir::arith::DivSIOp>(loc, leftElem, rightElem)
-                        .getResult();
+          result = arithBuilder->buildDiv(leftElem, rightElem);
           break;
         default:
           throw std::runtime_error("Unknown binary operation");

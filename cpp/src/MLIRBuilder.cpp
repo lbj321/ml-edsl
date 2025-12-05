@@ -35,7 +35,7 @@ MLIRBuilder::MLIRBuilder() {
   // Initialize dialect builders
   arithBuilder = std::make_unique<mlir_edsl::ArithBuilder>(*builder, context.get(), this);
   scfBuilder = std::make_unique<mlir_edsl::SCFBuilder>(*builder, context.get(), this, arithBuilder.get());
-  memrefBuilder = std::make_unique<mlir_edsl::MemRefBuilder>(*builder, context.get(), this);
+  memrefBuilder = std::make_unique<mlir_edsl::MemRefBuilder>(*builder, context.get(), this, arithBuilder.get());
 }
 
 MLIRBuilder::~MLIRBuilder() {
