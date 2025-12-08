@@ -71,9 +71,24 @@ This project follows **user-driven implementation**. Claude should guide and adv
   - `MLIRExecutor.cpp/h` - JIT execution engine
   - `MLIRLowering.cpp/h` - MLIR → LLVM lowering
 - `mlir_edsl/` - Python frontend and API
+  - `ast/` - AST node implementations (refactored module)
+    - `base.py` - Value base class with core AST methods
+    - `operators.py` - OperatorMixin with all operator overloads
+    - `serialization.py` - SerializationContext and protobuf helpers
+    - `helpers.py` - JAX-style .at[] array indexing
+    - `nodes/` - Concrete AST node implementations
+      - `scalars.py` - Constant, BinaryOp, CompareOp, CastOp
+      - `arrays.py` - ArrayLiteral, ArrayAccess, ArrayStore, ArrayBinaryOp
+      - `control_flow.py` - IfOp, ForLoopOp, WhileLoopOp
+      - `functions.py` - Parameter, CallOp
+  - `ops/` - User-facing operation builders (refactored module)
+    - `arithmetic.py` - add, sub, mul, div with scalar/array dispatch
+    - `comparison.py` - lt, le, gt, ge, eq, ne with predicate inference
+    - `control_flow.py` - If, For, While wrappers
+    - `conversion.py` - cast, call utilities
   - `backend.py` - Python/C++ interface (pybind11)
-  - `frontend.py` - AST and decorator implementation
-  - `types.py` - Type system
+  - `functions.py` - ml_function decorator implementation
+  - `types.py` - Type system (ScalarType, ArrayType, TypeSystem)
 - `tests/` - Test suite (see `tests/CLAUDE.md` for test-specific guidelines)
 - `examples/` - Usage examples and demos
 - `build/` - CMake build directory (gitignored)
