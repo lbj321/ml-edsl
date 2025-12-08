@@ -1,68 +1,19 @@
-"""Tests for for loop and while loop implementations using high-level API
+"""Tests for while loop implementations using high-level API
 
-This test suite uses @ml_function decorator with For() and While() helpers.
+This test suite uses @ml_function decorator with While() helper.
 Tests focus on JIT execution results rather than backend implementation details.
+
+Note: For loop tests removed - will be reimplemented with proper array iteration
+support once buildForEach() is available.
 """
 
 import pytest
-from mlir_edsl import ml_function, For, While
+from mlir_edsl import ml_function, While
 from mlir_edsl.backend import HAS_CPP_BACKEND
 from tests.test_base import MLIRTestBase
 
 # Skip all tests if C++ backend is not available
 pytestmark = pytest.mark.skipif(not HAS_CPP_BACKEND, reason="C++ backend not available")
-
-
-# ==================== FOR LOOP TESTS ====================
-
-class TestForLoop(MLIRTestBase):
-    """Test for loop implementations with various operations"""
-
-    def test_for_loop_basic(self):
-        """Test basic for loop with addition"""
-
-        @ml_function
-        def sum_range() -> int:
-            # for(i = 0; i < 5; i += 1) with accumulator starting at 10
-            # Computes: 10 + 0 + 1 + 2 + 3 + 4 = 20
-            return For(start=0, end=5, init=10, operation="add")
-
-        result = sum_range()
-        assert result == 20, f"Expected 20, got {result}"
-
-    def test_for_loop_multiplication(self):
-        """Test for loop with multiplication (factorial-like)"""
-
-        @ml_function
-        def factorial_like() -> int:
-            # for(i = 1; i < 5; i++) result *= i
-            # Computes: 1 * 1 * 2 * 3 * 4 = 24
-            return For(start=1, end=5, init=1, operation="mul")
-
-        result = factorial_like()
-        assert result == 24, f"Expected 24, got {result}"
-
-    def test_for_loop_subtraction(self):
-        """Test for loop with subtraction"""
-
-        @ml_function
-        def subtract_range() -> int:
-            # Subtract: 10 - 0 - 1 - 2 = 7
-            return For(start=0, end=3, init=10, operation="sub")
-
-        result = subtract_range()
-        assert result == 7, f"Expected 7, got {result}"
-
-    def test_for_loop_division(self):
-        """Test for loop with division"""
-
-        @ml_function
-        def divide_range() -> int:
-            # Divide: 24 / 2 / 3 = 4
-            return For(start=2, end=4, init=24, operation="div")
-
-        result = divide_range()
-        assert result == 4, f"Expected 4, got {result}"
 
 
 # ==================== WHILE LOOP TESTS ====================

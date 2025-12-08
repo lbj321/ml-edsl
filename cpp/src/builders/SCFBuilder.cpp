@@ -1,14 +1,15 @@
 // cpp/src/builders/SCFBuilder.cpp
 #include "mlir_edsl/SCFBuilder.h"
-#include "mlir_edsl/MLIRBuilder.h"
-#include "mlir_edsl/ArithBuilder.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir_edsl/ArithBuilder.h"
+#include "mlir_edsl/MLIRBuilder.h"
 
 namespace mlir_edsl {
 
-SCFBuilder::SCFBuilder(mlir::OpBuilder& builder, mlir::MLIRContext* context,
-                       MLIRBuilder* parent, ArithBuilder* arithBuilder)
-  : builder(builder), context(context), parent(parent), arithBuilder(arithBuilder) {}
+SCFBuilder::SCFBuilder(mlir::OpBuilder &builder, mlir::MLIRContext *context,
+                       MLIRBuilder *parent, ArithBuilder *arithBuilder)
+    : builder(builder), context(context), parent(parent),
+      arithBuilder(arithBuilder) {}
 
 mlir::Value SCFBuilder::buildIf(mlir::Value condition,
                                 std::function<mlir::Value()> buildThen,
@@ -23,7 +24,7 @@ mlir::Value SCFBuilder::buildIf(mlir::Value condition,
   {
     mlir::OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
-    mlir::Value thenVal = buildThen();  // Callback executes here
+    mlir::Value thenVal = buildThen(); // Callback executes here
     builder.create<mlir::scf::YieldOp>(loc, thenVal);
   }
 
@@ -31,7 +32,7 @@ mlir::Value SCFBuilder::buildIf(mlir::Value condition,
   {
     mlir::OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToStart(&ifOp.getElseRegion().front());
-    mlir::Value elseVal = buildElse();  // Callback executes here
+    mlir::Value elseVal = buildElse(); // Callback executes here
     builder.create<mlir::scf::YieldOp>(loc, elseVal);
   }
 
@@ -39,54 +40,27 @@ mlir::Value SCFBuilder::buildIf(mlir::Value condition,
   return ifOp.getResult(0);
 }
 
-mlir::Value SCFBuilder::buildForWithOp(mlir::Value start, mlir::Value end,
-                                       mlir::Value step,
-                                       mlir::Value init_value,
-                                       mlir_edsl::BinaryOpType operation) {
-
-  auto body_fn = [this, operation](mlir::Value iv,
-                                   mlir::Value iter_arg) -> mlir::Value {
-
-    // Call arithBuilder directly (temporary coupling - should be in AST)
-    switch (operation) {
-    case mlir_edsl::BinaryOpType::ADD:
-      return arithBuilder->buildAdd(iter_arg, iv);
-    case mlir_edsl::BinaryOpType::MUL:
-      return arithBuilder->buildMul(iter_arg, iv);
-    case mlir_edsl::BinaryOpType::SUB:
-      return arithBuilder->buildSub(iter_arg, iv);
-    case mlir_edsl::BinaryOpType::DIV:
-      return arithBuilder->buildDiv(iter_arg, iv);
-    default:
-      throw std::runtime_error("Unsupported binary operation in for loop");
-    }
-  };
-
-  return buildFor(start, end, step, init_value, body_fn);
-}
-
-mlir::Value SCFBuilder::buildFor(
+void SCFBuilder::buildForEach(
     mlir::Value start, mlir::Value end, mlir::Value step,
-    mlir::Value init_value,
-    std::function<mlir::Value(mlir::Value iv, mlir::Value iter_arg)> body_fn) {
+    std::function<void(mlir::OpBuilder &, mlir::Location, mlir::Value iv)>
+        body_fn) {
 
   auto loc = builder.getUnknownLoc();
-  auto forOp =
-      builder.create<mlir::scf::ForOp>(loc, start, end, step, init_value);
 
-  mlir::Block *body = forOp.getBody();
-  builder.setInsertionPointToStart(body);
+  // Create ForOp with lambda body builder (avoids auto-generated yield)
+  auto forOp = builder.create<mlir::scf::ForOp>(
+      loc, start, end, step, mlir::ValueRange{},
+      [&](mlir::OpBuilder &loopBuilder, mlir::Location loc, mlir::Value iv,
+          mlir::ValueRange iterArgs) {
+        // Execute user's body function
+        body_fn(loopBuilder, loc, iv);
 
-  mlir::Value inductionVar = body->getArgument(0);
-  mlir::Value iterArg = body->getArgument(1);
+        // Yield with no values (since no iter_args)
+        loopBuilder.create<mlir::scf::YieldOp>(loc);
+      });
 
-  mlir::Value newIterArg = body_fn(inductionVar, iterArg);
-
-  builder.create<mlir::scf::YieldOp>(loc, newIterArg);
-
+  // Restore insertion point after loop
   builder.setInsertionPointAfter(forOp);
-
-  return forOp.getResult(0);
 }
 
 mlir::Value
@@ -140,8 +114,8 @@ SCFBuilder::buildWhile(mlir::Value init,
   builder.create<mlir::scf::ConditionOp>(loc, condition, current);
 
   auto &afterRegion = whileOp.getAfter();
-  auto *afterBlock = builder.createBlock(&afterRegion, afterRegion.end(),
-                                         {resultType}, {loc});
+  auto *afterBlock =
+      builder.createBlock(&afterRegion, afterRegion.end(), {resultType}, {loc});
   builder.setInsertionPointToStart(afterBlock);
 
   auto loopVar = afterBlock->getArgument(0);

@@ -232,26 +232,26 @@ def test_if_else_compilation(backend):
 
 # ==================== LOOP OPERATIONS ====================
 
-def test_for_loop_compilation(backend):
-    """Test for loop compilation"""
-    # for(i = 0; i < 5; i += 1) accumulator += i, starting from 10
-    # Result: 10 + 0 + 1 + 2 + 3 + 4 = 20
-    start = Constant(0)
-    end = Constant(5)
-    step = Constant(1)
-    init_value = Constant(10)
+# def test_for_loop_compilation(backend):
+#     """Test for loop compilation"""
+#     # for(i = 0; i < 5; i += 1) accumulator += i, starting from 10
+#     # Result: 10 + 0 + 1 + 2 + 3 + 4 = 20
+#     start = Constant(0)
+#     end = Constant(5)
+#     step = Constant(1)
+#     init_value = Constant(10)
 
-    result = ForLoopOp(start, end, step, init_value, "add")
+#     result = ForLoopOp(start, end, step, init_value, "add")
 
-    backend.compile_function_from_ast("test_for", [], I32, result)
-    mlir_code = backend.get_mlir_string()
+#     backend.compile_function_from_ast("test_for", [], I32, result)
+#     mlir_code = backend.get_mlir_string()
 
-    assert "scf.for" in mlir_code
-    assert "scf.yield" in mlir_code
-    assert "arith.addi" in mlir_code
+#     assert "scf.for" in mlir_code
+#     assert "scf.yield" in mlir_code
+#     assert "arith.addi" in mlir_code
 
-    executed_result = backend.execute_function("test_for")
-    assert executed_result == 20
+#     executed_result = backend.execute_function("test_for")
+#     assert executed_result == 20
 
 
 def test_while_loop_compilation(backend):

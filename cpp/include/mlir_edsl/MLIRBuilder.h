@@ -90,7 +90,7 @@ private:
   mlir::Value handleCompareOp(const mlir_edsl::ASTNode &node);
   mlir::Value handleIfOp(const mlir_edsl::ASTNode &node);
   mlir::Value handleCallOp(const mlir_edsl::ASTNode &node);
-  mlir::Value handleForLoopOp(const mlir_edsl::ASTNode &node);
+  // mlir::Value handleForLoopOp(const mlir_edsl::ASTNode &node);
   mlir::Value handleWhileLoopOp(const mlir_edsl::ASTNode &node);
   mlir::Value handleCastOp(const mlir_edsl::ASTNode &node);
   mlir::Value handleArrayLiteral(const mlir_edsl::ASTNode &node);

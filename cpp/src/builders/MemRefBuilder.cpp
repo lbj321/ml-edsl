@@ -1,17 +1,18 @@
 // cpp/src/builders/MemRefBuilder.cpp
 #include "mlir_edsl/MemRefBuilder.h"
 #include "mlir_edsl/ArithBuilder.h"
+#include "mlir_edsl/SCFBuilder.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir_edsl/MLIRBuilder.h"
 
 namespace mlir_edsl {
 
 MemRefBuilder::MemRefBuilder(mlir::OpBuilder &builder,
                              mlir::MLIRContext *context, MLIRBuilder *parent,
-                             ArithBuilder *arithBuilder)
+                             ArithBuilder *arithBuilder,
+                             SCFBuilder *scfBuilder)
     : builder(builder), context(context), parent(parent),
-      arithBuilder(arithBuilder) {}
+      arithBuilder(arithBuilder), scfBuilder(scfBuilder) {}
 
 mlir::MemRefType MemRefBuilder::buildMemRefType(const ArrayTypeSpec &spec) {
   // Reuse parent's type converter - no duplication!
@@ -80,81 +81,94 @@ mlir::Value MemRefBuilder::buildArrayStore(const ArrayStore &store) {
 mlir::Value MemRefBuilder::buildArrayBinaryOp(const ArrayBinaryOp &op) {
   auto loc = builder.getUnknownLoc();
 
-  // 1. Build operands (recursively - handles ValueReferences, etc.)
+  // 1. Build operands
   mlir::Value left = parent->buildFromProtobufNode(op.left());
   mlir::Value right = parent->buildFromProtobufNode(op.right());
 
-  // 2. Determine broadcast mode
+  // 2. Get broadcast mode and operation type
   auto broadcastMode = op.broadcast();
+  auto opType = op.op_type();
 
-  // 3. Get result array shape and allocate result memref
+  // 3. Allocate result memref
   int64_t arraySize = op.result_type().size();
   mlir::MemRefType resultType = buildMemRefType(op.result_type());
   auto allocOp = builder.create<mlir::memref::AllocaOp>(loc, resultType);
   mlir::Value resultArray = allocOp.getResult();
 
-  // 4. Generate element-wise loop: for(i = 0; i < size; i++)
+  // 4. Build element-wise loop with clean lambda
   mlir::Value c0 = parent->buildIndexConstant(0);
   mlir::Value cSize = parent->buildIndexConstant(arraySize);
   mlir::Value c1 = parent->buildIndexConstant(1);
 
-  auto forOp = builder.create<mlir::scf::ForOp>(
-      loc,
-      c0,                 // lower bound
-      cSize,              // upper bound
-      c1,                 // step
-      mlir::ValueRange{}, // no loop-carried values
-      [&](mlir::OpBuilder &builder, mlir::Location loc, mlir::Value iv,
-          mlir::ValueRange iterArgs) {
-        // Build loop body inside this lambda
-        mlir::Value leftElem, rightElem;
-        switch (broadcastMode) {
-        case mlir_edsl::NONE: {
-          leftElem = builder.create<mlir::memref::LoadOp>(loc, left, iv);
-          rightElem = builder.create<mlir::memref::LoadOp>(loc, right, iv);
-          break;
-        }
-        case mlir_edsl::SCALAR_LEFT: {
-          leftElem = left;
-          rightElem = builder.create<mlir::memref::LoadOp>(loc, right, iv);
-          break;
-        }
-        case mlir_edsl::SCALAR_RIGHT: {
-          leftElem = builder.create<mlir::memref::LoadOp>(loc, left, iv);
-          rightElem = right;
-          break;
-        }
-        default:
-          throw std::runtime_error("Unknown broadcast mode");
-        }
+  auto loopBody = [&](mlir::OpBuilder& loopBuilder, mlir::Location loc, mlir::Value iv) {
+    buildArrayBinaryOpElement(loopBuilder, loc, iv, left, right,
+                              broadcastMode, opType, resultArray);
+  };
 
-        // Perform element-wise operation using ArithBuilder
-        mlir::Value result;
-        switch (op.op_type()) {
-        case mlir_edsl::BinaryOpType::ADD:
-          result = arithBuilder->buildAdd(leftElem, rightElem);
-          break;
-        case mlir_edsl::BinaryOpType::SUB:
-          result = arithBuilder->buildSub(leftElem, rightElem);
-          break;
-        case mlir_edsl::BinaryOpType::MUL:
-          result = arithBuilder->buildMul(leftElem, rightElem);
-          break;
-        case mlir_edsl::BinaryOpType::DIV:
-          result = arithBuilder->buildDiv(leftElem, rightElem);
-          break;
-        default:
-          throw std::runtime_error("Unknown binary operation");
-        }
+  scfBuilder->buildForEach(c0, cSize, c1, loopBody);
 
-        builder.create<mlir::memref::StoreOp>(loc, result, resultArray, iv);
-
-        // Yield with no values (since we have no iter_args)
-        builder.create<mlir::scf::YieldOp>(loc);
-      });
-
-  builder.setInsertionPointAfter(forOp);
   return resultArray;
+}
+
+// Helper function: handles single iteration of array binary op
+void MemRefBuilder::buildArrayBinaryOpElement(
+    mlir::OpBuilder& loopBuilder,
+    mlir::Location loc,
+    mlir::Value iv,
+    mlir::Value left,
+    mlir::Value right,
+    BroadcastMode broadcastMode,
+    mlir_edsl::BinaryOpType opType,
+    mlir::Value resultArray) {
+
+  // Load elements based on broadcast mode
+  mlir::Value leftElem, rightElem;
+
+  switch (broadcastMode) {
+  case mlir_edsl::NONE:
+    leftElem = loopBuilder.create<mlir::memref::LoadOp>(loc, left, iv);
+    rightElem = loopBuilder.create<mlir::memref::LoadOp>(loc, right, iv);
+    break;
+
+  case mlir_edsl::SCALAR_LEFT:
+    leftElem = left;
+    rightElem = loopBuilder.create<mlir::memref::LoadOp>(loc, right, iv);
+    break;
+
+  case mlir_edsl::SCALAR_RIGHT:
+    leftElem = loopBuilder.create<mlir::memref::LoadOp>(loc, left, iv);
+    rightElem = right;
+    break;
+
+  default:
+    throw std::runtime_error("Unknown broadcast mode");
+  }
+
+  // Perform element-wise operation using ArithBuilder
+  mlir::Value result;
+  switch (opType) {
+  case mlir_edsl::BinaryOpType::ADD:
+    result = arithBuilder->buildAdd(leftElem, rightElem);
+    break;
+
+  case mlir_edsl::BinaryOpType::SUB:
+    result = arithBuilder->buildSub(leftElem, rightElem);
+    break;
+
+  case mlir_edsl::BinaryOpType::MUL:
+    result = arithBuilder->buildMul(leftElem, rightElem);
+    break;
+
+  case mlir_edsl::BinaryOpType::DIV:
+    result = arithBuilder->buildDiv(leftElem, rightElem);
+    break;
+
+  default:
+    throw std::runtime_error("Unknown binary operation");
+  }
+
+  // Store result
+  loopBuilder.create<mlir::memref::StoreOp>(loc, result, resultArray, iv);
 }
 
 } // namespace mlir_edsl

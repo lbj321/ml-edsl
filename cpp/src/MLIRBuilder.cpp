@@ -35,7 +35,7 @@ MLIRBuilder::MLIRBuilder() {
   // Initialize dialect builders
   arithBuilder = std::make_unique<mlir_edsl::ArithBuilder>(*builder, context.get(), this);
   scfBuilder = std::make_unique<mlir_edsl::SCFBuilder>(*builder, context.get(), this, arithBuilder.get());
-  memrefBuilder = std::make_unique<mlir_edsl::MemRefBuilder>(*builder, context.get(), this, arithBuilder.get());
+  memrefBuilder = std::make_unique<mlir_edsl::MemRefBuilder>(*builder, context.get(), this, arithBuilder.get(), scfBuilder.get());
 }
 
 MLIRBuilder::~MLIRBuilder() {
@@ -69,7 +69,7 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
 
   // Control flow operations
   if (node.has_if_op()) return handleIfOp(node);
-  if (node.has_for_loop_op()) return handleForLoopOp(node);
+  // if (node.has_for_loop_op()) return handleForLoopOp(node);
   if (node.has_while_loop_op()) return handleWhileLoopOp(node);
 
   // Memory operations
@@ -173,14 +173,14 @@ mlir::Value MLIRBuilder::handleCallOp(const mlir_edsl::ASTNode &node) {
   return callFunction(call.func_name(), args);
 }
 
-mlir::Value MLIRBuilder::handleForLoopOp(const mlir_edsl::ASTNode &node) {
-  const auto &forloop = node.for_loop_op();
-  mlir::Value start = buildFromProtobufNode(forloop.start());
-  mlir::Value end = buildFromProtobufNode(forloop.end());
-  mlir::Value step = buildFromProtobufNode(forloop.step());
-  mlir::Value init_value = buildFromProtobufNode(forloop.init_value());
-  return scfBuilder->buildForWithOp(start, end, step, init_value, forloop.operation());
-}
+// mlir::Value MLIRBuilder::handleForLoopOp(const mlir_edsl::ASTNode &node) {
+//   const auto &forloop = node.for_loop_op();
+//   mlir::Value start = buildFromProtobufNode(forloop.start());
+//   mlir::Value end = buildFromProtobufNode(forloop.end());
+//   mlir::Value step = buildFromProtobufNode(forloop.step());
+//   mlir::Value init_value = buildFromProtobufNode(forloop.init_value());
+//   return scfBuilder->buildForWithOp(start, end, step, init_value, forloop.operation());
+// }
 
 mlir::Value MLIRBuilder::handleWhileLoopOp(const mlir_edsl::ASTNode &node) {
   const auto &whileloop = node.while_loop_op();

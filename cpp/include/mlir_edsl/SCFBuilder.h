@@ -25,14 +25,9 @@ public:
                       std::function<mlir::Value()> buildElse,
                       mlir::Type resultType);
 
-  /// Build for loop with custom body function
-  mlir::Value buildFor(mlir::Value start, mlir::Value end, mlir::Value step,
-                       mlir::Value init_value,
-                       std::function<mlir::Value(mlir::Value iv, mlir::Value iter_arg)> body_fn);
-
-  /// Build for loop with binary operation (simplified interface)
-  mlir::Value buildForWithOp(mlir::Value start, mlir::Value end, mlir::Value step,
-                             mlir::Value init_value, mlir_edsl::BinaryOpType operation);
+  /// Build for loop for iteration (no loop-carried values, for side effects)
+  void buildForEach(mlir::Value start, mlir::Value end, mlir::Value step,
+                    std::function<void(mlir::OpBuilder&, mlir::Location, mlir::Value iv)> body_fn);
 
   /// Build while loop with custom condition and body functions
   mlir::Value buildWhile(mlir::Value init,
