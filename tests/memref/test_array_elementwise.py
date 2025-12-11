@@ -78,7 +78,7 @@ class TestArrayArrayOps(MLIRTestBase):
 
     def test_array_type_mismatch_error(self):
         """Test that mismatched element types raise TypeError"""
-        with pytest.raises(TypeError, match="shapes must match"):
+        with pytest.raises(TypeError, match="element types must match"):
             @ml_function
             def bad_types() -> i32:
                 arr1 = Array[3, i32]([1, 2, 3])

@@ -51,77 +51,87 @@ result = sum_range(1, 10) # 55 - Native speed!
 #### 1. **Fixed-Size Array Support (memref dialect)**
 ```python
 @ml_function
-def array_operations() -> tensor[4, i32]:
+def array_operations() -> i32:
     # Create a fixed-size array [1, 2, 3, 4]
-    arr = array([1, 2, 3, 4], dtype=i32)
+    arr = Array[4, i32]([1, 2, 3, 4])
 
-    # Element access and modification
-    arr[0] = 10
-    value = arr[2]
+    # Element access (read)
+    value = arr[2]  # Returns 3
+
+    # Element modification (functional style - JAX-like)
+    arr = arr.at[0].set(10)  # Returns new array [10, 2, 3, 4]
 
     # Array arithmetic (element-wise)
-    doubled = arr * 2
-    return doubled
+    doubled = arr * 2  # [20, 4, 6, 8]
+
+    return doubled[0]  # Returns 20
 ```
 
 **Technical Requirements:**
 - `memref` dialect for stack-allocated arrays (fixed size)
 - Array type: `memref<NxT>` (e.g., `memref<4xi32>`)
-- Operations: `memref.alloc`, `memref.load`, `memref.store`
+- Operations: `memref.alloca`, `memref.load`, `memref.store`
+- Functional update semantics: `.at[index].set(value)` (JAX-style)
 - Index operations: `arith.index_cast` for array indexing
-- Element-wise operations support
+- Element-wise operations with broadcasting support
 
 #### 2. **Multi-Dimensional Arrays (2D/3D)**
 ```python
 @ml_function
-def matrix_operations() -> tensor[2, 3, i32]:
+def matrix_operations() -> i32:
     # 2D matrix [2 rows x 3 cols]
-    matrix = array([[1, 2, 3],
-                    [4, 5, 6]], dtype=i32)
+    matrix = Array[2, 3, i32]([[1, 2, 3],
+                                [4, 5, 6]])
 
     # Access element at [row, col]
-    value = matrix[1, 2]  # 6
+    value = matrix[1, 2]  # Returns 6
 
-    # Row/column slicing
-    row = matrix[0, :]    # [1, 2, 3]
-    col = matrix[:, 1]    # [2, 5]
+    # Element modification (functional style)
+    matrix = matrix.at[0, 1].set(99)  # Update element at row 0, col 1
 
-    return matrix
+    # Element-wise operations
+    doubled = matrix * 2
+
+    return matrix[0, 1]  # Returns 99
 ```
 
 **Technical Requirements:**
-- Multi-dimensional `memref` types: `memref<MxNxT>`
-- Strided memory layout for slicing
-- Affine expressions for indexing (`affine` dialect)
-- Memory layout transformations
+- Multi-dimensional `memref` types: `memref<MxNxT>` (e.g., `memref<2x3xi32>`)
+- Multi-index operations: `memref.load %arr[%i, %j]`, `memref.store`
+- Tuple index support in Python frontend: `matrix[i, j]` and `matrix.at[i, j].set(v)`
+- Nested list validation and flattening for initialization
+- Shape inference from nested Python lists
 
 #### 3. **Dynamic-Size Tensors (tensor dialect)**
 ```python
 @ml_function
-def dynamic_tensor(size: int) -> tensor[?, f32]:
+def dynamic_tensor(size: int) -> Tensor[?, f32]:
     # Create tensor with runtime-determined size
-    data = tensor.empty([size], dtype=f32)
+    data = Tensor.empty([size], dtype=f32)
 
-    # Fill with values using loop
+    # Functional-style updates (immutable semantics)
+    # NOTE: Tensor update API still under design - tensors are immutable
+    # May use functional operations or bufferization
     for i in range(size):
-        data[i] = cast(i, f32) * 2.0
+        data = data.at[i].set(cast(i, f32) * 2.0)
 
     return data
 ```
 
 **Technical Requirements:**
-- `tensor` dialect for value-semantic tensors
+- `tensor` dialect for value-semantic, immutable tensors
 - Dynamic shapes: `tensor<?xf32>`
 - Tensor operations: `tensor.empty`, `tensor.extract`, `tensor.insert`
-- Buffer allocation and deallocation
+- Buffer allocation and deallocation via `bufferization` pass
 - Integration with loops for tensor initialization
+- **Note**: Tensor API design TBD - truly immutable vs. functional updates
 
 #### 4. **NumPy/PyTorch Interoperability**
 ```python
 import numpy as np
 
 @ml_function
-def process_numpy(arr: tensor[?, f32]) -> tensor[?, f32]:
+def process_numpy(arr: Tensor[?, f32]) -> Tensor[?, f32]:
     # Process elements: arr[i] * 2 + 1
     result = arr * 2.0 + 1.0
     return result
@@ -141,7 +151,7 @@ result = process_numpy(np_array)  # Returns NumPy array
 #### 5. **Array Reduction Operations**
 ```python
 @ml_function
-def array_sum(arr: tensor[?, i32]) -> i32:
+def array_sum(arr: Tensor[?, i32]) -> i32:
     # Sum all elements in array
     result = 0
     for i in range(len(arr)):
@@ -149,7 +159,7 @@ def array_sum(arr: tensor[?, i32]) -> i32:
     return result
 
 @ml_function
-def array_max(arr: tensor[?, i32]) -> i32:
+def array_max(arr: Tensor[?, i32]) -> i32:
     # Find maximum element
     max_val = arr[0]
     for i in range(1, len(arr)):

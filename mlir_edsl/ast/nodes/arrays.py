@@ -32,12 +32,63 @@ class ArrayLiteral(Value):
         self._validate_element_types()
 
     def _validate_size(self):
-        """Ensure number of elements matches declared size"""
-        if len(self.elements) != self.array_type.size:
+        """Ensure number of elements matches declared shape and flatten nested lists"""
+        if self.array_type.ndim == 1:
+            # 1D: elements should be flat list
+            if len(self.elements) != self.array_type.shape[0]:
+                raise TypeError(
+                    f"Array size mismatch: declared Array[{self.array_type.shape[0]}, ...] "
+                    f"but got {len(self.elements)} elements"
+                )
+        elif self.array_type.ndim == 2:
+            # 2D: elements should be nested list [[...], [...]]
+            self.elements = self._validate_and_flatten_2d(self.elements)
+        elif self.array_type.ndim == 3:
+            # 3D: elements should be triply nested list [[[...]], [[...]]]
+            self.elements = self._validate_and_flatten_3d(self.elements)
+
+    def _validate_and_flatten_2d(self, elements):
+        """Validate 2D structure and flatten to row-major order"""
+        rows, cols = self.array_type.shape
+
+        if not isinstance(elements, list) or len(elements) != rows:
             raise TypeError(
-                f"Array size mismatch: declared Array[{self.array_type.size}, ...] "
-                f"but got {len(self.elements)} elements"
+                f"2D array expects {rows} rows, got {len(elements) if isinstance(elements, list) else 'non-list'}"
             )
+
+        flat = []
+        for i, row in enumerate(elements):
+            if not isinstance(row, list) or len(row) != cols:
+                raise TypeError(
+                    f"Row {i}: expected {cols} elements, got {len(row) if isinstance(row, list) else 'non-list'}"
+                )
+            flat.extend(row)
+
+        return flat
+
+    def _validate_and_flatten_3d(self, elements):
+        """Validate 3D structure and flatten to row-major order"""
+        d0, d1, d2 = self.array_type.shape
+
+        if not isinstance(elements, list) or len(elements) != d0:
+            raise TypeError(
+                f"3D array expects {d0} matrices, got {len(elements) if isinstance(elements, list) else 'non-list'}"
+            )
+
+        flat = []
+        for i, matrix in enumerate(elements):
+            if not isinstance(matrix, list) or len(matrix) != d1:
+                raise TypeError(
+                    f"Matrix {i}: expected {d1} rows, got {len(matrix) if isinstance(matrix, list) else 'non-list'}"
+                )
+            for j, row in enumerate(matrix):
+                if not isinstance(row, list) or len(row) != d2:
+                    raise TypeError(
+                        f"Matrix {i}, row {j}: expected {d2} elements, got {len(row) if isinstance(row, list) else 'non-list'}"
+                    )
+                flat.extend(row)
+
+        return flat
 
     def _validate_element_types(self):
         """Ensure all elements match the declared element type (strict!)"""
@@ -104,8 +155,9 @@ class ArrayLiteral(Value):
 
         pb_node = ast_pb2.ASTNode()
 
-        # Set array type specification
-        pb_node.array_literal.array_type.size = self.array_type.size
+        # Set array type specification with shape (supports 1D/2D/3D)
+        for dim in self.array_type.shape:
+            pb_node.array_literal.array_type.shape.append(dim)
         pb_node.array_literal.array_type.element_type = self.array_type.element_enum
 
         # Serialize each element (with context-aware serialization)
@@ -132,19 +184,43 @@ class ArrayAccess(Value):
         super().__init__()
         self.array = array
 
-        # Import here to avoid circular dependency
-        from .scalars import Constant
-
-        # Convert index to AST node if it's a Python int
-        if isinstance(index, int):
-            self.index = Constant(index, I32)
-        elif isinstance(index, Value):
-            self.index = index
-        else:
-            raise TypeError(f"Array index must be int or Value, got {type(index)}")
+        # Normalize index to list of AST nodes
+        self.indices = self._normalize_indices(index)
 
         # COMPILE-TIME TYPE CHECKING
         self._validate_types()
+
+    def _normalize_indices(self, index):
+        """Convert single index or tuple to list of AST nodes"""
+        from .scalars import Constant
+
+        # Python passes arr[i, j] as tuple (i, j) automatically
+        if not isinstance(index, tuple):
+            indices = (index,)  # Single index: arr[5]
+        else:
+            indices = index     # Multiple indices: arr[1, 2]
+
+        # Convert each index to AST node
+        result = []
+        for idx in indices:
+            if isinstance(idx, int):
+                result.append(Constant(idx, I32))
+            elif isinstance(idx, Value):
+                result.append(idx)
+            else:
+                raise TypeError(f"Array index must be int or Value, got {type(idx)}")
+
+        return result
+
+    @property
+    def index(self):
+        """Backward compatibility: return first index for 1D arrays"""
+        if len(self.indices) != 1:
+            raise AttributeError(
+                f"'.index' property only available for 1D array access. "
+                f"Use '.indices' for multi-dimensional arrays."
+            )
+        return self.indices[0]
 
     def _validate_types(self):
         """Validate array access is type-safe"""
@@ -156,13 +232,22 @@ class ArrayAccess(Value):
                 f"Expected array, got {self._type_to_str(array_type)}"
             )
 
-        # Check that index is i32
-        index_type = self.index.infer_type()
-        if isinstance(index_type, ArrayType) or index_type != I32:
+        # Check that number of indices matches array dimensions
+        if len(self.indices) != array_type.ndim:
             raise TypeError(
-                f"Array index must be i32, got {self._type_to_str(index_type)}. "
-                f"Use cast() to convert to i32."
+                f"Array dimension mismatch: {array_type.ndim}D array requires "
+                f"{array_type.ndim} indices, got {len(self.indices)}. "
+                f"Usage: arr[i] for 1D, arr[i,j] for 2D, arr[i,j,k] for 3D"
             )
+
+        # Check that all indices are i32
+        for i, idx in enumerate(self.indices):
+            idx_type = idx.infer_type()
+            if isinstance(idx_type, ArrayType) or idx_type != I32:
+                raise TypeError(
+                    f"Array index {i} must be i32, got {self._type_to_str(idx_type)}. "
+                    f"Use cast() to convert to i32."
+                )
 
         # Store the array type for infer_type()
         self._array_type = array_type
@@ -180,7 +265,7 @@ class ArrayAccess(Value):
 
     def get_children(self) -> list['Value']:
         """Return child nodes"""
-        return [self.array, self.index]
+        return [self.array] + self.indices
 
     def to_proto(self, context: 'SerializationContext' = None):
         """Serialize ArrayAccess to protobuf"""
@@ -189,13 +274,17 @@ class ArrayAccess(Value):
 
         pb_node = ast_pb2.ASTNode()
 
-        # Serialize array and index (context-aware)
+        # Serialize array (context-aware)
         if context:
             pb_node.array_access.array.CopyFrom(self.array._to_proto_impl(context))
-            pb_node.array_access.index.CopyFrom(self.index._to_proto_impl(context))
         else:
             pb_node.array_access.array.CopyFrom(self.array.to_proto())
-            pb_node.array_access.index.CopyFrom(self.index.to_proto())
+
+        # Serialize index using new repeated field (for 1D: single index)
+        if context:
+            pb_node.array_access.indices.append(self.index._to_proto_impl(context))
+        else:
+            pb_node.array_access.indices.append(self.index.to_proto())
 
         return pb_node
 
@@ -214,18 +303,11 @@ class ArrayStore(Value):
         super().__init__()
         self.array = array
 
-        # Import here to avoid circular dependency
-        from .scalars import Constant
-
-        # Convert index to AST node
-        if isinstance(index, int):
-            self.index = Constant(index, I32)
-        elif isinstance(index, Value):
-            self.index = index
-        else:
-            raise TypeError(f"Array index must be int or Value")
+        # Normalize index to list of AST nodes (same as ArrayAccess)
+        self.indices = self._normalize_indices(index)
 
         # Convert value to AST node if needed
+        from .scalars import Constant
         if isinstance(value, bool):
             # Must check bool before int (bool is subclass of int)
             self.value = Constant(value, I1)
@@ -241,6 +323,38 @@ class ArrayStore(Value):
         # COMPILE-TIME TYPE CHECKING
         self._validate_types()
 
+    def _normalize_indices(self, index):
+        """Convert single index or tuple to list of AST nodes"""
+        from .scalars import Constant
+
+        # Python passes arr.at[i, j] as tuple (i, j) automatically
+        if not isinstance(index, tuple):
+            indices = (index,)  # Single index: arr.at[5]
+        else:
+            indices = index     # Multiple indices: arr.at[1, 2]
+
+        # Convert each index to AST node
+        result = []
+        for idx in indices:
+            if isinstance(idx, int):
+                result.append(Constant(idx, I32))
+            elif isinstance(idx, Value):
+                result.append(idx)
+            else:
+                raise TypeError(f"Array index must be int or Value, got {type(idx)}")
+
+        return result
+
+    @property
+    def index(self):
+        """Backward compatibility: return first index for 1D arrays"""
+        if len(self.indices) != 1:
+            raise AttributeError(
+                f"'.index' property only available for 1D array store. "
+                f"Use '.indices' for multi-dimensional arrays."
+            )
+        return self.indices[0]
+
     def _validate_types(self):
         """Validate array store is type-safe"""
         # Check that we're indexing an array
@@ -250,10 +364,21 @@ class ArrayStore(Value):
                 f"Cannot use []= on non-array type: {self._type_to_str(array_type)}"
             )
 
-        # Check index is i32
-        index_type = self.index.infer_type()
-        if isinstance(index_type, ArrayType) or index_type != I32:
-            raise TypeError(f"Array index must be i32, got {self._type_to_str(index_type)}")
+        # Check that number of indices matches array dimensions
+        if len(self.indices) != array_type.ndim:
+            raise TypeError(
+                f"Array dimension mismatch: {array_type.ndim}D array requires "
+                f"{array_type.ndim} indices, got {len(self.indices)}. "
+                f"Usage: arr.at[i].set(v) for 1D, arr.at[i,j].set(v) for 2D"
+            )
+
+        # Check that all indices are i32
+        for i, idx in enumerate(self.indices):
+            idx_type = idx.infer_type()
+            if isinstance(idx_type, ArrayType) or idx_type != I32:
+                raise TypeError(
+                    f"Array index {i} must be i32, got {self._type_to_str(idx_type)}"
+                )
 
         # Check value type matches array element type (STRICT!)
         expected_enum = array_type.element_enum
@@ -287,7 +412,7 @@ class ArrayStore(Value):
 
     def get_children(self) -> list['Value']:
         """Return child nodes"""
-        return [self.array, self.index, self.value]
+        return [self.array] + self.indices + [self.value]
 
     def to_proto(self, context: 'SerializationContext' = None):
         """Serialize ArrayStore to protobuf"""
@@ -296,15 +421,19 @@ class ArrayStore(Value):
 
         pb_node = ast_pb2.ASTNode()
 
-        # Serialize array, index, and value (context-aware)
+        # Serialize array and value (context-aware)
         if context:
             pb_node.array_store.array.CopyFrom(self.array._to_proto_impl(context))
-            pb_node.array_store.index.CopyFrom(self.index._to_proto_impl(context))
             pb_node.array_store.value.CopyFrom(self.value._to_proto_impl(context))
         else:
             pb_node.array_store.array.CopyFrom(self.array.to_proto())
-            pb_node.array_store.index.CopyFrom(self.index.to_proto())
             pb_node.array_store.value.CopyFrom(self.value.to_proto())
+
+        # Serialize index using new repeated field (for 1D: single index)
+        if context:
+            pb_node.array_store.indices.append(self.index._to_proto_impl(context))
+        else:
+            pb_node.array_store.indices.append(self.index.to_proto())
 
         return pb_node
 
@@ -342,12 +471,19 @@ class ArrayBinaryOp(Value):
         right_is_array = isinstance(right_type, ArrayType)
 
         if left_is_array and right_is_array:
-            # ARRAY + ARRAY: Shapes must match exactly
-            if left_type != right_type:
+            # ARRAY + ARRAY: Shapes AND element types must match exactly
+            if left_type.shape != right_type.shape:
                 raise TypeError(
                     f"Array shapes must match for element-wise {self.op}.\n"
-                    f"  Left:  {left_type}\n"
-                    f"  Right: {right_type}"
+                    f"  Left:  {left_type} (shape {left_type.shape})\n"
+                    f"  Right: {right_type} (shape {right_type.shape})"
+                )
+            if left_type.element_enum != right_type.element_enum:
+                raise TypeError(
+                    f"Array element types must match for element-wise {self.op}.\n"
+                    f"  Left:  {left_type.element_type.name}\n"
+                    f"  Right: {right_type.element_type.name}\n"
+                    f"  Hint: Use cast() for explicit type conversion"
                 )
             self._result_type = left_type
             self._broadcast_mode = "NONE"
@@ -402,8 +538,9 @@ class ArrayBinaryOp(Value):
         pb_node = ast_pb2.ASTNode()
         pb_node.array_binary_op.op_type = _binary_op_to_proto(self.op)
 
-        # Set result type (array shape)
-        pb_node.array_binary_op.result_type.size = self._result_type.size
+        # Set result type (array shape) using new repeated shape field
+        # For 1D arrays: shape = [size]
+        pb_node.array_binary_op.result_type.shape.append(self._result_type.size)
         pb_node.array_binary_op.result_type.element_type = self._result_type.element_enum
 
         # Set broadcast mode

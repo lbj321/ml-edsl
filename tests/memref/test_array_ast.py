@@ -172,7 +172,7 @@ class TestArrayAccessTypeChecking:
         arr = ArrayLiteral([1.0, 2.0], Array[2, f32])
         float_idx = Constant(1.5, F32)
 
-        with pytest.raises(TypeError, match="Array index must be i32"):
+        with pytest.raises(TypeError, match="Array index .* must be i32"):
             ArrayAccess(arr, float_idx)
 
     def test_array_access_python_int_index_converted(self):
@@ -238,7 +238,7 @@ class TestArrayStoreTypeChecking:
         arr = ArrayLiteral([1, 2], Array[2, i32])
         float_idx = Constant(1.5, F32)
 
-        with pytest.raises(TypeError, match="Array index must be i32"):
+        with pytest.raises(TypeError, match="Array index .* must be i32"):
             ArrayStore(arr, float_idx, 99)
 
     def test_array_store_value_type_must_match(self):
@@ -351,8 +351,9 @@ class TestArrayProtobufSerialization:
         # Should have array_literal field set
         assert pb.HasField("array_literal")
 
-        # Check array type spec
-        assert pb.array_literal.array_type.size == 3
+        # Check array type spec (now uses shape repeated field)
+        assert len(pb.array_literal.array_type.shape) == 1  # 1D array
+        assert pb.array_literal.array_type.shape[0] == 3    # size is 3
         assert pb.array_literal.array_type.element_type == I32
 
         # Check elements
@@ -367,9 +368,9 @@ class TestArrayProtobufSerialization:
         # Should have array_access field set
         assert pb.HasField("array_access")
 
-        # Check that array and index are serialized
+        # Check that array and indices are serialized (now uses repeated field)
         assert pb.array_access.HasField("array")
-        assert pb.array_access.HasField("index")
+        assert len(pb.array_access.indices) == 1  # 1D array has single index
 
     def test_array_store_to_proto(self):
         """Test that ArrayStore.to_proto() works"""
@@ -380,9 +381,9 @@ class TestArrayProtobufSerialization:
         # Should have array_store field set
         assert pb.HasField("array_store")
 
-        # Check that array, index, and value are serialized
+        # Check that array, indices, and value are serialized (now uses repeated field for indices)
         assert pb.array_store.HasField("array")
-        assert pb.array_store.HasField("index")
+        assert len(pb.array_store.indices) == 1  # 1D array has single index
         assert pb.array_store.HasField("value")
 
     def test_array_literal_with_reuse(self):

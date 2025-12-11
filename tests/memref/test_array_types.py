@@ -63,7 +63,7 @@ class TestArrayTypeValidation:
 
     def test_array_requires_two_parameters(self):
         """Test that Array requires requires 2 parameters"""
-        with pytest.raises(TypeError, match="requires 2 parameters"):
+        with pytest.raises(TypeError, match="requires parameters"):
             Array[10]  # Missing element type
 
     def test_array_size_must_be_positive_int(self):
@@ -82,13 +82,13 @@ class TestArrayTypeValidation:
 
     def test_array_element_type_must_be_scalar_type(self):
         """Test that element type must be i32, f32, or i1"""
-        with pytest.raises(TypeError, match="must be i32, f32, or i1"):
+        with pytest.raises(TypeError, match="element type"):
             Array[10, int]  # Python int, not i32
 
-        with pytest.raises(TypeError, match="must be i32, f32, or i1"):
+        with pytest.raises(TypeError, match="element type"):
             Array[10, float]  # Python float, not f32
 
-        with pytest.raises(TypeError, match="must be i32, f32, or i1"):
+        with pytest.raises(TypeError, match="element type"):
             Array[10, "i32"]  # String, not ScalarType
 
     def test_array_reject_nested_arrays(self):
@@ -96,7 +96,7 @@ class TestArrayTypeValidation:
         inner_array = Array[5, i32]
 
         # This should fail - element type must be ScalarType
-        with pytest.raises(TypeError, match="must be i32, f32, or i1"):
+        with pytest.raises(TypeError, match="element type"):
             Array[10, inner_array]  # Array of arrays not supported yet
 
 

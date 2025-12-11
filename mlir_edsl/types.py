@@ -186,27 +186,71 @@ TYPE_TO_CTYPES = {
 
 class ArrayType:
     """
-    Represents a fixed-size array type: memref<NxT>
+    Represents a fixed-size array type: memref<NxT> (1D), memref<MxNxT> (2D), memref<MxNxPxT> (3D)
 
     Used for type hints in function signatures.
 
-    Example:
-        def foo(arr: Array[10, i32]) -> Array[10, i32]:
+    Examples:
+        def foo(arr: Array[10, i32]) -> Array[10, i32]:  # 1D array
+            ...
+
+        def bar(matrix: Array[2, 3, i32]) -> i32:  # 2D array
             ...
     """
 
-    def __init__(self, size: int, element_type: ScalarType):
-        if not isinstance(size, int) or size <= 0:
-            raise TypeError(f"Array size must be positive integer, got {size}")
+    def __init__(self, shape, element_type: ScalarType):
+        # Normalize shape to tuple
+        if isinstance(shape, int):
+            self.shape = (shape,)  # 1D
+        elif isinstance(shape, tuple):
+            self.shape = tuple(shape)  # 2D/3D
+        else:
+            raise TypeError(f"Array shape must be int or tuple of ints, got {type(shape).__name__}")
+
+        # Validate all dimensions
+        if not all(isinstance(d, int) and d > 0 for d in self.shape):
+            raise TypeError(f"All dimensions must be positive integers, got {self.shape}")
+
+        # Validate dimensionality (only 1D, 2D, 3D)
+        if len(self.shape) == 0 or len(self.shape) > 3:
+            raise TypeError(f"Only 1D, 2D, and 3D arrays supported, got {len(self.shape)}D")
 
         if not isinstance(element_type, ScalarType):
             raise TypeError(
                 f"Array element type must be ScalarType (i32, f32, i1), got {element_type}"
             )
 
-        self.size = size
         self.element_type = element_type  # This is a ScalarType instance (i32, f32, i1)
         self.element_enum = element_type.enum_value  # Store the protobuf enum too
+
+    @property
+    def size(self) -> int:
+        """
+        Backward compatibility: Return size for 1D arrays only.
+
+        Raises AttributeError for multi-dimensional arrays.
+        Use .shape for multi-dimensional arrays.
+        """
+        if len(self.shape) != 1:
+            raise AttributeError(
+                f"'.size' only available for 1D arrays. "
+                f"This is a {len(self.shape)}D array with shape {self.shape}. "
+                f"Use '.shape' instead."
+            )
+        return self.shape[0]
+
+    @property
+    def ndim(self) -> int:
+        """Number of dimensions (1, 2, or 3)"""
+        return len(self.shape)
+
+    @property
+    def total_elements(self) -> int:
+        """Total number of elements (product of all dimensions)"""
+        result = 1
+        for dim in self.shape:
+            result *= dim
+        return result
 
     def __call__(self, elements: list):
         """
@@ -228,71 +272,99 @@ class ArrayType:
             )
 
     def to_mlir_string(self) -> str:
-        """Convert to MLIR type string: memref<10xi32>"""
+        """Convert to MLIR type string: memref<10xi32>, memref<2x3xi32>, etc."""
         elem_name = self.element_type.name  # "i32", "f32", or "i1"
-        return f"memref<{self.size}x{elem_name}>"
+        # 1D: memref<10xi32>
+        # 2D: memref<2x3xi32>
+        # 3D: memref<2x3x4xi32>
+        dims = 'x'.join(str(d) for d in self.shape)
+        return f"memref<{dims}x{elem_name}>"
 
     def __repr__(self):
-        return f"Array[{self.size}, {self.element_type.name}]"
+        if len(self.shape) == 1:
+            return f"Array[{self.shape[0]}, {self.element_type.name}]"
+        else:
+            # 2D: Array[2, 3, i32]
+            # 3D: Array[2, 3, 4, i32]
+            dims = ', '.join(str(d) for d in self.shape)
+            return f"Array[{dims}, {self.element_type.name}]"
 
     def __eq__(self, other):
         """Enable type equality checking for strict type system"""
         if not isinstance(other, ArrayType):
             return False
-        return (self.size == other.size and
+        return (self.shape == other.shape and  # Tuple comparison
                 self.element_enum == other.element_enum)
 
     def __hash__(self):
         """Enable use as dict key"""
-        return hash((self.size, self.element_enum))
+        return hash((self.shape, self.element_enum))  # Hash tuple
 
 
 class ArrayMeta(type):
     """
-    Metaclass to enable Array[size, dtype] subscript syntax.
+    Metaclass to enable Array[size, dtype] or Array[M, N, dtype] subscript syntax.
 
-    This makes Array[10, i32] work even though Array is a class.
+    This makes Array[10, i32] and Array[2, 3, i32] work even though Array is a class.
     """
 
     def __getitem__(cls, params):
         """
-        Handle Array[10, i32] syntax.
+        Handle Array[size, dtype] or Array[M, N, dtype] or Array[M, N, P, dtype] syntax.
 
         Args:
-            params: Either a tuple (size, dtype) or error
+            params: Tuple where last element is dtype, preceding are dimensions
 
         Returns:
             ArrayType instance
+
+        Examples:
+            Array[10, i32]        -> 1D array
+            Array[2, 3, i32]      -> 2D array
+            Array[2, 3, 4, f32]   -> 3D array
         """
-        # Ensure we got exactly 2 parameters
         if not isinstance(params, tuple):
             raise TypeError(
-                f"Array requires 2 parameters: Array[size, element_type]. "
-                f"Example: Array[10, i32]"
+                f"Array requires parameters: Array[size, dtype] or Array[M, N, dtype]. "
+                f"Example: Array[10, i32] or Array[2, 3, i32]"
             )
 
-        if len(params) != 2:
+        if len(params) < 2:
             raise TypeError(
-                f"Array requires exactly 2 parameters, got {len(params)}. "
-                f"Usage: Array[size, element_type]"
+                f"Array requires at least 2 parameters (dimensions + dtype), got {len(params)}"
             )
 
-        size, dtype = params
+        # Last parameter must be dtype
+        dtype = params[-1]
+        dims = params[:-1]
 
-        # Validate size
-        if not isinstance(size, int) or size <= 0:
-            raise TypeError(
-                f"Array size must be positive integer, got {size!r}"
-            )
-
-        # Validate dtype is one of i32, f32, i1
+        # Validate dtype is ScalarType
         if not isinstance(dtype, ScalarType):
             raise TypeError(
-                f"Array element type must be i32, f32, or i1, got {dtype!r}"
+                f"Last parameter must be element type (i32, f32, i1), got {dtype!r}"
             )
 
-        # Create and return ArrayType instance
-        return ArrayType(size, dtype)
+        # Validate dimensionality (only 1D, 2D, 3D)
+        if len(dims) > 3:
+            raise TypeError(
+                f"Only 1D, 2D, and 3D arrays supported, got {len(dims)}D. "
+                f"Usage: Array[N, dtype] or Array[M, N, dtype] or Array[M, N, P, dtype]"
+            )
+
+        # Validate all dimensions are positive integers
+        for i, dim in enumerate(dims):
+            if not isinstance(dim, int) or dim <= 0:
+                raise TypeError(
+                    f"Dimension {i} must be positive integer, got {dim!r}"
+                )
+
+        # Create ArrayType with shape tuple
+        # For 1D: dims=(10,) -> ArrayType receives int 10
+        # For 2D/3D: dims=(2,3) or (2,3,4) -> ArrayType receives tuple
+        if len(dims) == 1:
+            return ArrayType(dims[0], dtype)  # Backward compat: pass int for 1D
+        else:
+            return ArrayType(dims, dtype)     # Pass tuple for 2D/3D
 
 
 class Array(metaclass=ArrayMeta):

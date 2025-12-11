@@ -90,9 +90,9 @@ message Constant {
   ValueType value_type = 3;
 }
 
-// Array type specification (size and element type)
+// Array type specification (shape and element type)
 message ArrayTypeSpec {
-  int32 size = 1;              // Array size (number of elements)
+  repeated int32 shape = 1;    // Array shape: [N] for 1D, [M,N] for 2D, [M,N,P] for 3D
   ValueType element_type = 2;  // Element type (I32, F32, I1)
 }
 
@@ -166,17 +166,17 @@ message ArrayLiteral {
   repeated ASTNode elements = 2;  // Array elements (must match array_type.size)
 }
 
-// Array element access: arr[index]
+// Array element access: arr[i] or arr[i,j] or arr[i,j,k]
 message ArrayAccess {
-  ASTNode array = 1;   // Array to index into (must be ArrayLiteral or array-typed value)
-  ASTNode index = 2;   // Index value (must be I32)
+  ASTNode array = 1;           // Array to index into (must be ArrayLiteral or array-typed value)
+  repeated ASTNode indices = 2; // Index values (must be I32, count must match array dimensions)
 }
 
-// Array element store: arr[index] = value
+// Array element store: arr.at[i].set(v) or arr.at[i,j].set(v)
 message ArrayStore {
-  ASTNode array = 1;   // Array to store into
-  ASTNode index = 2;   // Index value (must be I32)
-  ASTNode value = 3;   // Value to store (must match array element type)
+  ASTNode array = 1;            // Array to store into
+  repeated ASTNode indices = 2; // Index values (must be I32, count must match array dimensions)
+  ASTNode value = 3;            // Value to store (must match array element type)
 }
 
 // Element-wise binary operation on arrays

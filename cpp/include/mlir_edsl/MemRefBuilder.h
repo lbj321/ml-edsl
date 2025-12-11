@@ -44,7 +44,7 @@ private:
   void buildArrayBinaryOpElement(
       mlir::OpBuilder& loopBuilder,
       mlir::Location loc,
-      mlir::Value iv,
+      llvm::ArrayRef<mlir::Value> indices,
       mlir::Value left,
       mlir::Value right,
       BroadcastMode broadcastMode,
