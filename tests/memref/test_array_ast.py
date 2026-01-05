@@ -127,8 +127,8 @@ class TestArrayAccess:
 
         assert isinstance(access, ArrayAccess)
         assert access.array == arr
-        assert isinstance(access.index, Constant)
-        assert access.index.value == 2
+        assert isinstance(access.indices[0], Constant)
+        assert access.indices[0].value == 2
 
     def test_array_access_with_value_index(self):
         """Test ArrayAccess with Value node as index"""
@@ -136,7 +136,7 @@ class TestArrayAccess:
         idx = Constant(1, I32)
         access = ArrayAccess(arr, idx)
 
-        assert access.index == idx
+        assert access.indices[0] == idx
 
     def test_array_access_infer_type_returns_element_type(self):
         """Test that ArrayAccess returns element type, not array type"""
@@ -180,8 +180,8 @@ class TestArrayAccessTypeChecking:
         arr = ArrayLiteral([10, 20, 30], Array[3, i32])
         access = ArrayAccess(arr, 1)  # Python int
 
-        assert isinstance(access.index, Constant)
-        assert access.index.value_type == I32
+        assert isinstance(access.indices[0], Constant)
+        assert access.indices[0].value_type == I32
 
 
 # ==================== ARRAY STORE ====================
@@ -196,8 +196,8 @@ class TestArrayStore:
 
         assert isinstance(store, ArrayStore)
         assert store.array == arr
-        assert isinstance(store.index, Constant)
-        assert store.index.value == 0
+        assert isinstance(store.indices[0], Constant)
+        assert store.indices[0].value == 0
         assert isinstance(store.value, Constant)
         assert store.value.value == 99
 
@@ -208,7 +208,7 @@ class TestArrayStore:
         val = Constant(42, I32)
         store = ArrayStore(arr, idx, val)
 
-        assert store.index == idx
+        assert store.indices[0] == idx
         assert store.value == val
 
     def test_array_store_infer_type_returns_array_type(self):
@@ -278,7 +278,7 @@ class TestSubscriptSyntax:
 
         assert isinstance(access, ArrayAccess)
         assert access.array == arr
-        assert access.index.value == 1
+        assert access.indices[0].value == 1
 
     def test_setitem_creates_array_store(self):
         """Test that arr[i] = value creates ArrayStore node"""
@@ -287,7 +287,7 @@ class TestSubscriptSyntax:
 
         assert isinstance(store, ArrayStore)
         assert store.array == arr
-        assert store.index.value == 0
+        assert store.indices[0].value == 0
         assert store.value.value == 99
 
     def test_subscript_type_checking_works(self):
@@ -324,7 +324,7 @@ class TestArrayGetChildren:
 
         assert len(children) == 2
         assert children[0] == arr
-        assert children[1] == access.index
+        assert children[1] == access.indices[0]
 
     def test_array_store_get_children_returns_all_three(self):
         """Test that ArrayStore.get_children() returns [array, index, value]"""
@@ -334,7 +334,7 @@ class TestArrayGetChildren:
 
         assert len(children) == 3
         assert children[0] == arr
-        assert children[1] == store.index
+        assert children[1] == store.indices[0]
         assert children[2] == store.value
 
 

@@ -6,6 +6,11 @@ from .ast import Parameter, Constant, BinaryOp, CallOp, CompareOp, IfOp
 from .types import I32, F32, I1, type_to_string, TypeSystem
 import inspect
 
+# Global flag to track symbolic execution context
+# When True, function calls return CallOp AST nodes instead of executing
+# This allows @ml_function to call other @ml_function from within their body
+_in_symbolic_execution = False
+
 
 class MLFunction:
     """Wrapper for JIT-compiled ML functions"""
@@ -21,9 +26,31 @@ class MLFunction:
         self._validate_function_body()
 
     def __call__(self, *args, **kwargs):
-        """JIT compile and execute the function - returns numeric result"""
-        self._ensure_compiled(args, kwargs)
-        return self._execute(args, kwargs)
+        """JIT compile and execute the function - returns numeric result OR AST node"""
+        global _in_symbolic_execution
+        from .ast import Value
+
+        # Check if we're in symbolic execution context (called from within another @ml_function)
+        # This happens during decoration/validation when building the AST
+        if _in_symbolic_execution:
+            # Return CallOp AST node instead of executing
+            ast_args = list(args) + list(kwargs.values())
+            return_type = self._get_return_type()
+            return CallOp(self.func_name, ast_args, return_type)
+
+        # Also check if any argument is an AST node (handles cases where flag isn't set)
+        is_symbolic = any(isinstance(arg, Value) for arg in args) or \
+                      any(isinstance(v, Value) for v in kwargs.values())
+
+        if is_symbolic:
+            # Return CallOp AST node instead of executing
+            ast_args = list(args) + list(kwargs.values())
+            return_type = self._get_return_type()
+            return CallOp(self.func_name, ast_args, return_type)
+        else:
+            # Normal execution path (called from Python with runtime values)
+            self._ensure_compiled(args, kwargs)
+            return self._execute(args, kwargs)
     
     def execute(self) -> Union[int, float]:
         """Convenience method - same as calling the function directly"""
@@ -142,12 +169,18 @@ class MLFunction:
 
         return parameter_map, runtime_values
 
-    def _get_return_type(self) -> int:
-        """Get return type enum from type hints"""
+    def _get_return_type(self) -> Union[int, 'ArrayType']:
+        """Get return type enum or ArrayType from type hints"""
         type_hints = self._get_type_hints()
         return TypeSystem.parse_type_hint(type_hints['return'], "return type")
     
     def _execute_symbolic(self, param_map: Dict):
+        """Execute function symbolically to build AST
+
+        Sets global flag to indicate symbolic execution context,
+        ensuring nested @ml_function calls return CallOp nodes.
+        """
+        global _in_symbolic_execution
 
         signature = inspect.signature(self.func)
         param_names = list(signature.parameters.keys())
@@ -159,7 +192,14 @@ class MLFunction:
             else:
                 raise ValueError(f"Missing parameter: {param_name}")
 
-        return self.func(*symbolic_args)
+        # Set flag before calling function
+        old_value = _in_symbolic_execution
+        _in_symbolic_execution = True
+        try:
+            return self.func(*symbolic_args)
+        finally:
+            # Always restore flag, even if exception occurs
+            _in_symbolic_execution = old_value
 
 
     # ==================== VALIDATION ====================

@@ -56,7 +56,16 @@ class CallOp(Value):
 
         pb_node = ast_pb2.ASTNode()
         pb_node.call_op.func_name = self.func_name
-        pb_node.call_op.return_type = self.return_type
+
+        # Set return type based on type (oneof field)
+        from mlir_edsl.types import ArrayType
+        if isinstance(self.return_type, ArrayType):
+            # Array return type - populate array_return field
+            pb_node.call_op.array_return.shape.extend(self.return_type.shape)
+            pb_node.call_op.array_return.element_type = self.return_type.element_enum
+        else:
+            # Scalar return type - populate scalar_return field
+            pb_node.call_op.scalar_return = self.return_type
 
         # Context-aware child serialization
         if context:

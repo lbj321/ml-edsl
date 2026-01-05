@@ -212,16 +212,6 @@ class ArrayAccess(Value):
 
         return result
 
-    @property
-    def index(self):
-        """Backward compatibility: return first index for 1D arrays"""
-        if len(self.indices) != 1:
-            raise AttributeError(
-                f"'.index' property only available for 1D array access. "
-                f"Use '.indices' for multi-dimensional arrays."
-            )
-        return self.indices[0]
-
     def _validate_types(self):
         """Validate array access is type-safe"""
         # Check that we're indexing an array
@@ -280,11 +270,12 @@ class ArrayAccess(Value):
         else:
             pb_node.array_access.array.CopyFrom(self.array.to_proto())
 
-        # Serialize index using new repeated field (for 1D: single index)
-        if context:
-            pb_node.array_access.indices.append(self.index._to_proto_impl(context))
-        else:
-            pb_node.array_access.indices.append(self.index.to_proto())
+        # Serialize all indices using repeated field
+        for idx in self.indices:
+            if context:
+                pb_node.array_access.indices.append(idx._to_proto_impl(context))
+            else:
+                pb_node.array_access.indices.append(idx.to_proto())
 
         return pb_node
 
@@ -344,16 +335,6 @@ class ArrayStore(Value):
                 raise TypeError(f"Array index must be int or Value, got {type(idx)}")
 
         return result
-
-    @property
-    def index(self):
-        """Backward compatibility: return first index for 1D arrays"""
-        if len(self.indices) != 1:
-            raise AttributeError(
-                f"'.index' property only available for 1D array store. "
-                f"Use '.indices' for multi-dimensional arrays."
-            )
-        return self.indices[0]
 
     def _validate_types(self):
         """Validate array store is type-safe"""
@@ -429,11 +410,12 @@ class ArrayStore(Value):
             pb_node.array_store.array.CopyFrom(self.array.to_proto())
             pb_node.array_store.value.CopyFrom(self.value.to_proto())
 
-        # Serialize index using new repeated field (for 1D: single index)
-        if context:
-            pb_node.array_store.indices.append(self.index._to_proto_impl(context))
-        else:
-            pb_node.array_store.indices.append(self.index.to_proto())
+        # Serialize all indices using repeated field
+        for idx in self.indices:
+            if context:
+                pb_node.array_store.indices.append(idx._to_proto_impl(context))
+            else:
+                pb_node.array_store.indices.append(idx.to_proto())
 
         return pb_node
 
@@ -538,9 +520,11 @@ class ArrayBinaryOp(Value):
         pb_node = ast_pb2.ASTNode()
         pb_node.array_binary_op.op_type = _binary_op_to_proto(self.op)
 
-        # Set result type (array shape) using new repeated shape field
-        # For 1D arrays: shape = [size]
-        pb_node.array_binary_op.result_type.shape.append(self._result_type.size)
+        # Set result type (array shape) using repeated shape field
+        # For 1D: shape = (N,) -> [N]
+        # For 2D: shape = (M, N) -> [M, N]
+        # For 3D: shape = (M, N, P) -> [M, N, P]
+        pb_node.array_binary_op.result_type.shape.extend(self._result_type.shape)
         pb_node.array_binary_op.result_type.element_type = self._result_type.element_enum
 
         # Set broadcast mode

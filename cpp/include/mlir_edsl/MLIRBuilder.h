@@ -26,6 +26,7 @@ enum ValueType : int;
 enum ComparisonPredicate : int;
 enum BinaryOpType : int;
 class ASTNode;
+class ArrayTypeSpec;
 
 class MLIRBuilder {
 public:
@@ -50,6 +51,7 @@ public:
 
   // ==================== PUBLIC UTILITIES (for dialect builders) ====================
   mlir::Type protoTypeToMLIRType(mlir_edsl::ValueType protoType) const;
+  mlir::Type arrayTypeSpecToMLIRType(const mlir_edsl::ArrayTypeSpec &arraySpec) const;
   mlir::Value buildFromProtobufNode(const mlir_edsl::ASTNode &node);
 
   // Infrastructure utilities (used by multiple dialect builders)
@@ -70,7 +72,7 @@ private:
   void createFunction(
       const std::string &name,
       const std::vector<std::pair<std::string, mlir_edsl::ValueType>> &params,
-      mlir_edsl::ValueType return_type);
+      mlir::Type returnType);
   void finalizeFunction(const std::string &name, mlir::Value result);
   mlir::Value callFunction(const std::string &name,
                            const std::vector<mlir::Value> &args);

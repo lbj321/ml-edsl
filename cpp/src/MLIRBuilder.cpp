@@ -282,6 +282,22 @@ MLIRBuilder::protoTypeToMLIRType(mlir_edsl::ValueType protoType) const {
   }
 }
 
+mlir::Type MLIRBuilder::arrayTypeSpecToMLIRType(
+    const mlir_edsl::ArrayTypeSpec &arraySpec) const {
+
+  // Extract element type
+  mlir::Type elementType = protoTypeToMLIRType(arraySpec.element_type());
+
+  // Extract shape dimensions
+  llvm::SmallVector<int64_t> shape;
+  for (int32_t dim : arraySpec.shape()) {
+    shape.push_back(static_cast<int64_t>(dim));
+  }
+
+  // Create memref type: memref<2x3xi32>
+  return mlir::MemRefType::get(shape, elementType);
+}
+
 // ==================== Infrastructure Utilities ====================
 
 mlir::Value MLIRBuilder::buildIndexConstant(int64_t value) {
@@ -320,24 +336,58 @@ std::string MLIRBuilder::compileFunctionFromDef(const std::string &buffer) {
     throw std::runtime_error("Failed to parse FunctionDef protobuf");
   }
 
-  // Extract parameters - already protobuf enums
+  // Extract parameters
   std::vector<std::pair<std::string, mlir_edsl::ValueType>> params;
   for (const auto &param : func_def.params()) {
     params.push_back({param.name(), param.type()});
   }
 
-  // Everything uses enums - no string conversion!
-  createFunction(func_def.name(), params, func_def.return_type());
+  // Determine return type from oneof field
+  mlir::Type returnType;
+  bool isArrayReturn = false;
+  mlir_edsl::ArrayTypeSpec arrayReturnSpec;  // Store for signature building
+  mlir_edsl::ValueType scalarReturnType;
+
+  switch (func_def.return_type_spec_case()) {
+    case mlir_edsl::FunctionDef::kScalarReturn:
+      // Scalar return type (i32, f32, i1)
+      scalarReturnType = func_def.scalar_return();
+      returnType = protoTypeToMLIRType(scalarReturnType);
+      break;
+
+    case mlir_edsl::FunctionDef::kArrayReturn:
+      // Array return type (memref)
+      arrayReturnSpec = func_def.array_return();
+      returnType = arrayTypeSpecToMLIRType(arrayReturnSpec);
+      isArrayReturn = true;
+      break;
+
+    case mlir_edsl::FunctionDef::RETURN_TYPE_SPEC_NOT_SET:
+      throw std::runtime_error("FunctionDef missing return type specification");
+
+    default:
+      throw std::runtime_error("Unknown return type specification");
+  }
+
+  // Compile function
+  createFunction(func_def.name(), params, returnType);
   mlir::Value result = buildFromProtobufNode(func_def.body());
   finalizeFunction(func_def.name(), result);
 
   // Build FunctionSignature protobuf to return
   mlir_edsl::FunctionSignature sig;
   sig.set_name(func_def.name());
-  sig.set_return_type(func_def.return_type());
 
+  // Add parameter types
   for (const auto &param : func_def.params()) {
     sig.add_param_types(param.type());
+  }
+
+  // Set return type (mirror the oneof)
+  if (isArrayReturn) {
+    sig.mutable_array_return()->CopyFrom(arrayReturnSpec);
+  } else {
+    sig.set_scalar_return(scalarReturnType);
   }
 
   // Return serialized signature
@@ -347,19 +397,18 @@ std::string MLIRBuilder::compileFunctionFromDef(const std::string &buffer) {
 void MLIRBuilder::createFunction(
     const std::string &name,
     const std::vector<std::pair<std::string, mlir_edsl::ValueType>> &params,
-    mlir_edsl::ValueType return_type) {
+    mlir::Type returnType) {
 
   // Reset builder state from previous function
   reset();
 
-  // Direct enum to MLIR type conversion using existing helper
+  // Convert parameter types
   std::vector<mlir::Type> paramTypes;
   for (const auto &[paramName, valueType] : params) {
     paramTypes.push_back(protoTypeToMLIRType(valueType));
   }
 
-  mlir::Type returnType = protoTypeToMLIRType(return_type);
-
+  // returnType is already an mlir::Type - use it directly
   auto funcType = builder->getFunctionType(paramTypes, {returnType});
   currentFunction = builder->create<mlir::func::FuncOp>(
       builder->getUnknownLoc(), name, funcType);

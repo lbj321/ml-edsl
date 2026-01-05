@@ -40,13 +40,13 @@ class CppMLIRBackend:
 
     # ==================== CORE COMPILATION ====================
     def compile_function_from_ast(self, name: str, params: list,
-                                   return_type: int, ast_node: Value) -> None:
+                                   return_type: Union[int, 'ArrayType'], ast_node: Value) -> None:
         """Compile complete function from AST - single protobuf entry point
 
         Args:
             name: Function name
             params: List of (param_name, ValueType_enum) tuples using ast_pb2 enums
-            return_type: ValueType enum (ast_pb2.I32/F32/I1)
+            return_type: ValueType enum (ast_pb2.I32/F32/I1) OR ArrayType instance
             ast_node: Root AST node to compile
         """
         if not HAS_PROTOBUF:
@@ -55,13 +55,23 @@ class CppMLIRBackend:
         # Build complete FunctionDef protobuf message
         func_def = ast_pb2.FunctionDef()
         func_def.name = name
-        func_def.return_type = return_type  # Direct enum assignment!
 
         # Add parameters with enum types
         for param_name, param_type in params:
             param = func_def.params.add()
             param.name = param_name
             param.type = param_type  # Direct enum assignment!
+
+        # Set return type based on type (oneof field)
+        #TODO add else error
+        from .types import ArrayType
+        if isinstance(return_type, ArrayType):
+            # Array return type - populate array_return field
+            func_def.array_return.shape.extend(return_type.shape)
+            func_def.array_return.element_type = return_type.element_enum
+        else:
+            # Scalar return type - populate scalar_return field
+            func_def.scalar_return = return_type
 
         # Add function body (with SSA value reuse detection)
         func_def.body.CopyFrom(ast_node.to_proto_with_reuse())
@@ -89,7 +99,7 @@ class CppMLIRBackend:
             sig_bytes = self.executor.get_function_signature(name)
             sig = ast_pb2.FunctionSignature()
             sig.ParseFromString(sig_bytes)
-
+            
             # Get LLVM IR and JIT compile
             llvm_ir = self.builder.get_llvm_ir_string()
             self.executor.clear()
@@ -104,8 +114,19 @@ class CppMLIRBackend:
             # Get function pointer as integer
             func_ptr_int = self.executor.get_function_pointer(name)
 
+            # Determine return type from oneof field
+            if sig.HasField('scalar_return'):
+                c_return_type = TYPE_TO_CTYPES[sig.scalar_return]
+            elif sig.HasField('array_return'):
+                raise RuntimeError(
+                    f"Cannot execute function '{name}' from Python: it returns an array type.\n"
+                    f"Array-returning functions can only be called from within other @ml_function decorated functions.\n"
+                    f"Hint: Create a wrapper function that extracts scalar values from the array."
+                )
+            else:
+                raise RuntimeError(f"Function '{name}' has no return type specification")
+
             # Build ctypes function signature
-            c_return_type = TYPE_TO_CTYPES[sig.return_type]
             c_param_types = [TYPE_TO_CTYPES[pt] for pt in sig.param_types]
 
             # Create ctypes function wrapper

@@ -132,7 +132,12 @@ message IfOp {
 message CallOp {
   string func_name = 1;
   repeated ASTNode args = 2;  // Array of argument nodes
-  ValueType return_type = 3;  // Required: Specifies function return type
+
+  // Return type specification (exactly one must be set)
+  oneof return_type_spec {
+    ValueType scalar_return = 3;    // Scalar: i32, f32, i1
+    ArrayTypeSpec array_return = 4; // Array: memref<NxT>, memref<MxNxT>
+  }
 }
 
 // For loop operation (scf.for)
@@ -214,13 +219,23 @@ message FunctionParameter {
 message FunctionDef {
   string name = 1;                    // Function name
   repeated FunctionParameter params = 2;  // Function parameters
-  ValueType return_type = 3;          // Return type
   ASTNode body = 4;                   // Function body AST
+
+  // Return type specification (exactly one must be set)
+  oneof return_type_spec {
+    ValueType scalar_return = 3;      // Scalar: i32, f32, i1
+    ArrayTypeSpec array_return = 5;   // Array: memref<NxT>, memref<MxNxT>
+  }
 }
 
 // Function signature (lightweight version for executor registration)
 message FunctionSignature {
   string name = 1;                    // Function name
   repeated ValueType param_types = 2; // Parameter types (just enums)
-  ValueType return_type = 3;          // Return type
+
+  // Return type specification (exactly one must be set)
+  oneof return_type_spec {
+    ValueType scalar_return = 3;      // Scalar return
+    ArrayTypeSpec array_return = 4;   // Array return
+  }
 }

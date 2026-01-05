@@ -75,8 +75,20 @@ class TypeSystem:
         raise TypeError(f"Invalid type hint for {context}: {hint}")
 
     @classmethod
-    def validate_value_matches_type(cls, value: Any, type_enum: int, param_name: str):
-        """Validate runtime value matches type"""
+    def validate_value_matches_type(cls, value: Any, type_spec, param_name: str):
+        """Validate runtime value matches type
+
+        Args:
+            type_spec: Either int (scalar enum) or ArrayType instance
+            value: Runtime value to validate
+            param_name: Parameter name for error messages
+        """
+        # Skip validation for ArrayType (arrays are AST nodes, not runtime values)
+        if isinstance(type_spec, ArrayType):
+            return
+
+        # Scalar validation
+        type_enum = type_spec
         if type_enum == I1:
             if not isinstance(value, bool):
                 raise TypeError(f"Parameter '{param_name}' expects bool/i1 but got {type(value).__name__}")
@@ -88,22 +100,56 @@ class TypeSystem:
                 raise TypeError(f"Parameter '{param_name}' expects float/f32 but got {type(value).__name__}")
 
     @classmethod
-    def types_match(cls, inferred: int, declared: int) -> Tuple[bool, str]:
-        """Check if inferred type exactly matches declared type"""
-        if inferred == declared:
-            return True, ""
+    def types_match(cls, inferred, declared) -> Tuple[bool, str]:
+        """Check if inferred type exactly matches declared type
 
+        Args:
+            inferred: int (scalar enum) OR ArrayType instance
+            declared: int (scalar enum) OR ArrayType instance
+
+        Returns:
+            (matches: bool, error_message: str)
+        """
+        # Both scalars
+        if isinstance(inferred, int) and isinstance(declared, int):
+            if inferred == declared:
+                return True, ""
+            return False, (
+                f"Type mismatch:\n"
+                f"  Declared: {cls.type_name(declared)}\n"
+                f"  Inferred: {cls.type_name(inferred)}\n"
+                f"  Hint: Change return type to {cls.type_name(inferred)} or add explicit cast"
+            )
+
+        # Both arrays - use ArrayType.__eq__
+        if isinstance(inferred, ArrayType) and isinstance(declared, ArrayType):
+            if inferred == declared:  # Uses ArrayType.__eq__ (already implemented)
+                return True, ""
+            return False, (
+                f"Array type mismatch:\n"
+                f"  Declared: {declared}\n"
+                f"  Inferred: {inferred}\n"
+                f"  Hint: Ensure array shapes and element types match"
+            )
+
+        # Mixed types (scalar vs array)
         return False, (
-            f"Type mismatch:\n"
+            f"Type category mismatch:\n"
             f"  Declared: {cls.type_name(declared)}\n"
             f"  Inferred: {cls.type_name(inferred)}\n"
-            f"  Hint: Change return type to {cls.type_name(inferred)} or add explicit cast"
+            f"  Hint: Cannot mix scalar and array types"
         )
 
     @classmethod
-    def type_name(cls, type_enum: int) -> str:
-        """Get MLIR type name from enum"""
-        return {I32: "i32", F32: "f32", I1: "i1"}.get(type_enum, f"unknown({type_enum})")
+    def type_name(cls, type_spec) -> str:
+        """Get MLIR type name from enum or ArrayType
+
+        Args:
+            type_spec: int (scalar enum) OR ArrayType instance
+        """
+        if isinstance(type_spec, ArrayType):
+            return str(type_spec)  # Uses ArrayType.__repr__
+        return {I32: "i32", F32: "f32", I1: "i1"}.get(type_spec, f"unknown({type_spec})")
 
 # ==================== UTILITIES ====================
 
