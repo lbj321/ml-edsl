@@ -367,9 +367,7 @@ class TestArray3DExecution(MLIRTestBase):
             ])
             return arr1 + arr2
 
-        result = add_arrays()
-
-        # Verify by accessing specific element
+        # Verify by accessing specific element (array stays in MLIR, return scalar)
         @ml_function
         def verify() -> i32:
             res = add_arrays()
@@ -387,9 +385,7 @@ class TestArray3DExecution(MLIRTestBase):
             ])
             return arr + 100
 
-        result = add_scalar()
-
-        # Verify by accessing element
+        # Verify by accessing element (array stays in MLIR, return scalar)
         @ml_function
         def verify() -> i32:
             res = add_scalar()
