@@ -2,7 +2,7 @@
 import ctypes
 from typing import Union
 from .ast import Value
-from .types import TYPE_TO_CTYPES
+from .types import TYPE_TO_CTYPES, ArrayType
 
 try:
     from . import _mlir_backend
@@ -63,7 +63,6 @@ class CppMLIRBackend:
             param.type = param_type  # Direct enum assignment!
 
         # Set return type based on type (oneof field)
-        from .types import ArrayType
         if isinstance(return_type, ArrayType):
             # Array return type - populate array_return field
             func_def.array_return.shape.extend(return_type.shape)
