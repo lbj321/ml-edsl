@@ -40,7 +40,7 @@ class CppMLIRBackend:
 
     # ==================== CORE COMPILATION ====================
     def compile_function_from_ast(self, name: str, params: list,
-                                   return_type: Union[int, 'ArrayType'], ast_node: Value) -> None:
+                                   return_type: Union[int, ArrayType], ast_node: Value) -> None:
         """Compile complete function from AST - single protobuf entry point
 
         Args:
@@ -63,15 +63,19 @@ class CppMLIRBackend:
             param.type = param_type  # Direct enum assignment!
 
         # Set return type based on type (oneof field)
-        #TODO add else error
         from .types import ArrayType
         if isinstance(return_type, ArrayType):
             # Array return type - populate array_return field
             func_def.array_return.shape.extend(return_type.shape)
             func_def.array_return.element_type = return_type.element_enum
-        else:
+        elif isinstance(return_type, int):
             # Scalar return type - populate scalar_return field
             func_def.scalar_return = return_type
+        else:
+            raise TypeError(
+                f"Invalid return type: {type(return_type).__name__}. "
+                f"Expected int (scalar enum) or ArrayType instance."
+            )
 
         # Add function body (with SSA value reuse detection)
         func_def.body.CopyFrom(ast_node.to_proto_with_reuse())
