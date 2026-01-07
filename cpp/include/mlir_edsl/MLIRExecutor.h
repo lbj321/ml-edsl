@@ -24,8 +24,8 @@ class MLIRExecutor {
     void *compileFunction(const std::string &llvmIR,
                           const std::string &funcName);
 
-    // Register function signature from protobuf (serialized FunctionSignature)
-    void registerFunctionSignature(const std::string &signature_bytes);
+    // Register function signature from protobuf
+    void registerFunctionSignature(const mlir_edsl::FunctionSignature &signature);
 
     // Get function pointer as integer (for Python ctypes)
     uintptr_t getFunctionPointer(const std::string &name);

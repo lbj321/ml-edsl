@@ -46,6 +46,7 @@ target_link_mlir_libraries(mlir_edsl_executor)
 # Executor now needs protobuf for FunctionSignature
 target_link_libraries(mlir_edsl_executor PUBLIC
     mlir_edsl_core
+    protobuf::libprotobuf
 )
 
 # Python bindings module
@@ -64,6 +65,8 @@ target_link_libraries(_mlir_backend PRIVATE
     pybind11::module
     mlir_edsl_core
     mlir_edsl_executor
+    pybind11_native_proto_caster
+    protobuf::libprotobuf
 )
 
 # Set Python module properties

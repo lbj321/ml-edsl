@@ -79,9 +79,8 @@ class CppMLIRBackend:
         # Add function body (with SSA value reuse detection)
         func_def.body.CopyFrom(ast_node.to_proto_with_reuse())
 
-        # Serialize and compile (errors propagate via exceptions)
-        func_def_bytes = func_def.SerializeToString()
-        self.builder.compile_function(func_def_bytes)
+        # Compile (errors propagate via exceptions) - pass protobuf directly
+        self.builder.compile_function(func_def)
 
         # Build signature from the func_def we already have
         sig = ast_pb2.FunctionSignature()
@@ -94,9 +93,8 @@ class CppMLIRBackend:
         else:
             sig.scalar_return = return_type
 
-        # Register signature with executor
-        sig_bytes = sig.SerializeToString()
-        self.executor.register_function_signature(sig_bytes)
+        # Register signature with executor - pass protobuf directly
+        self.executor.register_function_signature(sig)
 
     def execute_function(self, name: str, *args) -> Union[int, float, bool]:
         """Execute compiled function via JIT with ctypes
@@ -124,7 +122,7 @@ class CppMLIRBackend:
                 raise RuntimeError(f"JIT compilation failed: {self.executor.get_last_error()}")
 
             # Re-register signature (it was cleared by clear())
-            self.executor.register_function_signature(sig_bytes)
+            self.executor.register_function_signature(sig)
 
             # Get function pointer as integer
             func_ptr_int = self.executor.get_function_pointer(name)

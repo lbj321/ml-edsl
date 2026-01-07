@@ -12,8 +12,23 @@ function(compile_protobuf_schemas target_name)
     # Ensure output directory exists
     file(MAKE_DIRECTORY ${PROTO_OUTPUT_DIR})
 
-    # Find protobuf
-    find_package(Protobuf REQUIRED)
+    # Protobuf should already be available from pybind11_protobuf FetchContent
+    # Don't call find_package again - it might find system version
+    if(NOT TARGET protobuf::libprotobuf)
+        message(FATAL_ERROR "protobuf::libprotobuf target not found. Ensure Pybind11Protobuf.cmake is included first.")
+    endif()
+
+    # Get protoc executable from the fetched protobuf
+    # When built via FetchContent, protoc is a regular executable target, not imported
+    if(TARGET protoc)
+        # Built as part of this project
+        set(Protobuf_PROTOC_EXECUTABLE $<TARGET_FILE:protoc>)
+    elseif(TARGET protobuf::protoc)
+        # Imported target
+        get_target_property(Protobuf_PROTOC_EXECUTABLE protobuf::protoc IMPORTED_LOCATION)
+    else()
+        message(FATAL_ERROR "protoc executable target not found. Ensure protobuf was fetched with PROTOC binaries enabled.")
+    endif()
 
     # Process each schema file
     set(GENERATED_SOURCES)
