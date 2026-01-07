@@ -329,10 +329,10 @@ mlir::Value MLIRBuilder::getParameter(const std::string &name) {
   throw std::runtime_error("Parameter not found: " + name);
 }
 
-std::string MLIRBuilder::compileFunctionFromDef(const std::string &buffer) {
+void MLIRBuilder::compileFunctionFromDef(const std::string &function_def_bytes) {
   mlir_edsl::FunctionDef func_def;
 
-  if (!func_def.ParseFromString(buffer)) {
+  if (!func_def.ParseFromString(function_def_bytes)) {
     throw std::runtime_error("Failed to parse FunctionDef protobuf");
   }
 
@@ -344,22 +344,16 @@ std::string MLIRBuilder::compileFunctionFromDef(const std::string &buffer) {
 
   // Determine return type from oneof field
   mlir::Type returnType;
-  bool isArrayReturn = false;
-  mlir_edsl::ArrayTypeSpec arrayReturnSpec;  // Store for signature building
-  mlir_edsl::ValueType scalarReturnType;
 
   switch (func_def.return_type_spec_case()) {
     case mlir_edsl::FunctionDef::kScalarReturn:
       // Scalar return type (i32, f32, i1)
-      scalarReturnType = func_def.scalar_return();
-      returnType = protoTypeToMLIRType(scalarReturnType);
+      returnType = protoTypeToMLIRType(func_def.scalar_return());
       break;
 
     case mlir_edsl::FunctionDef::kArrayReturn:
       // Array return type (memref)
-      arrayReturnSpec = func_def.array_return();
-      returnType = arrayTypeSpecToMLIRType(arrayReturnSpec);
-      isArrayReturn = true;
+      returnType = arrayTypeSpecToMLIRType(func_def.array_return());
       break;
 
     case mlir_edsl::FunctionDef::RETURN_TYPE_SPEC_NOT_SET:
@@ -373,25 +367,6 @@ std::string MLIRBuilder::compileFunctionFromDef(const std::string &buffer) {
   createFunction(func_def.name(), params, returnType);
   mlir::Value result = buildFromProtobufNode(func_def.body());
   finalizeFunction(func_def.name(), result);
-
-  // Build FunctionSignature protobuf to return
-  mlir_edsl::FunctionSignature sig;
-  sig.set_name(func_def.name());
-
-  // Add parameter types
-  for (const auto &param : func_def.params()) {
-    sig.add_param_types(param.type());
-  }
-
-  // Set return type (mirror the oneof)
-  if (isArrayReturn) {
-    sig.mutable_array_return()->CopyFrom(arrayReturnSpec);
-  } else {
-    sig.set_scalar_return(scalarReturnType);
-  }
-
-  // Return serialized signature
-  return sig.SerializeAsString();
 }
 
 void MLIRBuilder::createFunction(

@@ -24,8 +24,7 @@ PYBIND11_MODULE(_mlir_backend, m) {
 
         // ==================== CORE COMPILATION ====================
         .def("compile_function", [](mlir_edsl::MLIRBuilder& self, const std::string& function_def_bytes) {
-            std::string result = self.compileFunctionFromDef(function_def_bytes);
-            return py::bytes(result);  // Return as bytes, not str
+            self.compileFunctionFromDef(function_def_bytes);
         },
              py::arg("function_def_bytes"),
              "Compile complete function from protobuf FunctionDef (single buffer)")

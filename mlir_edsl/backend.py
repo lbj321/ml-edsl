@@ -79,11 +79,23 @@ class CppMLIRBackend:
         # Add function body (with SSA value reuse detection)
         func_def.body.CopyFrom(ast_node.to_proto_with_reuse())
 
-        # Serialize and compile (returns FunctionSignature protobuf)
+        # Serialize and compile (errors propagate via exceptions)
         func_def_bytes = func_def.SerializeToString()
-        sig_bytes = self.builder.compile_function(func_def_bytes)
+        self.builder.compile_function(func_def_bytes)
+
+        # Build signature from the func_def we already have
+        sig = ast_pb2.FunctionSignature()
+        sig.name = name
+        sig.param_types.extend([param_type for _, param_type in params])
+
+        # Set return type based on type (mirror the oneof from func_def)
+        if isinstance(return_type, ArrayType):
+            sig.array_return.CopyFrom(func_def.array_return)
+        else:
+            sig.scalar_return = return_type
 
         # Register signature with executor
+        sig_bytes = sig.SerializeToString()
         self.executor.register_function_signature(sig_bytes)
 
     def execute_function(self, name: str, *args) -> Union[int, float, bool]:
