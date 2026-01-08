@@ -8,12 +8,10 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 include(CompilerFlags)
 include(FindMLIR)
 include(MLIRDialects)
-
-# Fetch pybind11_protobuf first - it will provide protobuf
-include(Pybind11Protobuf)
-
-# Now compile protobuf schemas using the fetched protobuf
 include(ProtobufSchemas)
+
+# Find Protocol Buffers
+find_package(Protobuf REQUIRED)
 
 # Build C++ components
 add_subdirectory(cpp)

@@ -160,17 +160,11 @@ fi
 # Generate Python Protocol Buffers code
 echo "📝 Generating Python Protocol Buffers code..."
 cd ..
-# Use the protoc we just built instead of system protoc
-PROTOC_PATH="build/_deps/protobuf-build/protoc"
-if [ -f "$PROTOC_PATH" ]; then
-    $PROTOC_PATH --python_out=mlir_edsl --proto_path=cpp/schemas cpp/schemas/ast.proto
-    if [ $? -eq 0 ]; then
-        echo "✅ Python Protocol Buffers generated successfully"
-    else
-        echo "⚠️  Warning: Failed to generate Python Protocol Buffers"
-    fi
+protoc --python_out=mlir_edsl --proto_path=cpp/schemas cpp/schemas/ast.proto
+if [ $? -eq 0 ]; then
+    echo "✅ Python Protocol Buffers generated successfully"
 else
-    echo "⚠️  Warning: protoc not found at $PROTOC_PATH"
+    echo "⚠️  Warning: Failed to generate Python Protocol Buffers (is protoc installed?)"
 fi
 cd build
 

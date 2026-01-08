@@ -107,10 +107,15 @@ void *MLIRExecutor::compileFunction(const std::string &llvmIR,
   return funcPtr;
 }
 
-void MLIRExecutor::registerFunctionSignature(const mlir_edsl::FunctionSignature &signature) {
-  // No parsing needed - signature is already a protobuf object
+void MLIRExecutor::registerFunctionSignature(const std::string &signature_bytes) {
+  mlir_edsl::FunctionSignature sig;
+
+  if (!sig.ParseFromString(signature_bytes)) {
+    throw std::runtime_error("Failed to parse FunctionSignature protobuf");
+  }
+
   // Store signature by function name
-  signatures[signature.name()] = signature;
+  signatures[sig.name()] = sig;
 }
 
 uintptr_t MLIRExecutor::getFunctionPointer(const std::string &name) {

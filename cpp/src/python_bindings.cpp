@@ -1,10 +1,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include "pybind11_protobuf/native_proto_caster.h"
 #include "mlir_edsl/MLIRBuilder.h"
 #include "mlir_edsl/MLIRExecutor.h"
 #include "mlir/IR/Value.h"
-#include "ast.pb.h"
 
 namespace py = pybind11;
 
@@ -25,9 +23,11 @@ PYBIND11_MODULE(_mlir_backend, m) {
              "Initialize a new MLIR module")
 
         // ==================== CORE COMPILATION ====================
-        .def("compile_function", &mlir_edsl::MLIRBuilder::compileFunctionFromDef,
-             py::arg("func_def"),
-             "Compile complete function from FunctionDef protobuf")
+        .def("compile_function", [](mlir_edsl::MLIRBuilder& self, const std::string& function_def_bytes) {
+            self.compileFunctionFromDef(function_def_bytes);
+        },
+             py::arg("function_def_bytes"),
+             "Compile complete function from protobuf FunctionDef (single buffer)")
 
         // ==================== INSPECTION ====================
         .def("get_mlir_string", &mlir_edsl::MLIRBuilder::getMLIRString,
@@ -51,7 +51,7 @@ PYBIND11_MODULE(_mlir_backend, m) {
              "Compile LLVM IR string to executable function",
              py::return_value_policy::reference)
         .def("register_function_signature", &mlir_edsl::MLIRExecutor::registerFunctionSignature,
-             py::arg("signature"),
+             py::arg("signature_bytes"),
              "Register function signature from FunctionSignature protobuf")
         .def("get_function_pointer", &mlir_edsl::MLIRExecutor::getFunctionPointer,
              py::arg("name"),

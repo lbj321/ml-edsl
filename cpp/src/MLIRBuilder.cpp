@@ -329,8 +329,12 @@ mlir::Value MLIRBuilder::getParameter(const std::string &name) {
   throw std::runtime_error("Parameter not found: " + name);
 }
 
-void MLIRBuilder::compileFunctionFromDef(const mlir_edsl::FunctionDef &func_def) {
-  // No parsing needed - func_def is already a protobuf object
+void MLIRBuilder::compileFunctionFromDef(const std::string &function_def_bytes) {
+  mlir_edsl::FunctionDef func_def;
+
+  if (!func_def.ParseFromString(function_def_bytes)) {
+    throw std::runtime_error("Failed to parse FunctionDef protobuf");
+  }
 
   // Extract parameters
   std::vector<std::pair<std::string, mlir_edsl::ValueType>> params;
