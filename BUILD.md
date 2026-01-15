@@ -17,22 +17,10 @@ sudo apt install -y \
     libxml2-dev
 ```
 
-**Protobuf (optional - Ubuntu 24.04+ recommended):**
+**Protobuf ():**
 ```bash
 sudo apt install libprotobuf-dev protobuf-compiler
 ```
-*If not installed, CMake will download and build protobuf automatically (slow first build).*
-
-## Version Requirements
-
-| Component | Minimum | Recommended |
-|-----------|---------|-------------|
-| Ubuntu | 22.04 LTS | 24.04 LTS |
-| CMake | 3.20 | 3.22+ |
-| LLVM/MLIR | 18.0 | 21.0+ |
-| Python | 3.8 | 3.10+ |
-| Clang | 14 | 16+ |
-| Protobuf | 3.20 | 4.21+ (or auto-fetched 29.2.0) |
 
 ## LLVM/MLIR Build (Required)
 

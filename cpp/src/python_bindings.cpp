@@ -3,6 +3,7 @@
 #include "mlir_edsl/MLIRBuilder.h"
 #include "mlir_edsl/MLIRExecutor.h"
 #include "mlir/IR/Value.h"
+#include "ast.pb.h"
 
 namespace py = pybind11;
 
@@ -24,7 +25,11 @@ PYBIND11_MODULE(_mlir_backend, m) {
 
         // ==================== CORE COMPILATION ====================
         .def("compile_function", [](mlir_edsl::MLIRBuilder& self, const std::string& function_def_bytes) {
-            self.compileFunctionFromDef(function_def_bytes);
+            mlir_edsl::FunctionDef func_def;
+            if (!func_def.ParseFromString(function_def_bytes)) {
+                throw std::runtime_error("Failed to parse FunctionDef protobuf");
+            }
+            self.compileFunctionFromDef(func_def);
         },
              py::arg("function_def_bytes"),
              "Compile complete function from protobuf FunctionDef (single buffer)")
@@ -50,7 +55,13 @@ PYBIND11_MODULE(_mlir_backend, m) {
         .def("compile_function", &mlir_edsl::MLIRExecutor::compileFunction,
              "Compile LLVM IR string to executable function",
              py::return_value_policy::reference)
-        .def("register_function_signature", &mlir_edsl::MLIRExecutor::registerFunctionSignature,
+        .def("register_function_signature", [](mlir_edsl::MLIRExecutor& self, const std::string& signature_bytes) {
+            mlir_edsl::FunctionSignature sig;
+            if (!sig.ParseFromString(signature_bytes)) {
+                throw std::runtime_error("Failed to parse FunctionSignature protobuf");
+            }
+            self.registerFunctionSignature(sig);
+        },
              py::arg("signature_bytes"),
              "Register function signature from FunctionSignature protobuf")
         .def("get_function_pointer", &mlir_edsl::MLIRExecutor::getFunctionPointer,

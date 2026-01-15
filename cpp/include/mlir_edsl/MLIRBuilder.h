@@ -27,6 +27,7 @@ enum ComparisonPredicate : int;
 enum BinaryOpType : int;
 class ASTNode;
 class ArrayTypeSpec;
+class FunctionDef;
 
 class MLIRBuilder {
 public:
@@ -37,8 +38,8 @@ public:
   void initializeModule();
 
   // ==================== CORE API (Exposed to Python) ====================
-  // Main compilation entry point - takes FunctionDef protobuf bytes
-  void compileFunctionFromDef(const std::string &function_def_bytes);
+  // Main compilation entry point - takes FunctionDef protobuf object
+  void compileFunctionFromDef(const mlir_edsl::FunctionDef &func_def);
 
   // ==================== INSPECTION ====================
   std::string getMLIRString();
