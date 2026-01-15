@@ -162,10 +162,7 @@ class ArrayLiteral(Value):
 
         # Serialize each element (with context-aware serialization)
         for elem in self.elements:
-            if context:
-                pb_node.array_literal.elements.append(elem._to_proto_impl(context))
-            else:
-                pb_node.array_literal.elements.append(elem.to_proto())
+            pb_node.array_literal.elements.append(elem._to_proto_impl(context))
 
         return pb_node
 
@@ -265,17 +262,11 @@ class ArrayAccess(Value):
         pb_node = ast_pb2.ASTNode()
 
         # Serialize array (context-aware)
-        if context:
-            pb_node.array_access.array.CopyFrom(self.array._to_proto_impl(context))
-        else:
-            pb_node.array_access.array.CopyFrom(self.array.to_proto())
+        pb_node.array_access.array.CopyFrom(self.array._to_proto_impl(context))
 
         # Serialize all indices using repeated field
         for idx in self.indices:
-            if context:
-                pb_node.array_access.indices.append(idx._to_proto_impl(context))
-            else:
-                pb_node.array_access.indices.append(idx.to_proto())
+            pb_node.array_access.indices.append(idx._to_proto_impl(context))
 
         return pb_node
 
@@ -403,19 +394,12 @@ class ArrayStore(Value):
         pb_node = ast_pb2.ASTNode()
 
         # Serialize array and value (context-aware)
-        if context:
-            pb_node.array_store.array.CopyFrom(self.array._to_proto_impl(context))
-            pb_node.array_store.value.CopyFrom(self.value._to_proto_impl(context))
-        else:
-            pb_node.array_store.array.CopyFrom(self.array.to_proto())
-            pb_node.array_store.value.CopyFrom(self.value.to_proto())
+        pb_node.array_store.array.CopyFrom(self.array._to_proto_impl(context))
+        pb_node.array_store.value.CopyFrom(self.value._to_proto_impl(context))
 
         # Serialize all indices using repeated field
         for idx in self.indices:
-            if context:
-                pb_node.array_store.indices.append(idx._to_proto_impl(context))
-            else:
-                pb_node.array_store.indices.append(idx.to_proto())
+            pb_node.array_store.indices.append(idx._to_proto_impl(context))
 
         return pb_node
 
@@ -536,11 +520,7 @@ class ArrayBinaryOp(Value):
         pb_node.array_binary_op.broadcast = broadcast_map[self._broadcast_mode]
 
         # Context-aware child serialization
-        if context:
-            pb_node.array_binary_op.left.CopyFrom(self.left._to_proto_impl(context))
-            pb_node.array_binary_op.right.CopyFrom(self.right._to_proto_impl(context))
-        else:
-            pb_node.array_binary_op.left.CopyFrom(self.left.to_proto())
-            pb_node.array_binary_op.right.CopyFrom(self.right.to_proto())
+        pb_node.array_binary_op.left.CopyFrom(self.left._to_proto_impl(context))
+        pb_node.array_binary_op.right.CopyFrom(self.right._to_proto_impl(context))
 
         return pb_node

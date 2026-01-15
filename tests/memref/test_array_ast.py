@@ -11,6 +11,7 @@ This test suite validates:
 import pytest
 from mlir_edsl import Array, i32, f32, i1
 from mlir_edsl.ast import ArrayLiteral, ArrayAccess, ArrayStore, Constant
+from mlir_edsl.ast.serialization import SerializationContext
 from mlir_edsl.types import ArrayType, I32, F32, I1
 
 
@@ -346,7 +347,8 @@ class TestArrayProtobufSerialization:
     def test_array_literal_to_proto(self):
         """Test that ArrayLiteral.to_proto() works"""
         arr = ArrayLiteral([1, 2, 3], Array[3, i32])
-        pb = arr.to_proto()
+        context = SerializationContext()
+        pb = arr.to_proto(context)
 
         # Should have array_literal field set
         assert pb.HasField("array_literal")
@@ -363,7 +365,8 @@ class TestArrayProtobufSerialization:
         """Test that ArrayAccess.to_proto() works"""
         arr = ArrayLiteral([1, 2], Array[2, i32])
         access = ArrayAccess(arr, 0)
-        pb = access.to_proto()
+        context = SerializationContext()
+        pb = access.to_proto(context)
 
         # Should have array_access field set
         assert pb.HasField("array_access")
@@ -376,7 +379,8 @@ class TestArrayProtobufSerialization:
         """Test that ArrayStore.to_proto() works"""
         arr = ArrayLiteral([1, 2], Array[2, i32])
         store = ArrayStore(arr, 0, 5)
-        pb = store.to_proto()
+        context = SerializationContext()
+        pb = store.to_proto(context)
 
         # Should have array_store field set
         assert pb.HasField("array_store")
@@ -401,7 +405,8 @@ class TestArrayProtobufSerialization:
         access = ArrayAccess(arr, 1)
 
         # Serialize the access (which contains the array literal)
-        pb = access.to_proto()
+        context = SerializationContext()
+        pb = access.to_proto(context)
 
         assert pb.HasField("array_access")
         # The nested array should be serialized

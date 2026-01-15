@@ -13,6 +13,7 @@ import pytest
 from mlir_edsl import ml_function, Array
 from mlir_edsl import i32, f32, i1
 from mlir_edsl.ast import ArrayLiteral, ArrayAccess, ArrayStore
+from mlir_edsl.ast.serialization import SerializationContext
 from mlir_edsl.types import ArrayType, I32, F32
 from mlir_edsl.backend import HAS_CPP_BACKEND
 from tests.test_base import MLIRTestBase
@@ -220,7 +221,8 @@ class TestArray2DProtobufSerialization(MLIRTestBase):
             [3, 4]
         ], Array[2, 2, i32])
 
-        pb = arr.to_proto()
+        context = SerializationContext()
+        pb = arr.to_proto(context)
 
         assert pb.HasField("array_literal")
         # Check shape is [2, 2]
@@ -236,7 +238,8 @@ class TestArray2DProtobufSerialization(MLIRTestBase):
         arr = ArrayLiteral([[1, 2], [3, 4]], Array[2, 2, i32])
         access = ArrayAccess(arr, (1, 0))
 
-        pb = access.to_proto()
+        context = SerializationContext()
+        pb = access.to_proto(context)
 
         assert pb.HasField("array_access")
         # Check indices count
@@ -247,7 +250,8 @@ class TestArray2DProtobufSerialization(MLIRTestBase):
         arr = ArrayLiteral([[1, 2], [3, 4]], Array[2, 2, i32])
         store = ArrayStore(arr, (0, 1), 5)
 
-        pb = store.to_proto()
+        context = SerializationContext()
+        pb = store.to_proto(context)
 
         assert pb.HasField("array_store")
         assert len(pb.array_store.indices) == 2

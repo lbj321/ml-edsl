@@ -79,13 +79,8 @@ class BinaryOp(Value):
         pb_node.binary_op.result_type = self.infer_type()
 
         # Context-aware child serialization
-        if context:
-            pb_node.binary_op.left.CopyFrom(self.left._to_proto_impl(context))
-            pb_node.binary_op.right.CopyFrom(self.right._to_proto_impl(context))
-        else:
-            # Backward compatibility: no context = old behavior
-            pb_node.binary_op.left.CopyFrom(self.left.to_proto())
-            pb_node.binary_op.right.CopyFrom(self.right.to_proto())
+        pb_node.binary_op.left.CopyFrom(self.left._to_proto_impl(context))
+        pb_node.binary_op.right.CopyFrom(self.right._to_proto_impl(context))
 
         return pb_node
 
@@ -129,12 +124,8 @@ class CompareOp(Value):
         pb_node.compare_op.operand_type = self._operand_type
 
         # Context-aware child serialization
-        if context:
-            pb_node.compare_op.left.CopyFrom(self.left._to_proto_impl(context))
-            pb_node.compare_op.right.CopyFrom(self.right._to_proto_impl(context))
-        else:
-            pb_node.compare_op.left.CopyFrom(self.left.to_proto())
-            pb_node.compare_op.right.CopyFrom(self.right.to_proto())
+        pb_node.compare_op.left.CopyFrom(self.left._to_proto_impl(context))
+        pb_node.compare_op.right.CopyFrom(self.right._to_proto_impl(context))
 
         return pb_node
 
@@ -167,10 +158,7 @@ class CastOp(Value):
         pb_node = ast_pb2.ASTNode()
 
         # Context-aware child serialization
-        if context:
-            pb_node.cast_op.value.CopyFrom(self.value._to_proto_impl(context))
-        else:
-            pb_node.cast_op.value.CopyFrom(self.value.to_proto())
+        pb_node.cast_op.value.CopyFrom(self.value._to_proto_impl(context))
 
         pb_node.cast_op.target_type = self.target_type
         return pb_node

@@ -49,14 +49,9 @@ class IfOp(Value):
         pb_node = ast_pb2.ASTNode()
 
         # Context-aware child serialization
-        if context:
-            pb_node.if_op.condition.CopyFrom(self.condition._to_proto_impl(context))
-            pb_node.if_op.then_value.CopyFrom(self.then_value._to_proto_impl(context))
-            pb_node.if_op.else_value.CopyFrom(self.else_value._to_proto_impl(context))
-        else:
-            pb_node.if_op.condition.CopyFrom(self.condition.to_proto())
-            pb_node.if_op.then_value.CopyFrom(self.then_value.to_proto())
-            pb_node.if_op.else_value.CopyFrom(self.else_value.to_proto())
+        pb_node.if_op.condition.CopyFrom(self.condition._to_proto_impl(context))
+        pb_node.if_op.then_value.CopyFrom(self.then_value._to_proto_impl(context))
+        pb_node.if_op.else_value.CopyFrom(self.else_value._to_proto_impl(context))
 
         pb_node.if_op.result_type = self._inferred_type
         return pb_node
@@ -126,16 +121,10 @@ class ForLoopOp(Value):
         pb_node = ast_pb2.ASTNode()
 
         # Context-aware child serialization
-        if context:
-            pb_node.for_loop_op.start.CopyFrom(self.start._to_proto_impl(context))
-            pb_node.for_loop_op.end.CopyFrom(self.end._to_proto_impl(context))
-            pb_node.for_loop_op.step.CopyFrom(self.step._to_proto_impl(context))
-            pb_node.for_loop_op.init_value.CopyFrom(self.init_value._to_proto_impl(context))
-        else:
-            pb_node.for_loop_op.start.CopyFrom(self.start.to_proto())
-            pb_node.for_loop_op.end.CopyFrom(self.end.to_proto())
-            pb_node.for_loop_op.step.CopyFrom(self.step.to_proto())
-            pb_node.for_loop_op.init_value.CopyFrom(self.init_value.to_proto())
+        pb_node.for_loop_op.start.CopyFrom(self.start._to_proto_impl(context))
+        pb_node.for_loop_op.end.CopyFrom(self.end._to_proto_impl(context))
+        pb_node.for_loop_op.step.CopyFrom(self.step._to_proto_impl(context))
+        pb_node.for_loop_op.init_value.CopyFrom(self.init_value._to_proto_impl(context))
 
         pb_node.for_loop_op.operation = _binary_op_to_proto(self.operation)
         pb_node.for_loop_op.result_type = self._inferred_type
@@ -194,12 +183,8 @@ class WhileLoopOp(Value):
         pb_node = ast_pb2.ASTNode()
 
         # Context-aware child serialization
-        if context:
-            pb_node.while_loop_op.init_value.CopyFrom(self.init_value._to_proto_impl(context))
-            pb_node.while_loop_op.target.CopyFrom(self.target._to_proto_impl(context))
-        else:
-            pb_node.while_loop_op.init_value.CopyFrom(self.init_value.to_proto())
-            pb_node.while_loop_op.target.CopyFrom(self.target.to_proto())
+        pb_node.while_loop_op.init_value.CopyFrom(self.init_value._to_proto_impl(context))
+        pb_node.while_loop_op.target.CopyFrom(self.target._to_proto_impl(context))
 
         pb_node.while_loop_op.operation = _binary_op_to_proto(self.operation)
         pb_node.while_loop_op.predicate = _predicate_to_proto(self.predicate)

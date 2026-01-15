@@ -68,11 +68,7 @@ class CallOp(Value):
             pb_node.call_op.scalar_return = self.return_type
 
         # Context-aware child serialization
-        if context:
-            for arg in self.args:
-                pb_node.call_op.args.append(arg._to_proto_impl(context))
-        else:
-            for arg in self.args:
-                pb_node.call_op.args.append(arg.to_proto())
+        for arg in self.args:
+            pb_node.call_op.args.append(arg._to_proto_impl(context))
 
         return pb_node
