@@ -3,7 +3,7 @@
 from typing import Callable, Any, Union, Tuple, Dict, get_type_hints
 from .backend import get_backend
 from .ast import Parameter, Constant, BinaryOp, CallOp, CompareOp, IfOp
-from .types import I32, F32, I1, TypeSystem, ArrayType
+from .types import Type, ScalarType, ArrayType, TypeSystem, i32, f32, i1
 import inspect
 
 # Global flag to track symbolic execution context
@@ -169,8 +169,8 @@ class MLFunction:
 
         return parameter_map, runtime_values
 
-    def _get_return_type(self) -> Union[int, ArrayType]:
-        """Get return type enum or ArrayType from type hints"""
+    def _get_return_type(self) -> Type:
+        """Get return type from type hints"""
         type_hints = self._get_type_hints()
         return TypeSystem.parse_type_hint(type_hints['return'], "return type")
     

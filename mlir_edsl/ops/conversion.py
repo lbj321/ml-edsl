@@ -10,7 +10,7 @@ def cast(value: Union[int, float, Value], target_type) -> CastOp:
 
     Args:
         value: Value to cast (int, float, or AST Value)
-        target_type: Target MLIR type (i32, f32, i1 object or I32, F32, I1 enum)
+        target_type: Target MLIR type (i32, f32, i1)
 
     Returns:
         CastOp representing the explicit conversion
@@ -24,9 +24,6 @@ def cast(value: Union[int, float, Value], target_type) -> CastOp:
     if isinstance(value, (int, float)):
         value = Constant(value)
 
-    if isinstance(target_type, ScalarType):
-        target_type = target_type.enum_value
-
     return CastOp(value, target_type)
 
 
@@ -36,14 +33,11 @@ def call(func_name: str, args: list[Union[int, float, Value]], return_type) -> C
     Args:
         func_name: Name of the function to call
         args: List of arguments (can be integers, floats, or Values)
-        return_type: Expected return type (I32, F32, or I1 enum) - required
+        return_type: Expected return type (i32, f32, i1) - required
 
     Returns:
         CallOp representing the function call
     """
-    if isinstance(return_type, ScalarType):
-        return_type = return_type.enum_value
-
     # Convert primitive types to Constants
     converted_args = []
     for arg in args:

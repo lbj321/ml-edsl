@@ -2,7 +2,7 @@
 import ctypes
 from typing import Union
 from .ast import Value
-from .types import TYPE_TO_CTYPES, ArrayType, type_to_proto, I32, F32, I1
+from .types import Type, ArrayType, type_to_proto, TYPE_TO_CTYPES
 
 try:
     from . import _mlir_backend
@@ -40,13 +40,13 @@ class CppMLIRBackend:
 
     # ==================== CORE COMPILATION ====================
     def compile_function_from_ast(self, name: str, params: list,
-                                   return_type: Union[int, ArrayType], ast_node: Value) -> None:
+                                   return_type: Type, ast_node: Value) -> None:
         """Compile complete function from AST - single protobuf entry point
 
         Args:
             name: Function name
-            params: List of (param_name, type_spec) tuples where type_spec is int enum or ArrayType
-            return_type: int enum (I32/F32/I1) OR ArrayType instance
+            params: List of (param_name, type_spec) tuples where type_spec is Type
+            return_type: Type instance (ScalarType or ArrayType)
             ast_node: Root AST node to compile
         """
         if not HAS_PROTOBUF:
@@ -120,14 +120,8 @@ class CppMLIRBackend:
 
             # Determine return type from TypeSpec
             if sig.return_type.HasField('scalar'):
-                # Map ScalarTypeSpec.Kind to our enum values
-                scalar_kind = sig.return_type.scalar.kind
-                kind_to_enum = {
-                    ast_pb2.ScalarTypeSpec.I32: I32,
-                    ast_pb2.ScalarTypeSpec.F32: F32,
-                    ast_pb2.ScalarTypeSpec.I1: I1,
-                }
-                c_return_type = TYPE_TO_CTYPES[kind_to_enum[scalar_kind]]
+                # TYPE_TO_CTYPES uses ScalarTypeSpec.Kind directly
+                c_return_type = TYPE_TO_CTYPES[sig.return_type.scalar.kind]
             elif sig.return_type.HasField('memref'):
                 raise RuntimeError(
                     f"Cannot execute function '{name}' from Python: it returns an array type.\n"
@@ -139,14 +133,9 @@ class CppMLIRBackend:
 
             # Build ctypes function signature from TypeSpec param_types
             c_param_types = []
-            kind_to_enum = {
-                ast_pb2.ScalarTypeSpec.I32: I32,
-                ast_pb2.ScalarTypeSpec.F32: F32,
-                ast_pb2.ScalarTypeSpec.I1: I1,
-            }
             for pt in sig.param_types:
                 if pt.HasField('scalar'):
-                    c_param_types.append(TYPE_TO_CTYPES[kind_to_enum[pt.scalar.kind]])
+                    c_param_types.append(TYPE_TO_CTYPES[pt.scalar.kind])
                 else:
                     raise RuntimeError("Array parameters not yet supported for JIT execution")
 

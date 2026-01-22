@@ -1,7 +1,8 @@
 """Control flow AST nodes: IfOp, ForLoopOp, WhileLoopOp"""
 
+from typing import TYPE_CHECKING
 from ..base import Value
-from ...types import I32, F32, I1, is_numeric_type, is_integer_type, type_to_proto
+from ...types import Type, i32, f32, i1
 
 # Import generated protobuf code
 try:
@@ -10,6 +11,9 @@ except ImportError:
     ast_pb2 = None
 
 from ..serialization import SerializationContext, _binary_op_to_proto, _predicate_to_proto
+
+if TYPE_CHECKING:
+    from ...types import Type
 
 
 class IfOp(Value):
@@ -22,8 +26,9 @@ class IfOp(Value):
         self.else_value = else_value
 
         # Type checking at construction
-        if condition.infer_type() != I1:
-            raise TypeError(f"If condition must be bool (I1), got {condition.infer_type()}")
+        cond_type = condition.infer_type()
+        if not cond_type.is_boolean():
+            raise TypeError(f"If condition must be bool (i1), got {cond_type}")
 
         then_type = then_value.infer_type()
         else_type = else_value.infer_type()
@@ -35,7 +40,7 @@ class IfOp(Value):
 
         self._inferred_type = then_type
 
-    def infer_type(self) -> int:
+    def infer_type(self) -> Type:
         """Return the type of both branches (guaranteed same)"""
         return self._inferred_type
 
@@ -53,15 +58,15 @@ class IfOp(Value):
         pb_node.if_op.then_value.CopyFrom(self.then_value._to_proto_impl(context))
         pb_node.if_op.else_value.CopyFrom(self.else_value._to_proto_impl(context))
 
-        pb_node.if_op.result_type.CopyFrom(type_to_proto(self._inferred_type))
+        pb_node.if_op.result_type.CopyFrom(self._inferred_type.to_proto())
         return pb_node
 
 
 class ForLoopOp(Value):
     """Represents a for loop operation (scf.for) - STRICT TYPE ENFORCEMENT
 
-    Loop bounds (start, end, step) must all be integers (I32).
-    Accumulator (init_value) must all be integers (I32).
+    Loop bounds (start, end, step) must all be integers (i32).
+    Accumulator (init_value) must be integer (i32).
 
     Represents: for(i = start; i < end; i += step) { accumulator = accumulator op i }
 
@@ -92,22 +97,22 @@ class ForLoopOp(Value):
             )
 
         # STRICT: Loop bounds must be integers (scf.for requires this)
-        if not is_integer_type(start_type):
+        if not start_type.is_integer():
             raise TypeError(
-                f"ForLoopOp requires integer loop bounds (I32). "
+                f"ForLoopOp requires integer loop bounds (i32). "
                 f"Got: {start_type}. Use integer indices with float accumulator if needed."
             )
 
-        # STRICT: Accumulator must be numeric
-        if not is_integer_type(init_type):
+        # STRICT: Accumulator must be integer
+        if not init_type.is_integer():
             raise TypeError(
-                f"ForLoopOp accumulator must be numeric (I32). Got: {init_type}"
+                f"ForLoopOp accumulator must be integer (i32). Got: {init_type}"
             )
 
         # Result type matches the accumulator type
         self._inferred_type = init_type
 
-    def infer_type(self) -> int:
+    def infer_type(self) -> Type:
         """Return the loop result type (same as accumulator)"""
         return self._inferred_type
 
@@ -127,7 +132,7 @@ class ForLoopOp(Value):
         pb_node.for_loop_op.init_value.CopyFrom(self.init_value._to_proto_impl(context))
 
         pb_node.for_loop_op.operation = _binary_op_to_proto(self.operation)
-        pb_node.for_loop_op.result_type.CopyFrom(type_to_proto(self._inferred_type))
+        pb_node.for_loop_op.result_type.CopyFrom(self._inferred_type.to_proto())
 
         return pb_node
 
@@ -136,7 +141,7 @@ class WhileLoopOp(Value):
     """Represents a while loop operation (scf.while) - STRICT TYPE ENFORCEMENT
 
     init_value and target must be the same type.
-    Supports I32 or F32 (not I1).
+    Supports i32 or f32 (not i1).
 
     Represents: while(current predicate target) { current = current op constant }
     """
@@ -160,16 +165,16 @@ class WhileLoopOp(Value):
                 f"Got: init_value={init_type}, target={target_type}"
             )
 
-        # Only allow I32 or F32
-        if init_type not in (I32, F32):
+        # Only allow numeric types (i32 or f32)
+        if not init_type.is_numeric():
             raise TypeError(
-                f"WhileLoopOp only supports I32 or F32, got {init_type}"
+                f"WhileLoopOp only supports numeric types (i32, f32), got {init_type}"
             )
 
         # Result type is trivial - same as inputs
         self._inferred_type = init_type
 
-    def infer_type(self) -> int:
+    def infer_type(self) -> Type:
         """Return the loop result type (same as inputs)"""
         return self._inferred_type
 
@@ -188,6 +193,6 @@ class WhileLoopOp(Value):
 
         pb_node.while_loop_op.operation = _binary_op_to_proto(self.operation)
         pb_node.while_loop_op.predicate = _predicate_to_proto(self.predicate)
-        pb_node.while_loop_op.result_type.CopyFrom(type_to_proto(self._inferred_type))
+        pb_node.while_loop_op.result_type.CopyFrom(self._inferred_type.to_proto())
 
         return pb_node

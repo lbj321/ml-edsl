@@ -1,7 +1,8 @@
 """Function-related AST nodes: Parameter, CallOp"""
 
+from typing import TYPE_CHECKING
 from ..base import Value
-from ...types import type_to_proto
+from ...types import Type
 
 # Import generated protobuf code
 try:
@@ -11,16 +12,19 @@ except ImportError:
 
 from ..serialization import SerializationContext
 
+if TYPE_CHECKING:
+    from ...types import Type
+
 
 class Parameter(Value):
     """Represents a named parameter"""
 
-    def __init__(self, name: str, value_type):
+    def __init__(self, name: str, value_type: Type):
         super().__init__()
         self.name = name
         self.value_type = value_type
 
-    def infer_type(self) -> int:
+    def infer_type(self) -> Type:
         """Parameters have declared types"""
         return self.value_type
 
@@ -30,21 +34,20 @@ class Parameter(Value):
 
         pb_node = ast_pb2.ASTNode()
         pb_node.parameter.name = self.name
-        pb_node.parameter.type.CopyFrom(type_to_proto(self.value_type))
-        # Value fields are unused by C++ backend (uses parameterMap instead)
+        pb_node.parameter.type.CopyFrom(self.value_type.to_proto())
         return pb_node
 
 
 class CallOp(Value):
     """Represents a function call operation"""
 
-    def __init__(self, func_name: str, args: list[Value], return_type):
+    def __init__(self, func_name: str, args: list[Value], return_type: Type):
         super().__init__()
         self.func_name = func_name
         self.args = args
         self.return_type = return_type
 
-    def infer_type(self) -> int:
+    def infer_type(self) -> Type:
         """Return type is explicitly declared"""
         return self.return_type
 
@@ -58,8 +61,8 @@ class CallOp(Value):
         pb_node = ast_pb2.ASTNode()
         pb_node.call_op.func_name = self.func_name
 
-        # Set return type using unified TypeSpec
-        pb_node.call_op.return_type.CopyFrom(type_to_proto(self.return_type))
+        # Set return type using TypeSpec
+        pb_node.call_op.return_type.CopyFrom(self.return_type.to_proto())
 
         # Context-aware child serialization
         for arg in self.args:

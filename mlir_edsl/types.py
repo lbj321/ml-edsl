@@ -169,10 +169,10 @@ i32 = ScalarType(ScalarType.I32)
 f32 = ScalarType(ScalarType.F32)
 i1 = ScalarType(ScalarType.I1)
 
-# Legacy enum aliases (for backward compatibility during migration)
-I32 = ScalarType.I32
-F32 = ScalarType.F32
-I1 = ScalarType.I1
+# Legacy aliases (for backward compatibility - now point to ScalarType singletons)
+I32 = i32
+F32 = f32
+I1 = i1
 
 
 # ============================================================================
@@ -533,38 +533,8 @@ class TypeSystem:
 
 
 # ============================================================================
-# LEGACY HELPER FUNCTIONS (Backward compatibility during migration)
+# LEGACY HELPER FUNCTIONS (Used internally by TypeSystem)
 # ============================================================================
-# These functions accept both int (enum) and Type objects.
-# Prefer using Type methods directly: t.is_integer(), t.is_float(), etc.
-
-def is_integer_type(t) -> bool:
-    """Check if type is integer. Works with int enum or Type object."""
-    if isinstance(t, Type):
-        return t.is_integer()
-    return t == ScalarType.I32
-
-
-def is_float_type(t) -> bool:
-    """Check if type is float. Works with int enum or Type object."""
-    if isinstance(t, Type):
-        return t.is_float()
-    return t == ScalarType.F32
-
-
-def is_numeric_type(t) -> bool:
-    """Check if type is numeric. Works with int enum or Type object."""
-    if isinstance(t, Type):
-        return t.is_numeric()
-    return t in (ScalarType.I32, ScalarType.F32)
-
-
-def is_boolean_type(t) -> bool:
-    """Check if type is boolean. Works with int enum or Type object."""
-    if isinstance(t, Type):
-        return t.is_boolean()
-    return t == ScalarType.I1
-
 
 def type_to_string(t) -> str:
     """Convert type to string. Works with int enum or Type object."""
@@ -597,18 +567,6 @@ def type_to_proto(t: Type) -> ast_pb2.TypeSpec:
         return ts
 
     raise TypeError(f"Cannot convert to TypeSpec: {t}")
-
-
-def scalar_type_to_proto(kind: int) -> ast_pb2.TypeSpec:
-    """Convert scalar enum to TypeSpec. Legacy function for backward compatibility."""
-    ts = ast_pb2.TypeSpec()
-    ts.scalar.kind = kind
-    return ts
-
-
-def array_type_to_proto(array_type: ArrayType) -> ast_pb2.TypeSpec:
-    """Convert ArrayType to TypeSpec. Legacy function for backward compatibility."""
-    return array_type.to_proto()
 
 
 # ============================================================================

@@ -12,7 +12,7 @@ import pytest
 from mlir_edsl import Array, i32, f32, i1
 from mlir_edsl.ast import ArrayLiteral, ArrayAccess, ArrayStore, Constant
 from mlir_edsl.ast.serialization import SerializationContext
-from mlir_edsl.types import ArrayType, I32, F32, I1
+from mlir_edsl.types import ArrayType, ScalarType, I32, F32, I1
 
 
 # ==================== ARRAY LITERAL CREATION ====================
@@ -145,7 +145,7 @@ class TestArrayAccess:
         access = ArrayAccess(arr, 0)
 
         inferred = access.infer_type()
-        assert isinstance(inferred, int)  # Returns scalar enum, not ArrayType
+        assert isinstance(inferred, ScalarType)  # Returns ScalarType, not ArrayType
         assert inferred == I32
 
     def test_array_access_f32_array_returns_f32(self):

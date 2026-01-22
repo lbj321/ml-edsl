@@ -1,8 +1,8 @@
 """Array AST nodes: ArrayLiteral, ArrayAccess, ArrayStore, ArrayBinaryOp"""
 
-from typing import Union
+from typing import TYPE_CHECKING
 from ..base import Value
-from ...types import I32, F32, I1, ArrayType, type_to_proto, array_type_to_proto, scalar_type_to_proto
+from ...types import Type, ScalarType, ArrayType, i32, f32, i1
 
 # Import generated protobuf code
 try:
@@ -11,6 +11,9 @@ except ImportError:
     ast_pb2 = None
 
 from ..serialization import SerializationContext, _binary_op_to_proto
+
+if TYPE_CHECKING:
+    from ...types import Type
 
 
 class ArrayLiteral(Value):
@@ -92,7 +95,7 @@ class ArrayLiteral(Value):
 
     def _validate_element_types(self):
         """Ensure all elements match the declared element type (strict!)"""
-        expected_enum = self.array_type.element_enum
+        expected_type = self.array_type.element_type
 
         for i, elem in enumerate(self.elements):
             # Convert Python literals to AST nodes if needed
@@ -109,11 +112,11 @@ class ArrayLiteral(Value):
                     f"Nested arrays not supported yet."
                 )
 
-            if elem_type != expected_enum:
+            if elem_type != expected_type:
                 raise TypeError(
                     f"Array element type mismatch at index {i}: "
-                    f"expected {self.array_type.element_type.name}, "
-                    f"got {self._enum_to_name(elem_type)}. "
+                    f"expected {expected_type}, "
+                    f"got {elem_type}. "
                     f"Use cast() for explicit type conversion."
                 )
 
@@ -128,21 +131,17 @@ class ArrayLiteral(Value):
         # Convert Python literals
         if isinstance(elem, bool):
             # Must check bool before int (bool is subclass of int)
-            return Constant(elem, I1)
+            return Constant(elem, i1)
         elif isinstance(elem, int):
-            return Constant(elem, I32)
+            return Constant(elem, i32)
         elif isinstance(elem, float):
-            return Constant(elem, F32)
+            return Constant(elem, f32)
         else:
             raise TypeError(f"Invalid array element: {elem}")
 
-    def _enum_to_name(self, enum_val):
-        """Helper: convert enum to readable name"""
-        return {I32: "i32", F32: "f32", I1: "i1"}.get(enum_val, f"unknown({enum_val})")
-
-    def infer_type(self) -> Union[int, ArrayType]:
+    def infer_type(self) -> Type:
         """ArrayLiteral returns its full ArrayType"""
-        return self.array_type  # Returns ArrayType instance, not int!
+        return self.array_type
 
     def get_children(self) -> list['Value']:
         """Return element nodes for serialization traversal"""
@@ -155,8 +154,8 @@ class ArrayLiteral(Value):
 
         pb_node = ast_pb2.ASTNode()
 
-        # Set array type using new TypeSpec with memref
-        pb_node.array_literal.type.CopyFrom(array_type_to_proto(self.array_type))
+        # Set array type using TypeSpec
+        pb_node.array_literal.type.CopyFrom(self.array_type.to_proto())
 
         # Serialize each element (with context-aware serialization)
         for elem in self.elements:
@@ -199,7 +198,7 @@ class ArrayAccess(Value):
         result = []
         for idx in indices:
             if isinstance(idx, int):
-                result.append(Constant(idx, I32))
+                result.append(Constant(idx, i32))
             elif isinstance(idx, Value):
                 result.append(idx)
             else:
@@ -214,7 +213,7 @@ class ArrayAccess(Value):
         if not isinstance(array_type, ArrayType):
             raise TypeError(
                 f"Cannot index into non-array type. "
-                f"Expected array, got {self._type_to_str(array_type)}"
+                f"Expected array, got {array_type}"
             )
 
         # Check that number of indices matches array dimensions
@@ -228,25 +227,18 @@ class ArrayAccess(Value):
         # Check that all indices are i32
         for i, idx in enumerate(self.indices):
             idx_type = idx.infer_type()
-            if isinstance(idx_type, ArrayType) or idx_type != I32:
+            if not (isinstance(idx_type, ScalarType) and idx_type.is_integer()):
                 raise TypeError(
-                    f"Array index {i} must be i32, got {self._type_to_str(idx_type)}. "
+                    f"Array index {i} must be i32, got {idx_type}. "
                     f"Use cast() to convert to i32."
                 )
 
         # Store the array type for infer_type()
         self._array_type = array_type
 
-    def _type_to_str(self, typ):
-        """Helper: convert type to readable string"""
-        if isinstance(typ, ArrayType):
-            return repr(typ)
-        return {I32: "i32", F32: "f32", I1: "i1"}.get(typ, f"unknown({typ})")
-
-    def infer_type(self) -> Union[int, ArrayType]:
-        """Array access returns the element type (scalar enum)"""
-        # If we index into Array[10, i32], we get back i32
-        return self._array_type.element_enum  # Returns I32/F32/I1 (int)
+    def infer_type(self) -> Type:
+        """Array access returns the element type (ScalarType)"""
+        return self._array_type.element_type
 
     def get_children(self) -> list['Value']:
         """Return child nodes"""
@@ -267,7 +259,7 @@ class ArrayAccess(Value):
             pb_node.array_access.indices.append(idx._to_proto_impl(context))
 
         # Set result type (element type of the array)
-        pb_node.array_access.result_type.CopyFrom(scalar_type_to_proto(self._array_type.element_enum))
+        pb_node.array_access.result_type.CopyFrom(self._array_type.element_type.to_proto())
 
         return pb_node
 
@@ -293,11 +285,11 @@ class ArrayStore(Value):
         from .scalars import Constant
         if isinstance(value, bool):
             # Must check bool before int (bool is subclass of int)
-            self.value = Constant(value, I1)
+            self.value = Constant(value, i1)
         elif isinstance(value, int):
-            self.value = Constant(value, I32)
+            self.value = Constant(value, i32)
         elif isinstance(value, float):
-            self.value = Constant(value, F32)
+            self.value = Constant(value, f32)
         elif isinstance(value, Value):
             self.value = value
         else:
@@ -320,7 +312,7 @@ class ArrayStore(Value):
         result = []
         for idx in indices:
             if isinstance(idx, int):
-                result.append(Constant(idx, I32))
+                result.append(Constant(idx, i32))
             elif isinstance(idx, Value):
                 result.append(idx)
             else:
@@ -334,7 +326,7 @@ class ArrayStore(Value):
         array_type = self.array.infer_type()
         if not isinstance(array_type, ArrayType):
             raise TypeError(
-                f"Cannot use []= on non-array type: {self._type_to_str(array_type)}"
+                f"Cannot use []= on non-array type: {array_type}"
             )
 
         # Check that number of indices matches array dimensions
@@ -348,38 +340,32 @@ class ArrayStore(Value):
         # Check that all indices are i32
         for i, idx in enumerate(self.indices):
             idx_type = idx.infer_type()
-            if isinstance(idx_type, ArrayType) or idx_type != I32:
+            if not (isinstance(idx_type, ScalarType) and idx_type.is_integer()):
                 raise TypeError(
-                    f"Array index {i} must be i32, got {self._type_to_str(idx_type)}"
+                    f"Array index {i} must be i32, got {idx_type}"
                 )
 
         # Check value type matches array element type (STRICT!)
-        expected_enum = array_type.element_enum
+        expected_type = array_type.element_type
         actual_type = self.value.infer_type()
 
         if isinstance(actual_type, ArrayType):
             raise TypeError(
                 f"Cannot store array into array element. "
-                f"Expected {array_type.element_type.name}, got {actual_type}"
+                f"Expected {expected_type}, got {actual_type}"
             )
 
-        if actual_type != expected_enum:
+        if actual_type != expected_type:
             raise TypeError(
-                f"Cannot store {self._type_to_str(actual_type)} into "
-                f"Array[..., {array_type.element_type.name}]. "
+                f"Cannot store {actual_type} into "
+                f"Array[..., {expected_type}]. "
                 f"Use cast() for explicit conversion."
             )
 
         # Store array type for later
         self._array_type = array_type
 
-    def _type_to_str(self, typ):
-        """Helper: convert type to readable string"""
-        if isinstance(typ, ArrayType):
-            return repr(typ)
-        return {I32: "i32", F32: "f32", I1: "i1"}.get(typ, f"unknown({typ})")
-
-    def infer_type(self) -> Union[int, ArrayType]:
+    def infer_type(self) -> Type:
         """Store doesn't produce a value, but return array type for consistency"""
         return self._array_type
 
@@ -403,7 +389,7 @@ class ArrayStore(Value):
             pb_node.array_store.indices.append(idx._to_proto_impl(context))
 
         # Set result type (array type)
-        pb_node.array_store.result_type.CopyFrom(array_type_to_proto(self._array_type))
+        pb_node.array_store.result_type.CopyFrom(self._array_type.to_proto())
 
         return pb_node
 
@@ -448,11 +434,11 @@ class ArrayBinaryOp(Value):
                     f"  Left:  {left_type} (shape {left_type.shape})\n"
                     f"  Right: {right_type} (shape {right_type.shape})"
                 )
-            if left_type.element_enum != right_type.element_enum:
+            if left_type.element_type != right_type.element_type:
                 raise TypeError(
                     f"Array element types must match for element-wise {self.op}.\n"
-                    f"  Left:  {left_type.element_type.name}\n"
-                    f"  Right: {right_type.element_type.name}\n"
+                    f"  Left:  {left_type.element_type}\n"
+                    f"  Right: {right_type.element_type}\n"
                     f"  Hint: Use cast() for explicit type conversion"
                 )
             self._result_type = left_type
@@ -460,11 +446,11 @@ class ArrayBinaryOp(Value):
 
         elif left_is_array and not right_is_array:
             # ARRAY + SCALAR: Validate scalar type matches array element type
-            if right_type != left_type.element_enum:
+            if right_type != left_type.element_type:
                 raise TypeError(
                     f"Scalar type must match array element type.\n"
-                    f"  Array element type: {left_type.element_type.name}\n"
-                    f"  Scalar type: {self._enum_to_name(right_type)}\n"
+                    f"  Array element type: {left_type.element_type}\n"
+                    f"  Scalar type: {right_type}\n"
                     f"  Use cast() for explicit conversion"
                 )
             self._result_type = left_type
@@ -472,11 +458,11 @@ class ArrayBinaryOp(Value):
 
         elif not left_is_array and right_is_array:
             # SCALAR + ARRAY: Validate scalar type matches array element type
-            if left_type != right_type.element_enum:
+            if left_type != right_type.element_type:
                 raise TypeError(
                     f"Scalar type must match array element type.\n"
-                    f"  Scalar type: {self._enum_to_name(left_type)}\n"
-                    f"  Array element type: {right_type.element_type.name}\n"
+                    f"  Scalar type: {left_type}\n"
+                    f"  Array element type: {right_type.element_type}\n"
                     f"  Use cast() for explicit conversion"
                 )
             self._result_type = right_type
@@ -489,11 +475,7 @@ class ArrayBinaryOp(Value):
                 f"For scalar operations, use BinaryOp instead."
             )
 
-    def _enum_to_name(self, enum_val):
-        """Helper: convert enum to readable name"""
-        return {I32: "i32", F32: "f32", I1: "i1"}.get(enum_val, f"unknown({enum_val})")
-
-    def infer_type(self) -> ArrayType:
+    def infer_type(self) -> Type:
         """Element-wise operations preserve array type"""
         return self._result_type
 
@@ -508,8 +490,8 @@ class ArrayBinaryOp(Value):
         pb_node = ast_pb2.ASTNode()
         pb_node.array_binary_op.op_type = _binary_op_to_proto(self.op)
 
-        # Set result type using new TypeSpec with memref
-        pb_node.array_binary_op.result_type.CopyFrom(array_type_to_proto(self._result_type))
+        # Set result type using TypeSpec
+        pb_node.array_binary_op.result_type.CopyFrom(self._result_type.to_proto())
 
         # Set broadcast mode
         broadcast_map = {

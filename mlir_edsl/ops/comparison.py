@@ -2,7 +2,6 @@
 
 from typing import Union
 from ..ast import CompareOp, Constant, Value
-from ..types import F32
 
 
 def _infer_predicate(base: str, left_type, right_type) -> str:
@@ -23,7 +22,7 @@ def _infer_predicate(base: str, left_type, right_type) -> str:
     }
 
     float_pred, int_pred = predicates[base]
-    is_float = (left_type == F32 or right_type == F32)
+    is_float = left_type.is_float() or right_type.is_float()
     return float_pred if is_float else int_pred
 
 
