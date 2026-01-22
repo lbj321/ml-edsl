@@ -22,11 +22,9 @@ class MemRefBuilder;
 namespace mlir_edsl {
 
 // Forward declarations for protobuf types
-enum ValueType : int;
 enum ComparisonPredicate : int;
 enum BinaryOpType : int;
 class ASTNode;
-class ArrayTypeSpec;
 class FunctionDef;
 class TypeSpec;
 class ScalarTypeSpec;
@@ -54,12 +52,8 @@ public:
   std::vector<std::string> listFunctions() const;
 
   // ==================== PUBLIC UTILITIES (for dialect builders) ====================
-  // NEW: Unified type conversion (algebraic type system)
+  // Unified type conversion (algebraic type system)
   mlir::Type convertType(const mlir_edsl::TypeSpec &typeSpec) const;
-
-  // OLD: Deprecated, kept for compatibility during migration
-  mlir::Type protoTypeToMLIRType(mlir_edsl::ValueType protoType) const;
-  mlir::Type arrayTypeSpecToMLIRType(const mlir_edsl::ArrayTypeSpec &arraySpec) const;
 
   mlir::Value buildFromProtobufNode(const mlir_edsl::ASTNode &node);
 

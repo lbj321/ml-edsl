@@ -277,38 +277,7 @@ MLIRBuilder::promoteToType(mlir::Value lhs, mlir::Value rhs,
   return {lhs, rhs};
 }
 
-mlir::Type
-MLIRBuilder::protoTypeToMLIRType(mlir_edsl::ValueType protoType) const {
-  switch (protoType) {
-  case mlir_edsl::ValueType::I32:
-    return builder->getI32Type();
-  case mlir_edsl::ValueType::F32:
-    return builder->getF32Type();
-  case mlir_edsl::ValueType::I1:
-    return builder->getI1Type();
-  default:
-    throw std::runtime_error("Unknown protobuf type value: " +
-                             std::to_string(static_cast<int>(protoType)));
-  }
-}
-
-mlir::Type MLIRBuilder::arrayTypeSpecToMLIRType(
-    const mlir_edsl::ArrayTypeSpec &arraySpec) const {
-
-  // Extract element type
-  mlir::Type elementType = protoTypeToMLIRType(arraySpec.element_type());
-
-  // Extract shape dimensions
-  llvm::SmallVector<int64_t> shape;
-  for (int32_t dim : arraySpec.shape()) {
-    shape.push_back(static_cast<int64_t>(dim));
-  }
-
-  // Create memref type: memref<2x3xi32>
-  return mlir::MemRefType::get(shape, elementType);
-}
-
-// ==================== NEW ALGEBRAIC TYPE SYSTEM ====================
+// ==================== ALGEBRAIC TYPE SYSTEM ====================
 
 mlir::Type MLIRBuilder::convertType(const mlir_edsl::TypeSpec &typeSpec) const {
   switch (typeSpec.type_kind_case()) {
