@@ -211,22 +211,26 @@ class TestTypeSystemIntegration:
 
     def test_parse_scalar_type_hint_still_works(self):
         """Test that scalar type hints still work"""
+        from mlir_edsl.types import ScalarType
+
         parsed_i32 = TypeSystem.parse_type_hint(i32)
         parsed_f32 = TypeSystem.parse_type_hint(f32)
         parsed_int = TypeSystem.parse_type_hint(int)
 
-        # Scalars return enum values
-        assert isinstance(parsed_i32, int)
-        assert isinstance(parsed_f32, int)
-        assert isinstance(parsed_int, int)
+        # Scalars return ScalarType objects
+        assert isinstance(parsed_i32, ScalarType)
+        assert isinstance(parsed_f32, ScalarType)
+        assert isinstance(parsed_int, ScalarType)
 
     def test_parse_mixed_types(self):
         """Test parsing both scalar and array types"""
+        from mlir_edsl.types import ScalarType
+
         scalar = TypeSystem.parse_type_hint(i32)
         array = TypeSystem.parse_type_hint(Array[10, i32])
 
-        # Scalar returns int enum, Array returns ArrayType
-        assert isinstance(scalar, int)
+        # Scalar returns ScalarType, Array returns ArrayType
+        assert isinstance(scalar, ScalarType)
         assert isinstance(array, ArrayType)
 
 

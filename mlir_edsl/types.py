@@ -1,334 +1,235 @@
-"""MLIR type system - definitions, operations, and validation"""
+"""MLIR type system - algebraic type hierarchy with protobuf serialization"""
 
 import ctypes
+from abc import ABC, abstractmethod
 from typing import Any, Tuple, TYPE_CHECKING
 from mlir_edsl import ast_pb2
 
-# ==================== TYPE ENUMS (Internal) ====================
-# These are protobuf enums - internal use only
-I32 = ast_pb2.I32
-F32 = ast_pb2.F32
-I1 = ast_pb2.I1
 
-# ==================== TYPE HINTS (Public API) ====================
+# ============================================================================
+# TYPE BASE CLASS (Algebraic Type System)
+# ============================================================================
 
-class ScalarType:
-    """Type hint object for MLIR types"""
-    def __init__(self, name: str, enum_value: int):
-        self.name = name
-        self.enum_value = enum_value
+class Type(ABC):
+    """Base class for algebraic type system.
 
-    def __repr__(self):
-        return f"mlir_edsl.{self.name}"
+    All types support:
+    - Category predicates: is_scalar(), is_aggregate()
+    - Property predicates: is_numeric(), is_integer(), is_float(), is_boolean()
+    - Cast checking: can_cast_to()
+    - Serialization: to_proto() -> TypeSpec
+    """
 
-    # Add this to make it work with isinstance checks in type system
+    @abstractmethod
+    def is_scalar(self) -> bool:
+        """Returns True if this is a scalar type (i32, f32, i1)"""
+        pass
+
+    @abstractmethod
+    def is_aggregate(self) -> bool:
+        """Returns True if this is an aggregate type (memref, tensor)"""
+        pass
+
+    @abstractmethod
+    def is_numeric(self) -> bool:
+        """Returns True if supports arithmetic operations"""
+        pass
+
+    @abstractmethod
+    def is_integer(self) -> bool:
+        """Returns True if this is an integer type"""
+        pass
+
+    @abstractmethod
+    def is_float(self) -> bool:
+        """Returns True if this is a floating-point type"""
+        pass
+
+    @abstractmethod
+    def is_boolean(self) -> bool:
+        """Returns True if this is a boolean type"""
+        pass
+
+    def can_cast_to(self, target: 'Type') -> bool:
+        """Returns True if this type can be cast to target type.
+
+        Default: only scalar-to-scalar casts allowed.
+        """
+        return self.is_scalar() and target.is_scalar()
+
+    @abstractmethod
+    def to_proto(self) -> ast_pb2.TypeSpec:
+        """Convert to protobuf TypeSpec"""
+        pass
+
+    @abstractmethod
+    def __eq__(self, other) -> bool:
+        pass
+
+    @abstractmethod
+    def __hash__(self) -> int:
+        pass
+
+
+# ============================================================================
+# SCALAR TYPE
+# ============================================================================
+
+class ScalarType(Type):
+    """Scalar type backed by protobuf ScalarTypeSpec.Kind.
+
+    The protobuf schema is the single source of truth for type definitions.
+    """
+
+    # Constants from schema (single source of truth)
+    I32 = ast_pb2.ScalarTypeSpec.I32
+    F32 = ast_pb2.ScalarTypeSpec.F32
+    I1 = ast_pb2.ScalarTypeSpec.I1
+
+    # Semantic groupings derived from schema
+    _NUMERIC_KINDS = frozenset({I32, F32})
+    _INTEGER_KINDS = frozenset({I32})
+    _FLOAT_KINDS = frozenset({F32})
+    _BOOLEAN_KINDS = frozenset({I1})
+
+    _KIND_TO_NAME = {I32: 'i32', F32: 'f32', I1: 'i1'}
+    _ALL_KINDS = frozenset(_KIND_TO_NAME.keys())
+
+    def __init__(self, kind: int):
+        """Initialize from ScalarTypeSpec.Kind enum value.
+
+        Args:
+            kind: One of ScalarType.I32, ScalarType.F32, ScalarType.I1
+        """
+        if kind not in self._ALL_KINDS:
+            raise ValueError(f"Unknown scalar kind: {kind}")
+        self.kind = kind
+
+    @property
+    def name(self) -> str:
+        """MLIR type name (i32, f32, i1)"""
+        return self._KIND_TO_NAME[self.kind]
+
+    @property
+    def enum_value(self) -> int:
+        """Backward compatibility: returns the protobuf enum value"""
+        return self.kind
+
+    # Category predicates
+    def is_scalar(self) -> bool:
+        return True
+
+    def is_aggregate(self) -> bool:
+        return False
+
+    # Property predicates
+    def is_numeric(self) -> bool:
+        return self.kind in self._NUMERIC_KINDS
+
+    def is_integer(self) -> bool:
+        return self.kind in self._INTEGER_KINDS
+
+    def is_float(self) -> bool:
+        return self.kind in self._FLOAT_KINDS
+
+    def is_boolean(self) -> bool:
+        return self.kind in self._BOOLEAN_KINDS
+
+    # Serialization
+    def to_proto(self) -> ast_pb2.TypeSpec:
+        ts = ast_pb2.TypeSpec()
+        ts.scalar.kind = self.kind
+        return ts
+
+    # Equality and hashing
+    def __eq__(self, other) -> bool:
+        if isinstance(other, ScalarType):
+            return self.kind == other.kind
+        # Allow comparison with int enum for backward compatibility
+        if isinstance(other, int):
+            return self.kind == other
+        return False
+
+    def __hash__(self) -> int:
+        return hash(self.kind)
+
+    def __repr__(self) -> str:
+        return self.name
+
+    # Support Array[size, dtype] syntax
     def __class_getitem__(cls, params):
         return cls
 
-# Create type hint instances (lowercase to match MLIR syntax)
-if TYPE_CHECKING:
-    # For type checkers, these are type aliases
-    from typing import TypeAlias
-    i32: TypeAlias = ScalarType
-    f32: TypeAlias = ScalarType
-    i1: TypeAlias = ScalarType
-else:
-    # At runtime, these are MLIRType instances
-    i32 = ScalarType("i32", I32)
-    f32 = ScalarType("f32", F32)
-    i1 = ScalarType("i1", I1)
 
-# ==================== TYPE SYSTEM ====================
+# ============================================================================
+# SINGLETON SCALAR TYPE INSTANCES
+# ============================================================================
 
-class TypeSystem:
-    """Strict type system - operations require exact type matches"""
+i32 = ScalarType(ScalarType.I32)
+f32 = ScalarType(ScalarType.F32)
+i1 = ScalarType(ScalarType.I1)
 
-    # Python type -> MLIR type mapping
-    PYTHON_TYPE_MAP = {
-        int: I32,
-        float: F32,
-        bool: I1,
-    }
-
-    @classmethod
-    def parse_type_hint(cls, hint, context: str = "parameter"):
-        """Parse type hint to MLIR type enum OR ArrayType
-
-        Supports: int, float, bool, i32, f32, i1, Array[N, dtype]
-
-        Returns:
-            - For scalars: int (protobuf enum)
-            - For arrays: ArrayType instance
-        """
-        # Handle ScalarType instances (i32, f32, i1)
-        if isinstance(hint, ScalarType):
-            return hint.enum_value
-
-        # Handle ArrayType instances (Array[10, i32])
-        if isinstance(hint, ArrayType):
-            return hint  # Return the ArrayType directly, not an enum
-
-        # Handle Python built-in types (int, float, bool)
-        if hint in cls.PYTHON_TYPE_MAP:
-            return cls.PYTHON_TYPE_MAP[hint]
-
-        raise TypeError(f"Invalid type hint for {context}: {hint}")
-
-    @classmethod
-    def validate_value_matches_type(cls, value: Any, type_spec, param_name: str):
-        """Validate runtime value matches type
-
-        Args:
-            type_spec: Either int (scalar enum) or ArrayType instance
-            value: Runtime value to validate
-            param_name: Parameter name for error messages
-        """
-        # Skip validation for ArrayType (arrays are AST nodes, not runtime values)
-        if isinstance(type_spec, ArrayType):
-            return
-
-        # Scalar validation
-        type_enum = type_spec
-        if type_enum == I1:
-            if not isinstance(value, bool):
-                raise TypeError(f"Parameter '{param_name}' expects bool/i1 but got {type(value).__name__}")
-        elif type_enum == I32:
-            if not isinstance(value, (int, bool)):
-                raise TypeError(f"Parameter '{param_name}' expects int/i32 but got {type(value).__name__}")
-        elif type_enum == F32:
-            if not isinstance(value, (int, float, bool)):
-                raise TypeError(f"Parameter '{param_name}' expects float/f32 but got {type(value).__name__}")
-
-    @classmethod
-    def types_match(cls, inferred, declared) -> Tuple[bool, str]:
-        """Check if inferred type exactly matches declared type
-
-        Args:
-            inferred: int (scalar enum) OR ArrayType instance
-            declared: int (scalar enum) OR ArrayType instance
-
-        Returns:
-            (matches: bool, error_message: str)
-        """
-        # Both scalars
-        if isinstance(inferred, int) and isinstance(declared, int):
-            if inferred == declared:
-                return True, ""
-            return False, (
-                f"Type mismatch:\n"
-                f"  Declared: {cls.type_name(declared)}\n"
-                f"  Inferred: {cls.type_name(inferred)}\n"
-                f"  Hint: Change return type to {cls.type_name(inferred)} or add explicit cast"
-            )
-
-        # Both arrays - use ArrayType.__eq__
-        if isinstance(inferred, ArrayType) and isinstance(declared, ArrayType):
-            if inferred == declared:  # Uses ArrayType.__eq__ (already implemented)
-                return True, ""
-            return False, (
-                f"Array type mismatch:\n"
-                f"  Declared: {declared}\n"
-                f"  Inferred: {inferred}\n"
-                f"  Hint: Ensure array shapes and element types match"
-            )
-
-        # Mixed types (scalar vs array)
-        return False, (
-            f"Type category mismatch:\n"
-            f"  Declared: {cls.type_name(declared)}\n"
-            f"  Inferred: {cls.type_name(inferred)}\n"
-            f"  Hint: Cannot mix scalar and array types"
-        )
-
-    @classmethod
-    def type_name(cls, type_spec) -> str:
-        """Get MLIR type name from enum or ArrayType
-
-        Args:
-            type_spec: int (scalar enum) OR ArrayType instance
-        """
-        if isinstance(type_spec, ArrayType):
-            return str(type_spec)  # Uses ArrayType.__repr__
-        return {I32: "i32", F32: "f32", I1: "i1"}.get(type_spec, f"unknown({type_spec})")
-
-# ==================== UTILITIES ====================
-
-def is_numeric_type(ty: int) -> bool:
-    """Check if type is numeric (integer or float)
-
-    Args:
-        ty: Type enum value to check
-
-    Returns:
-        True if type is I32 or F32
-
-    Example:
-        >>> is_numeric_type(I32)
-        True
-        >>> is_numeric_type(F32)
-        True
-        >>> is_numeric_type(I1)
-        False
-    """
-    return ty in (I32, F32)
-
-def is_integer_type(ty: int) -> bool:
-    """Check if type is integer
-
-    Args:
-        ty: Type enum value to check
-
-    Returns:
-        True if type is I32
-    """
-    return ty == I32
-
-def is_float_type(ty: int) -> bool:
-    """Check if type is float
-
-    Args:
-        ty: Type enum value to check
-
-    Returns:
-        True if type is F32
-    """
-    return ty == F32
-
-def type_to_string(value_type):
-    """Convert type to string (for C++ boundary only)
-    """
-
-    # Handle enum values
-    if value_type == I32:
-        return "i32"
-    elif value_type == F32:
-        return "f32"
-    elif value_type == I1:
-        return "i1"
-    else:
-        raise ValueError(f"Unknown type: {value_type}")
-
-def type_from_string(type_str):
-    """Convert string to protobuf enum (for C++ boundary/legacy)"""
-    if type_str == "i32":
-        return I32
-    elif type_str == "f32":
-        return F32
-    elif type_str == "i1":
-        return I1
-    else:
-        raise ValueError(f"Unknown type string: {type_str}")
-
-# ==================== BACKEND MAPPINGS ====================
-
-# Type mapping for ctypes (JIT execution)
-TYPE_TO_CTYPES = {
-    I32: ctypes.c_int32,
-    F32: ctypes.c_float,
-    I1: ctypes.c_bool,
-}
-
-# ==================== PROTOBUF TYPE CONVERSION ====================
-
-def scalar_type_to_proto(enum_value: int):
-    """Convert scalar enum (I32, F32, I1) to TypeSpec protobuf message.
-
-    Args:
-        enum_value: One of I32, F32, I1 enum values
-
-    Returns:
-        ast_pb2.TypeSpec with scalar field populated
-    """
-    kind_map = {
-        I32: ast_pb2.ScalarTypeSpec.I32,
-        F32: ast_pb2.ScalarTypeSpec.F32,
-        I1: ast_pb2.ScalarTypeSpec.I1,
-    }
-    if enum_value not in kind_map:
-        raise ValueError(f"Unknown scalar type enum: {enum_value}")
-
-    type_spec = ast_pb2.TypeSpec()
-    type_spec.scalar.kind = kind_map[enum_value]
-    return type_spec
+# Legacy enum aliases (for backward compatibility during migration)
+I32 = ScalarType.I32
+F32 = ScalarType.F32
+I1 = ScalarType.I1
 
 
-def array_type_to_proto(array_type: 'ArrayType'):
-    """Convert ArrayType to TypeSpec protobuf message.
+# ============================================================================
+# ARRAY TYPE (MemRef)
+# ============================================================================
 
-    Args:
-        array_type: ArrayType instance
+class ArrayType(Type):
+    """Fixed-size array type: memref<NxT> (1D), memref<MxNxT> (2D), memref<MxNxPxT> (3D)
 
-    Returns:
-        ast_pb2.TypeSpec with memref field populated
-    """
-    type_spec = ast_pb2.TypeSpec()
-    type_spec.memref.shape.extend(array_type.shape)
-    type_spec.memref.element_type.CopyFrom(scalar_type_to_proto(array_type.element_enum))
-    return type_spec
-
-
-def type_to_proto(t):
-    """Convert any type (scalar enum or ArrayType) to TypeSpec protobuf message.
-
-    Args:
-        t: Either an int (I32, F32, I1 enum) or ArrayType instance
-
-    Returns:
-        ast_pb2.TypeSpec message
-    """
-    if isinstance(t, ArrayType):
-        return array_type_to_proto(t)
-    else:
-        return scalar_type_to_proto(t)
-
-# ==================== ARRAY TYPES ====================
-
-class ArrayType:
-    """
-    Represents a fixed-size array type: memref<NxT> (1D), memref<MxNxT> (2D), memref<MxNxPxT> (3D)
-
-    Used for type hints in function signatures.
+    Used for type hints in function signatures and array construction.
 
     Examples:
-        def foo(arr: Array[10, i32]) -> Array[10, i32]:  # 1D array
+        def foo(arr: Array[10, i32]) -> i32:  # 1D array parameter
             ...
 
-        def bar(matrix: Array[2, 3, i32]) -> i32:  # 2D array
-            ...
+        arr = Array[2, 3, f32]([...])  # 2D array literal
     """
 
     def __init__(self, shape, element_type: ScalarType):
+        """Initialize array type.
+
+        Args:
+            shape: int for 1D, tuple for 2D/3D
+            element_type: ScalarType instance (i32, f32, i1)
+        """
         # Normalize shape to tuple
         if isinstance(shape, int):
-            self.shape = (shape,)  # 1D
+            self.shape = (shape,)
         elif isinstance(shape, tuple):
-            self.shape = tuple(shape)  # 2D/3D
+            self.shape = tuple(shape)
         else:
-            raise TypeError(f"Array shape must be int or tuple of ints, got {type(shape).__name__}")
+            raise TypeError(f"Array shape must be int or tuple, got {type(shape).__name__}")
 
-        # Validate all dimensions
+        # Validate dimensions
         if not all(isinstance(d, int) and d > 0 for d in self.shape):
             raise TypeError(f"All dimensions must be positive integers, got {self.shape}")
 
-        # Validate dimensionality (only 1D, 2D, 3D)
+        # Validate dimensionality (1D, 2D, 3D only)
         if len(self.shape) == 0 or len(self.shape) > 3:
             raise TypeError(f"Only 1D, 2D, and 3D arrays supported, got {len(self.shape)}D")
 
+        # Validate element type
         if not isinstance(element_type, ScalarType):
-            raise TypeError(
-                f"Array element type must be ScalarType (i32, f32, i1), got {element_type}"
-            )
+            raise TypeError(f"element_type must be ScalarType (i32, f32, i1), got {element_type}")
 
-        self.element_type = element_type  # This is a ScalarType instance (i32, f32, i1)
-        self.element_enum = element_type.enum_value  # Store the protobuf enum too
+        self.element_type = element_type
+
+    @property
+    def element_enum(self) -> int:
+        """Backward compatibility: returns element type's protobuf enum value"""
+        return self.element_type.kind
 
     @property
     def size(self) -> int:
-        """
-        Backward compatibility: Return size for 1D arrays only.
+        """For 1D arrays only: returns the size.
 
         Raises AttributeError for multi-dimensional arrays.
-        Use .shape for multi-dimensional arrays.
         """
         if len(self.shape) != 1:
             raise AttributeError(
@@ -351,81 +252,84 @@ class ArrayType:
             result *= dim
         return result
 
-    def __call__(self, elements: list):
-        """
-        Enable Array[4, i32]([1, 2, 3, 4]) construction syntax.
+    # Category predicates
+    def is_scalar(self) -> bool:
+        return False
 
-        This creates an ArrayLiteral AST node (will be implemented in Step 2).
-        For now, we'll just validate and prepare for later.
-        """
-        # Import here to avoid circular dependency
-        # (We'll implement ArrayLiteral in Step 2)
-        try:
-            from .ast import ArrayLiteral
-            return ArrayLiteral(elements, self)
-        except (ImportError, AttributeError):
-            # During initial implementation, ast.ArrayLiteral doesn't exist yet
-            raise NotImplementedError(
-                "ArrayLiteral not yet implemented. "
-                "This will be added in Step 2 (AST extensions)."
-            )
+    def is_aggregate(self) -> bool:
+        return True
+
+    # Property predicates (delegate to element type)
+    def is_numeric(self) -> bool:
+        return self.element_type.is_numeric()
+
+    def is_integer(self) -> bool:
+        return self.element_type.is_integer()
+
+    def is_float(self) -> bool:
+        return self.element_type.is_float()
+
+    def is_boolean(self) -> bool:
+        return self.element_type.is_boolean()
+
+    def can_cast_to(self, target: Type) -> bool:
+        """Arrays cannot be cast"""
+        return False
+
+    # Serialization
+    def to_proto(self) -> ast_pb2.TypeSpec:
+        ts = ast_pb2.TypeSpec()
+        ts.memref.shape.extend(self.shape)
+        ts.memref.element_type.CopyFrom(self.element_type.to_proto())
+        return ts
 
     def to_mlir_string(self) -> str:
-        """Convert to MLIR type string: memref<10xi32>, memref<2x3xi32>, etc."""
-        elem_name = self.element_type.name  # "i32", "f32", or "i1"
-        # 1D: memref<10xi32>
-        # 2D: memref<2x3xi32>
-        # 3D: memref<2x3x4xi32>
+        """Convert to MLIR type string: memref<10xi32>, memref<2x3xf32>, etc."""
         dims = 'x'.join(str(d) for d in self.shape)
-        return f"memref<{dims}x{elem_name}>"
+        return f"memref<{dims}x{self.element_type.name}>"
 
-    def __repr__(self):
+    # Equality and hashing
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, ArrayType):
+            return False
+        return self.shape == other.shape and self.element_type == other.element_type
+
+    def __hash__(self) -> int:
+        return hash((self.shape, self.element_type))
+
+    def __repr__(self) -> str:
         if len(self.shape) == 1:
             return f"Array[{self.shape[0]}, {self.element_type.name}]"
         else:
-            # 2D: Array[2, 3, i32]
-            # 3D: Array[2, 3, 4, i32]
             dims = ', '.join(str(d) for d in self.shape)
             return f"Array[{dims}, {self.element_type.name}]"
 
-    def __eq__(self, other):
-        """Enable type equality checking for strict type system"""
-        if not isinstance(other, ArrayType):
-            return False
-        return (self.shape == other.shape and  # Tuple comparison
-                self.element_enum == other.element_enum)
+    def __call__(self, elements: list):
+        """Enable Array[4, i32]([1, 2, 3, 4]) construction syntax."""
+        from .ast import ArrayLiteral
+        return ArrayLiteral(elements, self)
 
-    def __hash__(self):
-        """Enable use as dict key"""
-        return hash((self.shape, self.element_enum))  # Hash tuple
 
+# ============================================================================
+# ARRAY SUBSCRIPT SYNTAX (Array[N, dtype])
+# ============================================================================
 
 class ArrayMeta(type):
-    """
-    Metaclass to enable Array[size, dtype] or Array[M, N, dtype] subscript syntax.
-
-    This makes Array[10, i32] and Array[2, 3, i32] work even though Array is a class.
-    """
+    """Metaclass to enable Array[size, dtype] subscript syntax."""
 
     def __getitem__(cls, params):
-        """
-        Handle Array[size, dtype] or Array[M, N, dtype] or Array[M, N, P, dtype] syntax.
+        """Handle Array[size, dtype] or Array[M, N, dtype] syntax.
 
         Args:
             params: Tuple where last element is dtype, preceding are dimensions
 
         Returns:
             ArrayType instance
-
-        Examples:
-            Array[10, i32]        -> 1D array
-            Array[2, 3, i32]      -> 2D array
-            Array[2, 3, 4, f32]   -> 3D array
         """
         if not isinstance(params, tuple):
             raise TypeError(
                 f"Array requires parameters: Array[size, dtype] or Array[M, N, dtype]. "
-                f"Example: Array[10, i32] or Array[2, 3, i32]"
+                f"Example: Array[10, i32]"
             )
 
         if len(params) < 2:
@@ -433,51 +337,287 @@ class ArrayMeta(type):
                 f"Array requires at least 2 parameters (dimensions + dtype), got {len(params)}"
             )
 
-        # Last parameter must be dtype
+        # Last parameter is dtype, rest are dimensions
         dtype = params[-1]
         dims = params[:-1]
 
-        # Validate dtype is ScalarType
+        # Validate dtype
         if not isinstance(dtype, ScalarType):
             raise TypeError(
                 f"Last parameter must be element type (i32, f32, i1), got {dtype!r}"
             )
 
-        # Validate dimensionality (only 1D, 2D, 3D)
+        # Validate dimensionality
         if len(dims) > 3:
             raise TypeError(
-                f"Only 1D, 2D, and 3D arrays supported, got {len(dims)}D. "
-                f"Usage: Array[N, dtype] or Array[M, N, dtype] or Array[M, N, P, dtype]"
+                f"Only 1D, 2D, and 3D arrays supported, got {len(dims)}D"
             )
 
-        # Validate all dimensions are positive integers
+        # Validate dimensions are positive integers
         for i, dim in enumerate(dims):
             if not isinstance(dim, int) or dim <= 0:
-                raise TypeError(
-                    f"Dimension {i} must be positive integer, got {dim!r}"
-                )
+                raise TypeError(f"Dimension {i} must be positive integer, got {dim!r}")
 
-        # Create ArrayType with shape tuple
-        # For 1D: dims=(10,) -> ArrayType receives int 10
-        # For 2D/3D: dims=(2,3) or (2,3,4) -> ArrayType receives tuple
+        # Create ArrayType
         if len(dims) == 1:
-            return ArrayType(dims[0], dtype)  # Backward compat: pass int for 1D
+            return ArrayType(dims[0], dtype)
         else:
-            return ArrayType(dims, dtype)     # Pass tuple for 2D/3D
+            return ArrayType(dims, dtype)
 
 
 class Array(metaclass=ArrayMeta):
-    """
-    Fixed-size array type for memref dialect.
+    """Fixed-size array type for memref dialect.
 
     Usage as type hint:
-        def foo(arr: Array[10, i32]) -> Array[10, i32]:
+        def foo(arr: Array[10, i32]) -> i32:
             ...
 
     Usage for construction (inside @ml_function):
         arr = Array[4, i32]([1, 2, 3, 4])
-
-    The Array class itself is never instantiated - it's just a namespace
-    for the subscript syntax enabled by ArrayMeta.
     """
     pass
+
+
+# ============================================================================
+# TYPE SYSTEM UTILITIES
+# ============================================================================
+
+class TypeSystem:
+    """Type validation and parsing utilities"""
+
+    # Python type -> ScalarType mapping
+    PYTHON_TYPE_MAP = {
+        int: i32,
+        float: f32,
+        bool: i1,
+    }
+
+    @classmethod
+    def parse_type_hint(cls, hint, context: str = "parameter") -> Type:
+        """Parse type hint to Type object.
+
+        Supports: int, float, bool, i32, f32, i1, Array[N, dtype]
+
+        Returns:
+            Type instance (ScalarType or ArrayType)
+        """
+        # Handle Type instances directly
+        if isinstance(hint, Type):
+            return hint
+
+        # Handle Python built-in types
+        if hint in cls.PYTHON_TYPE_MAP:
+            return cls.PYTHON_TYPE_MAP[hint]
+
+        raise TypeError(f"Invalid type hint for {context}: {hint}")
+
+    @classmethod
+    def validate_value_matches_type(cls, value: Any, type_spec: Type, param_name: str):
+        """Validate runtime value matches type.
+
+        Args:
+            value: Runtime value to validate
+            type_spec: Type instance
+            param_name: Parameter name for error messages
+        """
+        # Skip validation for arrays (arrays are AST nodes, not runtime values)
+        if type_spec.is_aggregate():
+            return
+
+        # Scalar validation
+        if type_spec.is_boolean():
+            if not isinstance(value, bool):
+                raise TypeError(f"Parameter '{param_name}' expects bool/i1 but got {type(value).__name__}")
+        elif type_spec.is_integer():
+            if not isinstance(value, (int, bool)):
+                raise TypeError(f"Parameter '{param_name}' expects int/i32 but got {type(value).__name__}")
+        elif type_spec.is_float():
+            if not isinstance(value, (int, float, bool)):
+                raise TypeError(f"Parameter '{param_name}' expects float/f32 but got {type(value).__name__}")
+
+    @classmethod
+    def types_match(cls, inferred, declared) -> Tuple[bool, str]:
+        """Check if inferred type matches declared type.
+
+        Accepts both int (enum) and Type objects for backward compatibility.
+
+        Returns:
+            (matches: bool, error_message: str)
+        """
+        # Normalize to comparable form
+        inferred_is_type = isinstance(inferred, Type)
+        declared_is_type = isinstance(declared, Type)
+
+        # Both are Type objects
+        if inferred_is_type and declared_is_type:
+            if inferred == declared:
+                return True, ""
+
+            # Different type categories
+            if inferred.is_scalar() != declared.is_scalar():
+                return False, (
+                    f"Type category mismatch:\n"
+                    f"  Declared: {declared}\n"
+                    f"  Inferred: {inferred}\n"
+                    f"  Hint: Cannot mix scalar and array types"
+                )
+
+            # Same category but different types
+            if inferred.is_scalar():
+                return False, (
+                    f"Type mismatch:\n"
+                    f"  Declared: {declared}\n"
+                    f"  Inferred: {inferred}\n"
+                    f"  Hint: Change return type or add explicit cast"
+                )
+            else:
+                return False, (
+                    f"Array type mismatch:\n"
+                    f"  Declared: {declared}\n"
+                    f"  Inferred: {inferred}\n"
+                    f"  Hint: Ensure array shapes and element types match"
+                )
+
+        # Both are int enums
+        if not inferred_is_type and not declared_is_type:
+            if inferred == declared:
+                return True, ""
+            return False, (
+                f"Type mismatch:\n"
+                f"  Declared: {type_to_string(declared)}\n"
+                f"  Inferred: {type_to_string(inferred)}\n"
+                f"  Hint: Change return type to {type_to_string(inferred)} or add explicit cast"
+            )
+
+        # Mixed: one is Type, one is int - compare by kind
+        if inferred_is_type and not declared_is_type:
+            # inferred is Type, declared is int
+            if isinstance(inferred, ScalarType) and inferred.kind == declared:
+                return True, ""
+            if isinstance(inferred, ArrayType):
+                return False, (
+                    f"Type category mismatch:\n"
+                    f"  Declared: {type_to_string(declared)} (scalar)\n"
+                    f"  Inferred: {inferred} (array)\n"
+                    f"  Hint: Cannot mix scalar and array types"
+                )
+            return False, (
+                f"Type mismatch:\n"
+                f"  Declared: {type_to_string(declared)}\n"
+                f"  Inferred: {inferred}\n"
+                f"  Hint: Change return type or add explicit cast"
+            )
+
+        if not inferred_is_type and declared_is_type:
+            # inferred is int, declared is Type
+            if isinstance(declared, ScalarType) and declared.kind == inferred:
+                return True, ""
+            if isinstance(declared, ArrayType):
+                return False, (
+                    f"Type category mismatch:\n"
+                    f"  Declared: {declared} (array)\n"
+                    f"  Inferred: {type_to_string(inferred)} (scalar)\n"
+                    f"  Hint: Cannot mix scalar and array types"
+                )
+            return False, (
+                f"Type mismatch:\n"
+                f"  Declared: {declared}\n"
+                f"  Inferred: {type_to_string(inferred)}\n"
+                f"  Hint: Change return type or add explicit cast"
+            )
+
+    @classmethod
+    def type_name(cls, type_spec: Type) -> str:
+        """Get display name for a type"""
+        return str(type_spec)
+
+
+# ============================================================================
+# LEGACY HELPER FUNCTIONS (Backward compatibility during migration)
+# ============================================================================
+# These functions accept both int (enum) and Type objects.
+# Prefer using Type methods directly: t.is_integer(), t.is_float(), etc.
+
+def is_integer_type(t) -> bool:
+    """Check if type is integer. Works with int enum or Type object."""
+    if isinstance(t, Type):
+        return t.is_integer()
+    return t == ScalarType.I32
+
+
+def is_float_type(t) -> bool:
+    """Check if type is float. Works with int enum or Type object."""
+    if isinstance(t, Type):
+        return t.is_float()
+    return t == ScalarType.F32
+
+
+def is_numeric_type(t) -> bool:
+    """Check if type is numeric. Works with int enum or Type object."""
+    if isinstance(t, Type):
+        return t.is_numeric()
+    return t in (ScalarType.I32, ScalarType.F32)
+
+
+def is_boolean_type(t) -> bool:
+    """Check if type is boolean. Works with int enum or Type object."""
+    if isinstance(t, Type):
+        return t.is_boolean()
+    return t == ScalarType.I1
+
+
+def type_to_string(t) -> str:
+    """Convert type to string. Works with int enum or Type object."""
+    if isinstance(t, Type):
+        return str(t)
+    # Int enum
+    return {
+        ScalarType.I32: 'i32',
+        ScalarType.F32: 'f32',
+        ScalarType.I1: 'i1',
+    }.get(t, f'unknown({t})')
+
+
+# ============================================================================
+# PROTOBUF CONVERSION (Standalone functions for backward compatibility)
+# ============================================================================
+
+def type_to_proto(t: Type) -> ast_pb2.TypeSpec:
+    """Convert Type to TypeSpec protobuf message.
+
+    This is a convenience function that delegates to Type.to_proto().
+    """
+    if isinstance(t, Type):
+        return t.to_proto()
+
+    # Legacy support: handle raw enum values during migration
+    if isinstance(t, int):
+        ts = ast_pb2.TypeSpec()
+        ts.scalar.kind = t
+        return ts
+
+    raise TypeError(f"Cannot convert to TypeSpec: {t}")
+
+
+def scalar_type_to_proto(kind: int) -> ast_pb2.TypeSpec:
+    """Convert scalar enum to TypeSpec. Legacy function for backward compatibility."""
+    ts = ast_pb2.TypeSpec()
+    ts.scalar.kind = kind
+    return ts
+
+
+def array_type_to_proto(array_type: ArrayType) -> ast_pb2.TypeSpec:
+    """Convert ArrayType to TypeSpec. Legacy function for backward compatibility."""
+    return array_type.to_proto()
+
+
+# ============================================================================
+# BACKEND MAPPINGS
+# ============================================================================
+
+# Type mapping for ctypes (JIT execution)
+TYPE_TO_CTYPES = {
+    ScalarType.I32: ctypes.c_int32,
+    ScalarType.F32: ctypes.c_float,
+    ScalarType.I1: ctypes.c_bool,
+}

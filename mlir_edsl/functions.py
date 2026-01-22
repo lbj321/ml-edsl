@@ -3,7 +3,7 @@
 from typing import Callable, Any, Union, Tuple, Dict, get_type_hints
 from .backend import get_backend
 from .ast import Parameter, Constant, BinaryOp, CallOp, CompareOp, IfOp
-from .types import I32, F32, I1, type_to_string, TypeSystem, ArrayType
+from .types import I32, F32, I1, TypeSystem, ArrayType
 import inspect
 
 # Global flag to track symbolic execution context
