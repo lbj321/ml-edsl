@@ -34,7 +34,7 @@ public:
 
   /// Type conversion operations
   mlir::Value convertIntToFloat(mlir::Value intValue);
-  mlir::Value buildCast(mlir::Value sourceValue, mlir_edsl::ValueType targetType);
+  mlir::Value buildCast(mlir::Value sourceValue, mlir::Type targetType);
 
 private:
   mlir::OpBuilder& builder;

@@ -228,6 +228,59 @@ TYPE_TO_CTYPES = {
     I1: ctypes.c_bool,
 }
 
+# ==================== PROTOBUF TYPE CONVERSION ====================
+
+def scalar_type_to_proto(enum_value: int):
+    """Convert scalar enum (I32, F32, I1) to TypeSpec protobuf message.
+
+    Args:
+        enum_value: One of I32, F32, I1 enum values
+
+    Returns:
+        ast_pb2.TypeSpec with scalar field populated
+    """
+    kind_map = {
+        I32: ast_pb2.ScalarTypeSpec.I32,
+        F32: ast_pb2.ScalarTypeSpec.F32,
+        I1: ast_pb2.ScalarTypeSpec.I1,
+    }
+    if enum_value not in kind_map:
+        raise ValueError(f"Unknown scalar type enum: {enum_value}")
+
+    type_spec = ast_pb2.TypeSpec()
+    type_spec.scalar.kind = kind_map[enum_value]
+    return type_spec
+
+
+def array_type_to_proto(array_type: 'ArrayType'):
+    """Convert ArrayType to TypeSpec protobuf message.
+
+    Args:
+        array_type: ArrayType instance
+
+    Returns:
+        ast_pb2.TypeSpec with memref field populated
+    """
+    type_spec = ast_pb2.TypeSpec()
+    type_spec.memref.shape.extend(array_type.shape)
+    type_spec.memref.element_type.CopyFrom(scalar_type_to_proto(array_type.element_enum))
+    return type_spec
+
+
+def type_to_proto(t):
+    """Convert any type (scalar enum or ArrayType) to TypeSpec protobuf message.
+
+    Args:
+        t: Either an int (I32, F32, I1 enum) or ArrayType instance
+
+    Returns:
+        ast_pb2.TypeSpec message
+    """
+    if isinstance(t, ArrayType):
+        return array_type_to_proto(t)
+    else:
+        return scalar_type_to_proto(t)
+
 # ==================== ARRAY TYPES ====================
 
 class ArrayType:

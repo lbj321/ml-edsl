@@ -225,11 +225,14 @@ class TestArray2DProtobufSerialization(MLIRTestBase):
         pb = arr.to_proto(context)
 
         assert pb.HasField("array_literal")
-        # Check shape is [2, 2]
-        assert len(pb.array_literal.array_type.shape) == 2
-        assert pb.array_literal.array_type.shape[0] == 2
-        assert pb.array_literal.array_type.shape[1] == 2
-        assert pb.array_literal.array_type.element_type == I32
+        # Check shape is [2, 2] (uses new TypeSpec with memref field)
+        assert pb.array_literal.type.HasField("memref")
+        assert len(pb.array_literal.type.memref.shape) == 2
+        assert pb.array_literal.type.memref.shape[0] == 2
+        assert pb.array_literal.type.memref.shape[1] == 2
+        # Element type is nested: type.memref.element_type.scalar.kind
+        from mlir_edsl import ast_pb2
+        assert pb.array_literal.type.memref.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.I32
         # Check flattened elements
         assert len(pb.array_literal.elements) == 4
 

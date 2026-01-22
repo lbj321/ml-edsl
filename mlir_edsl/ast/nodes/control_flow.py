@@ -1,7 +1,7 @@
 """Control flow AST nodes: IfOp, ForLoopOp, WhileLoopOp"""
 
 from ..base import Value
-from ...types import I32, F32, I1, is_numeric_type, is_integer_type
+from ...types import I32, F32, I1, is_numeric_type, is_integer_type, type_to_proto
 
 # Import generated protobuf code
 try:
@@ -53,7 +53,7 @@ class IfOp(Value):
         pb_node.if_op.then_value.CopyFrom(self.then_value._to_proto_impl(context))
         pb_node.if_op.else_value.CopyFrom(self.else_value._to_proto_impl(context))
 
-        pb_node.if_op.result_type = self._inferred_type
+        pb_node.if_op.result_type.CopyFrom(type_to_proto(self._inferred_type))
         return pb_node
 
 
@@ -127,7 +127,7 @@ class ForLoopOp(Value):
         pb_node.for_loop_op.init_value.CopyFrom(self.init_value._to_proto_impl(context))
 
         pb_node.for_loop_op.operation = _binary_op_to_proto(self.operation)
-        pb_node.for_loop_op.result_type = self._inferred_type
+        pb_node.for_loop_op.result_type.CopyFrom(type_to_proto(self._inferred_type))
 
         return pb_node
 
@@ -188,6 +188,6 @@ class WhileLoopOp(Value):
 
         pb_node.while_loop_op.operation = _binary_op_to_proto(self.operation)
         pb_node.while_loop_op.predicate = _predicate_to_proto(self.predicate)
-        pb_node.while_loop_op.result_type = self._inferred_type
+        pb_node.while_loop_op.result_type.CopyFrom(type_to_proto(self._inferred_type))
 
         return pb_node

@@ -2,7 +2,7 @@
 
 from typing import Union
 from ..base import Value
-from ...types import I32, F32, I1, is_integer_type
+from ...types import I32, F32, I1, is_integer_type, type_to_proto
 
 # Import generated protobuf code
 try:
@@ -34,11 +34,13 @@ class Constant(Value):
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
         pb_node = ast_pb2.ASTNode()
-        pb_node.constant.value_type = self.value_type
+        pb_node.constant.type.CopyFrom(type_to_proto(self.value_type))
         if self.value_type == I32:
             pb_node.constant.int_value = self.value
-        else:
+        elif self.value_type == F32:
             pb_node.constant.float_value = self.value
+        elif self.value_type == I1:
+            pb_node.constant.bool_value = bool(self.value)
         return pb_node
 
 
@@ -76,7 +78,7 @@ class BinaryOp(Value):
 
         pb_node = ast_pb2.ASTNode()
         pb_node.binary_op.op_type = _binary_op_to_proto(self.op)
-        pb_node.binary_op.result_type = self.infer_type()
+        pb_node.binary_op.result_type.CopyFrom(type_to_proto(self.infer_type()))
 
         # Context-aware child serialization
         pb_node.binary_op.left.CopyFrom(self.left._to_proto_impl(context))
@@ -121,7 +123,7 @@ class CompareOp(Value):
 
         pb_node = ast_pb2.ASTNode()
         pb_node.compare_op.predicate = _predicate_to_proto(self.predicate)
-        pb_node.compare_op.operand_type = self._operand_type
+        pb_node.compare_op.operand_type.CopyFrom(type_to_proto(self._operand_type))
 
         # Context-aware child serialization
         pb_node.compare_op.left.CopyFrom(self.left._to_proto_impl(context))
@@ -160,5 +162,7 @@ class CastOp(Value):
         # Context-aware child serialization
         pb_node.cast_op.value.CopyFrom(self.value._to_proto_impl(context))
 
-        pb_node.cast_op.target_type = self.target_type
+        # New schema requires both source and target types
+        pb_node.cast_op.source_type.CopyFrom(type_to_proto(self.value.infer_type()))
+        pb_node.cast_op.target_type.CopyFrom(type_to_proto(self.target_type))
         return pb_node

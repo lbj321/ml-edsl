@@ -28,6 +28,9 @@ enum BinaryOpType : int;
 class ASTNode;
 class ArrayTypeSpec;
 class FunctionDef;
+class TypeSpec;
+class ScalarTypeSpec;
+class MemRefTypeSpec;
 
 class MLIRBuilder {
 public:
@@ -51,8 +54,13 @@ public:
   std::vector<std::string> listFunctions() const;
 
   // ==================== PUBLIC UTILITIES (for dialect builders) ====================
+  // NEW: Unified type conversion (algebraic type system)
+  mlir::Type convertType(const mlir_edsl::TypeSpec &typeSpec) const;
+
+  // OLD: Deprecated, kept for compatibility during migration
   mlir::Type protoTypeToMLIRType(mlir_edsl::ValueType protoType) const;
   mlir::Type arrayTypeSpecToMLIRType(const mlir_edsl::ArrayTypeSpec &arraySpec) const;
+
   mlir::Value buildFromProtobufNode(const mlir_edsl::ASTNode &node);
 
   // Infrastructure utilities (used by multiple dialect builders)
@@ -69,10 +77,14 @@ private:
   bool isIntegerType(mlir::Type type) const;
   bool isFloatType(mlir::Type type) const;
 
+  // NEW: Type conversion helpers (algebraic type system)
+  mlir::Type convertScalarType(const mlir_edsl::ScalarTypeSpec &scalarSpec) const;
+  mlir::Type convertMemRefType(const mlir_edsl::MemRefTypeSpec &memrefSpec) const;
+
   // Internal function building (not exposed to Python)
   void createFunction(
       const std::string &name,
-      const std::vector<std::pair<std::string, mlir_edsl::ValueType>> &params,
+      const std::vector<std::pair<std::string, mlir_edsl::TypeSpec>> &params,
       mlir::Type returnType);
   void finalizeFunction(const std::string &name, mlir::Value result);
   mlir::Value callFunction(const std::string &name,

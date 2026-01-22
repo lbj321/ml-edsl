@@ -1,16 +1,57 @@
-// Protocol Buffers schema for MLIR EDSL AST
+// Protocol Buffers schema for MLIR EDSL AST - NEW ALGEBRAIC TYPE SYSTEM
 // Serialization between Python frontend and C++ backend
+//
+// This is the PROPOSED schema after type system migration.
+// See TYPE_SYSTEM_MIGRATION.md for migration plan.
 
 syntax = "proto3";
 
 package mlir_edsl;
 
-// Value types supported in the EDSL
-enum ValueType {
-  I32 = 0;
-  F32 = 1;
-  I1 = 2;
+// ============================================================================
+// NEW ALGEBRAIC TYPE SYSTEM
+// ============================================================================
+
+// Unified type specification - algebraic and compositional
+message TypeSpec {
+  oneof type_kind {
+    ScalarTypeSpec scalar = 1;
+    MemRefTypeSpec memref = 2;
+    // Future extensions:
+    // TensorTypeSpec tensor = 3;
+    // TupleTypeSpec tuple = 4;
+    // ComplexTypeSpec complex = 5;
+  }
 }
+
+// Scalar type specification
+message ScalarTypeSpec {
+  enum Kind {
+    I32 = 0;  // 32-bit signed integer
+    F32 = 1;  // 32-bit float
+    I1 = 2;   // Boolean (1-bit integer)
+    // Future extensions:
+    // I64 = 3;
+    // F64 = 4;
+    // I8 = 5;
+    // I16 = 6;
+  }
+  Kind kind = 1;
+}
+
+// MemRef type specification (fixed-size arrays)
+message MemRefTypeSpec {
+  repeated int64 shape = 1;        // Shape: [4] for 1D, [2,3] for 2D, [2,3,4] for 3D
+  TypeSpec element_type = 2;       // Element type (RECURSIVE - can be any TypeSpec!)
+
+  // Future extensions for advanced memref features:
+  // MemRefLayout layout = 3;      // Strided layouts, affine maps
+  // MemorySpace memory_space = 4; // GPU global, shared, etc.
+}
+
+// ============================================================================
+// OPERATION ENUMS (Unchanged)
+// ============================================================================
 
 // Binary operations
 enum BinaryOpType {
@@ -62,6 +103,10 @@ enum ComparisonPredicate {
   UNE = 21; // Unordered not equal
 }
 
+// ============================================================================
+// AST NODE DEFINITIONS (Updated to use TypeSpec)
+// ============================================================================
+
 // Main AST node container
 message ASTNode {
   oneof value_data {
@@ -83,33 +128,32 @@ message ASTNode {
   }
 }
 
-// Constant value (integer or float)
+// ============================================================================
+// SCALAR OPERATIONS
+// ============================================================================
+
+// Constant value (integer, float, or boolean)
 message Constant {
-  int32 int_value = 1;
-  float float_value = 2;
-  ValueType value_type = 3;
+  oneof value {
+    int32 int_value = 1;
+    float float_value = 2;
+    bool bool_value = 3;
+  }
+  TypeSpec type = 4;  // Type specification (ScalarTypeSpec)
 }
 
-// Array type specification (shape and element type)
-message ArrayTypeSpec {
-  repeated int32 shape = 1;    // Array shape: [N] for 1D, [M,N] for 2D, [M,N,P] for 3D
-  ValueType element_type = 2;  // Element type (I32, F32, I1)
-}
-
-// Named parameter with value
+// Function parameter
 message Parameter {
   string name = 1;
-  int32 int_value = 2;
-  float float_value = 3;
-  ValueType value_type = 4;
+  TypeSpec type = 2;  // Parameter type (ScalarTypeSpec for Phase 7A)
 }
 
 // Binary operation (add, sub, mul, div)
 message BinaryOp {
   BinaryOpType op_type = 1;
-  ASTNode left = 2;   // Nested node
-  ASTNode right = 3;  // Nested node
-  ValueType result_type = 4;  // Result type after type promotion (set by Python)
+  ASTNode left = 2;
+  ASTNode right = 3;
+  TypeSpec result_type = 4;  // Result type after type checking
 }
 
 // Comparison operation
@@ -117,7 +161,7 @@ message CompareOp {
   ComparisonPredicate predicate = 1;
   ASTNode left = 2;
   ASTNode right = 3;
-  ValueType operand_type = 4;  // Operand type after promotion (set by Python)
+  TypeSpec operand_type = 4;  // Operand type after type checking
 }
 
 // Conditional operation (if-then-else)
@@ -125,20 +169,19 @@ message IfOp {
   ASTNode condition = 1;
   ASTNode then_value = 2;
   ASTNode else_value = 3;
-  ValueType result_type = 4;  // Result type (set by Python after branch validation)
+  TypeSpec result_type = 4;  // Result type (validated by Python)
 }
 
-// Function call operation
-message CallOp {
-  string func_name = 1;
-  repeated ASTNode args = 2;  // Array of argument nodes
-
-  // Return type specification (exactly one must be set)
-  oneof return_type_spec {
-    ValueType scalar_return = 3;    // Scalar: i32, f32, i1
-    ArrayTypeSpec array_return = 4; // Array: memref<NxT>, memref<MxNxT>
-  }
+// Cast operation (explicit type conversion)
+message CastOp {
+  ASTNode value = 1;
+  TypeSpec source_type = 2;  // Source type
+  TypeSpec target_type = 3;  // Target type
 }
+
+// ============================================================================
+// CONTROL FLOW
+// ============================================================================
 
 // For loop operation (scf.for)
 message ForLoopOp {
@@ -147,7 +190,7 @@ message ForLoopOp {
   ASTNode step = 3;           // Loop step/increment
   ASTNode init_value = 4;     // Initial accumulator value
   BinaryOpType operation = 5; // Loop body operation
-  ValueType result_type = 6;  // Result type (set by Python, all inputs must match)
+  TypeSpec result_type = 6;   // Result type (validated by Python)
 }
 
 // While loop operation (scf.while)
@@ -155,43 +198,58 @@ message WhileLoopOp {
   ASTNode init_value = 1;          // Initial loop value
   ASTNode target = 2;              // Comparison target value
   BinaryOpType operation = 3;      // Loop body operation
-  ComparisonPredicate predicate = 4; // Comparison predicate enum
-  ValueType result_type = 5;       // Result type (set by Python, init_value and target must match)
+  ComparisonPredicate predicate = 4; // Comparison predicate
+  TypeSpec result_type = 5;        // Result type (validated by Python)
 }
 
-// Cast operation (explicit type conversion)
-message CastOp {
-  ASTNode value = 1;          // Value to cast
-  ValueType target_type = 2;  // Target type to cast to
-}
+// ============================================================================
+// ARRAYS (MemRef)
+// ============================================================================
 
 // Array literal creation: Array[4, i32]([1, 2, 3, 4])
 message ArrayLiteral {
-  ArrayTypeSpec array_type = 1;  // Array type (size + element type)
-  repeated ASTNode elements = 2;  // Array elements (must match array_type.size)
+  TypeSpec type = 1;              // Array type (MemRefTypeSpec)
+  repeated ASTNode elements = 2;  // Array elements
 }
 
 // Array element access: arr[i] or arr[i,j] or arr[i,j,k]
 message ArrayAccess {
-  ASTNode array = 1;           // Array to index into (must be ArrayLiteral or array-typed value)
-  repeated ASTNode indices = 2; // Index values (must be I32, count must match array dimensions)
+  ASTNode array = 1;              // Array to index into
+  repeated ASTNode indices = 2;   // Index values (must be i32)
+  TypeSpec result_type = 3;       // Element type (ScalarTypeSpec)
 }
 
 // Array element store: arr.at[i].set(v) or arr.at[i,j].set(v)
 message ArrayStore {
-  ASTNode array = 1;            // Array to store into
-  repeated ASTNode indices = 2; // Index values (must be I32, count must match array dimensions)
-  ASTNode value = 3;            // Value to store (must match array element type)
+  ASTNode array = 1;              // Array to store into
+  repeated ASTNode indices = 2;   // Index values (must be i32)
+  ASTNode value = 3;              // Value to store
+  TypeSpec result_type = 4;       // Result array type (MemRefTypeSpec)
 }
 
 // Element-wise binary operation on arrays
 message ArrayBinaryOp {
-  BinaryOpType op_type = 1;        // ADD, SUB, MUL, DIV
-  ASTNode left = 2;                // Left operand (array or scalar)
-  ASTNode right = 3;               // Right operand (array or scalar)
-  ArrayTypeSpec result_type = 4;   // Result array shape (size + element type)
-  BroadcastMode broadcast = 5;     // Broadcasting mode
+  BinaryOpType op_type = 1;       // ADD, SUB, MUL, DIV
+  ASTNode left = 2;               // Left operand (array or scalar)
+  ASTNode right = 3;              // Right operand (array or scalar)
+  TypeSpec result_type = 4;       // Result type (MemRefTypeSpec)
+  BroadcastMode broadcast = 5;    // Broadcasting mode
 }
+
+// ============================================================================
+// FUNCTION OPERATIONS
+// ============================================================================
+
+// Function call operation
+message CallOp {
+  string func_name = 1;
+  repeated ASTNode args = 2;  // Function arguments
+  TypeSpec return_type = 3;   // Return type specification
+}
+
+// ============================================================================
+// SSA VALUE REUSE
+// ============================================================================
 
 // Let binding for SSA value reuse (marks first use of a shared value)
 message LetBinding {
@@ -204,6 +262,10 @@ message ValueReference {
   int64 node_id = 1;  // Reference to a let-bound value
 }
 
+// ============================================================================
+// TOP-LEVEL STRUCTURES
+// ============================================================================
+
 // Root message for the entire AST
 message ASTRoot {
   ASTNode root = 1;  // Root node of the expression tree
@@ -212,30 +274,61 @@ message ASTRoot {
 // Function parameter definition
 message FunctionParameter {
   string name = 1;
-  ValueType type = 2;
+  TypeSpec type = 2;  // Parameter type
 }
 
 // Complete function definition (name, signature, body)
 message FunctionDef {
-  string name = 1;                    // Function name
-  repeated FunctionParameter params = 2;  // Function parameters
-  ASTNode body = 4;                   // Function body AST
-
-  // Return type specification (exactly one must be set)
-  oneof return_type_spec {
-    ValueType scalar_return = 3;      // Scalar: i32, f32, i1
-    ArrayTypeSpec array_return = 5;   // Array: memref<NxT>, memref<MxNxT>
-  }
+  string name = 1;                       // Function name
+  repeated FunctionParameter params = 2; // Function parameters
+  TypeSpec return_type = 3;              // Return type specification
+  ASTNode body = 4;                      // Function body AST
 }
 
 // Function signature (lightweight version for executor registration)
 message FunctionSignature {
   string name = 1;                    // Function name
-  repeated ValueType param_types = 2; // Parameter types (just enums)
-
-  // Return type specification (exactly one must be set)
-  oneof return_type_spec {
-    ValueType scalar_return = 3;      // Scalar return
-    ArrayTypeSpec array_return = 4;   // Array return
-  }
+  repeated TypeSpec param_types = 2;  // Parameter types
+  TypeSpec return_type = 3;           // Return type
 }
+
+// ============================================================================
+// OLD TYPE SYSTEM (For migration compatibility - will be removed in Phase 8)
+// ============================================================================
+
+// DEPRECATED: Use TypeSpec with ScalarTypeSpec instead
+enum ValueType {
+  option deprecated = true;
+  I32 = 0;
+  F32 = 1;
+  I1 = 2;
+}
+
+// DEPRECATED: Use TypeSpec with MemRefTypeSpec instead
+message ArrayTypeSpec {
+  option deprecated = true;
+  repeated int32 shape = 1;
+  ValueType element_type = 2;
+}
+
+// ============================================================================
+// NOTES ON MIGRATION
+// ============================================================================
+//
+// During migration (Phases 1-7), messages will have BOTH old and new fields:
+//
+// Example during migration:
+//   message Constant {
+//     oneof value { ... }
+//     ValueType value_type = 3;  // OLD - deprecated
+//     TypeSpec type = 4;         // NEW - preferred
+//   }
+//
+// After Phase 8 cleanup, only the new TypeSpec field remains.
+//
+// Key improvements in new type system:
+// 1. Compositional: TypeSpec can be nested (arrays of arrays, etc.)
+// 2. Unified: Single conversion function in C++ (convertType)
+// 3. Extensible: Easy to add new types (tensor, tuple, complex)
+// 4. MLIR-aligned: Mirrors MLIR's type hierarchy
+// ============================================================================

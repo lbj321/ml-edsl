@@ -101,11 +101,20 @@ mlir::Value MLIRBuilder::handleValueRef(const mlir_edsl::ASTNode &node) {
 
 mlir::Value MLIRBuilder::handleConstant(const mlir_edsl::ASTNode &node) {
   const auto &constant = node.constant();
-  switch (constant.value_type()) {
-  case mlir_edsl::ValueType::I32:
+  const auto &typeSpec = constant.type();
+
+  if (!typeSpec.has_scalar()) {
+    throw std::runtime_error("Constant must have scalar type");
+  }
+
+  switch (typeSpec.scalar().kind()) {
+  case mlir_edsl::ScalarTypeSpec::I32:
     return arithBuilder->buildConstant(constant.int_value());
-  case mlir_edsl::ValueType::F32:
+  case mlir_edsl::ScalarTypeSpec::F32:
     return arithBuilder->buildConstant(constant.float_value());
+  case mlir_edsl::ScalarTypeSpec::I1:
+    // Boolean constants - use i32 constant with 0 or 1
+    return arithBuilder->buildConstant(constant.bool_value() ? 1 : 0);
   default:
     throw std::runtime_error("Unsupported constant type");
   }
@@ -121,7 +130,7 @@ mlir::Value MLIRBuilder::handleBinaryOp(const mlir_edsl::ASTNode &node) {
   mlir::Value left = buildFromProtobufNode(binop.left());
   mlir::Value right = buildFromProtobufNode(binop.right());
 
-  mlir::Type targetType = protoTypeToMLIRType(binop.result_type());
+  mlir::Type targetType = convertType(binop.result_type());
   auto [promotedLeft, promotedRight] = promoteToType(left, right, targetType);
 
   switch (binop.op_type()) {
@@ -143,7 +152,7 @@ mlir::Value MLIRBuilder::handleCompareOp(const mlir_edsl::ASTNode &node) {
   mlir::Value left = buildFromProtobufNode(cmp.left());
   mlir::Value right = buildFromProtobufNode(cmp.right());
 
-  mlir::Type targetType = protoTypeToMLIRType(cmp.operand_type());
+  mlir::Type targetType = convertType(cmp.operand_type());
   auto [promotedLhs, promotedRhs] = promoteToType(left, right, targetType);
 
   return arithBuilder->buildCompare(cmp.predicate(), promotedLhs, promotedRhs);
@@ -152,7 +161,7 @@ mlir::Value MLIRBuilder::handleCompareOp(const mlir_edsl::ASTNode &node) {
 mlir::Value MLIRBuilder::handleIfOp(const mlir_edsl::ASTNode &node) {
   const auto &ifop = node.if_op();
   mlir::Value cond = buildFromProtobufNode(ifop.condition());
-  mlir::Type resultType = protoTypeToMLIRType(ifop.result_type());
+  mlir::Type resultType = convertType(ifop.result_type());
 
   auto buildThen = [this, &ifop]() {
     return buildFromProtobufNode(ifop.then_value());
@@ -193,7 +202,8 @@ mlir::Value MLIRBuilder::handleWhileLoopOp(const mlir_edsl::ASTNode &node) {
 mlir::Value MLIRBuilder::handleCastOp(const mlir_edsl::ASTNode &node) {
   const auto &cast = node.cast_op();
   mlir::Value sourceValue = buildFromProtobufNode(cast.value());
-  return arithBuilder->buildCast(sourceValue, cast.target_type());
+  mlir::Type targetType = convertType(cast.target_type());
+  return arithBuilder->buildCast(sourceValue, targetType);
 }
 
 mlir::Value MLIRBuilder::handleArrayLiteral(const mlir_edsl::ASTNode &node) {
@@ -298,6 +308,65 @@ mlir::Type MLIRBuilder::arrayTypeSpecToMLIRType(
   return mlir::MemRefType::get(shape, elementType);
 }
 
+// ==================== NEW ALGEBRAIC TYPE SYSTEM ====================
+
+mlir::Type MLIRBuilder::convertType(const mlir_edsl::TypeSpec &typeSpec) const {
+  switch (typeSpec.type_kind_case()) {
+    case mlir_edsl::TypeSpec::kScalar:
+      return convertScalarType(typeSpec.scalar());
+
+    case mlir_edsl::TypeSpec::kMemref:
+      return convertMemRefType(typeSpec.memref());
+
+    case mlir_edsl::TypeSpec::TYPE_KIND_NOT_SET:
+      throw std::runtime_error("TypeSpec has no type set");
+
+    default:
+      throw std::runtime_error("Unknown TypeSpec kind: " +
+                               std::to_string(typeSpec.type_kind_case()));
+  }
+}
+
+mlir::Type MLIRBuilder::convertScalarType(
+    const mlir_edsl::ScalarTypeSpec &scalarSpec) const {
+  switch (scalarSpec.kind()) {
+    case mlir_edsl::ScalarTypeSpec::I32:
+      return builder->getI32Type();
+
+    case mlir_edsl::ScalarTypeSpec::F32:
+      return builder->getF32Type();
+
+    case mlir_edsl::ScalarTypeSpec::I1:
+      return builder->getI1Type();
+
+    default:
+      throw std::runtime_error("Unknown ScalarTypeSpec kind: " +
+                               std::to_string(static_cast<int>(scalarSpec.kind())));
+  }
+}
+
+mlir::Type MLIRBuilder::convertMemRefType(
+    const mlir_edsl::MemRefTypeSpec &memrefSpec) const {
+
+  // Recursively convert element type - THIS IS THE KEY!
+  mlir::Type elementType = convertType(memrefSpec.element_type());
+
+  // Extract shape dimensions
+  llvm::SmallVector<int64_t> shape(
+      memrefSpec.shape().begin(),
+      memrefSpec.shape().end()
+  );
+
+  // Validate dimensions
+  if (shape.empty() || shape.size() > 3) {
+    throw std::runtime_error("Only 1D, 2D, and 3D arrays supported, got " +
+                             std::to_string(shape.size()) + "D");
+  }
+
+  // Create memref type: memref<2x3xi32>
+  return mlir::MemRefType::get(shape, elementType);
+}
+
 // ==================== Infrastructure Utilities ====================
 
 mlir::Value MLIRBuilder::buildIndexConstant(int64_t value) {
@@ -330,32 +399,14 @@ mlir::Value MLIRBuilder::getParameter(const std::string &name) {
 }
 
 void MLIRBuilder::compileFunctionFromDef(const mlir_edsl::FunctionDef &func_def) {
-  // Extract parameters
-  std::vector<std::pair<std::string, mlir_edsl::ValueType>> params;
+  // Extract parameters using new TypeSpec-based system
+  std::vector<std::pair<std::string, mlir_edsl::TypeSpec>> params;
   for (const auto &param : func_def.params()) {
     params.push_back({param.name(), param.type()});
   }
 
-  // Determine return type from oneof field
-  mlir::Type returnType;
-
-  switch (func_def.return_type_spec_case()) {
-    case mlir_edsl::FunctionDef::kScalarReturn:
-      // Scalar return type (i32, f32, i1)
-      returnType = protoTypeToMLIRType(func_def.scalar_return());
-      break;
-
-    case mlir_edsl::FunctionDef::kArrayReturn:
-      // Array return type (memref)
-      returnType = arrayTypeSpecToMLIRType(func_def.array_return());
-      break;
-
-    case mlir_edsl::FunctionDef::RETURN_TYPE_SPEC_NOT_SET:
-      throw std::runtime_error("FunctionDef missing return type specification");
-
-    default:
-      throw std::runtime_error("Unknown return type specification");
-  }
+  // Get return type using unified TypeSpec
+  mlir::Type returnType = convertType(func_def.return_type());
 
   // Compile function
   createFunction(func_def.name(), params, returnType);
@@ -365,16 +416,16 @@ void MLIRBuilder::compileFunctionFromDef(const mlir_edsl::FunctionDef &func_def)
 
 void MLIRBuilder::createFunction(
     const std::string &name,
-    const std::vector<std::pair<std::string, mlir_edsl::ValueType>> &params,
+    const std::vector<std::pair<std::string, mlir_edsl::TypeSpec>> &params,
     mlir::Type returnType) {
 
   // Reset builder state from previous function
   reset();
 
-  // Convert parameter types
+  // Convert parameter types using new unified type conversion
   std::vector<mlir::Type> paramTypes;
-  for (const auto &[paramName, valueType] : params) {
-    paramTypes.push_back(protoTypeToMLIRType(valueType));
+  for (const auto &[paramName, typeSpec] : params) {
+    paramTypes.push_back(convertType(typeSpec));
   }
 
   // returnType is already an mlir::Type - use it directly

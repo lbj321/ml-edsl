@@ -353,10 +353,13 @@ class TestArrayProtobufSerialization:
         # Should have array_literal field set
         assert pb.HasField("array_literal")
 
-        # Check array type spec (now uses shape repeated field)
-        assert len(pb.array_literal.array_type.shape) == 1  # 1D array
-        assert pb.array_literal.array_type.shape[0] == 3    # size is 3
-        assert pb.array_literal.array_type.element_type == I32
+        # Check array type spec (uses new TypeSpec with memref field)
+        assert pb.array_literal.type.HasField("memref")
+        assert len(pb.array_literal.type.memref.shape) == 1  # 1D array
+        assert pb.array_literal.type.memref.shape[0] == 3    # size is 3
+        # Element type is nested: type.memref.element_type.scalar.kind
+        from mlir_edsl import ast_pb2
+        assert pb.array_literal.type.memref.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.I32
 
         # Check elements
         assert len(pb.array_literal.elements) == 3

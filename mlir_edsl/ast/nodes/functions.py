@@ -1,6 +1,7 @@
 """Function-related AST nodes: Parameter, CallOp"""
 
 from ..base import Value
+from ...types import type_to_proto
 
 # Import generated protobuf code
 try:
@@ -29,7 +30,7 @@ class Parameter(Value):
 
         pb_node = ast_pb2.ASTNode()
         pb_node.parameter.name = self.name
-        pb_node.parameter.value_type = self.value_type
+        pb_node.parameter.type.CopyFrom(type_to_proto(self.value_type))
         # Value fields are unused by C++ backend (uses parameterMap instead)
         return pb_node
 
@@ -57,15 +58,8 @@ class CallOp(Value):
         pb_node = ast_pb2.ASTNode()
         pb_node.call_op.func_name = self.func_name
 
-        # Set return type based on type (oneof field)
-        from mlir_edsl.types import ArrayType
-        if isinstance(self.return_type, ArrayType):
-            # Array return type - populate array_return field
-            pb_node.call_op.array_return.shape.extend(self.return_type.shape)
-            pb_node.call_op.array_return.element_type = self.return_type.element_enum
-        else:
-            # Scalar return type - populate scalar_return field
-            pb_node.call_op.scalar_return = self.return_type
+        # Set return type using unified TypeSpec
+        pb_node.call_op.return_type.CopyFrom(type_to_proto(self.return_type))
 
         # Context-aware child serialization
         for arg in self.args:

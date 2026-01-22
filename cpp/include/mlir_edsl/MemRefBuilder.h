@@ -18,8 +18,8 @@ class MemRefBuilder {
 public:
   MemRefBuilder(mlir::OpBuilder& builder, mlir::MLIRContext* context, MLIRBuilder* parent, ArithBuilder* arithBuilder, SCFBuilder* scfBuilder);
 
-  /// Build memref type from protobuf ArrayTypeSpec
-  mlir::MemRefType buildMemRefType(const ArrayTypeSpec& spec);
+  /// Build memref type from protobuf MemRefTypeSpec (new type system)
+  mlir::MemRefType buildMemRefType(const MemRefTypeSpec& spec);
 
   /// Build array literal: allocate + initialize
   mlir::Value buildArrayLiteral(const ArrayLiteral& arrayLit);

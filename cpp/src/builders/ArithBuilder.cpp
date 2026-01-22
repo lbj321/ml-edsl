@@ -60,34 +60,33 @@ mlir::Value ArithBuilder::convertIntToFloat(mlir::Value intValue) {
 }
 
 mlir::Value ArithBuilder::buildCast(mlir::Value sourceValue,
-                                    mlir_edsl::ValueType targetType) {
+                                    mlir::Type targetType) {
   auto loc = builder.getUnknownLoc();
   mlir::Type sourceType = sourceValue.getType();
-  mlir::Type targetMLIRType = parent->protoTypeToMLIRType(targetType);
 
   // Float to integer
-  if (mlir::isa<mlir::FloatType>(sourceType) && mlir::isa<mlir::IntegerType>(targetMLIRType)) {
-    return builder.create<mlir::arith::FPToSIOp>(loc, targetMLIRType, sourceValue);
+  if (mlir::isa<mlir::FloatType>(sourceType) && mlir::isa<mlir::IntegerType>(targetType)) {
+    return builder.create<mlir::arith::FPToSIOp>(loc, targetType, sourceValue);
   }
   // Integer to float
-  else if (mlir::isa<mlir::IntegerType>(sourceType) && mlir::isa<mlir::FloatType>(targetMLIRType)) {
-    return builder.create<mlir::arith::SIToFPOp>(loc, targetMLIRType, sourceValue);
+  else if (mlir::isa<mlir::IntegerType>(sourceType) && mlir::isa<mlir::FloatType>(targetType)) {
+    return builder.create<mlir::arith::SIToFPOp>(loc, targetType, sourceValue);
   }
   // Integer to integer (different widths)
-  else if (mlir::isa<mlir::IntegerType>(sourceType) && mlir::isa<mlir::IntegerType>(targetMLIRType)) {
+  else if (mlir::isa<mlir::IntegerType>(sourceType) && mlir::isa<mlir::IntegerType>(targetType)) {
     unsigned sourceBits = sourceType.getIntOrFloatBitWidth();
-    unsigned targetBits = targetMLIRType.getIntOrFloatBitWidth();
+    unsigned targetBits = targetType.getIntOrFloatBitWidth();
 
     if (sourceBits < targetBits) {
-      return builder.create<mlir::arith::ExtSIOp>(loc, targetMLIRType, sourceValue);
+      return builder.create<mlir::arith::ExtSIOp>(loc, targetType, sourceValue);
     } else if (sourceBits > targetBits) {
-      return builder.create<mlir::arith::TruncIOp>(loc, targetMLIRType, sourceValue);
+      return builder.create<mlir::arith::TruncIOp>(loc, targetType, sourceValue);
     } else {
       return sourceValue; // Same width, no cast needed
     }
   }
   // Float to float (same type, no cast needed)
-  else if (mlir::isa<mlir::FloatType>(sourceType) && mlir::isa<mlir::FloatType>(targetMLIRType)) {
+  else if (mlir::isa<mlir::FloatType>(sourceType) && mlir::isa<mlir::FloatType>(targetType)) {
     return sourceValue;
   }
 

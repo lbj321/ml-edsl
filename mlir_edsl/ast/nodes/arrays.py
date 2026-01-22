@@ -2,7 +2,7 @@
 
 from typing import Union
 from ..base import Value
-from ...types import I32, F32, I1, ArrayType
+from ...types import I32, F32, I1, ArrayType, type_to_proto, array_type_to_proto, scalar_type_to_proto
 
 # Import generated protobuf code
 try:
@@ -155,10 +155,8 @@ class ArrayLiteral(Value):
 
         pb_node = ast_pb2.ASTNode()
 
-        # Set array type specification with shape (supports 1D/2D/3D)
-        for dim in self.array_type.shape:
-            pb_node.array_literal.array_type.shape.append(dim)
-        pb_node.array_literal.array_type.element_type = self.array_type.element_enum
+        # Set array type using new TypeSpec with memref
+        pb_node.array_literal.type.CopyFrom(array_type_to_proto(self.array_type))
 
         # Serialize each element (with context-aware serialization)
         for elem in self.elements:
@@ -267,6 +265,9 @@ class ArrayAccess(Value):
         # Serialize all indices using repeated field
         for idx in self.indices:
             pb_node.array_access.indices.append(idx._to_proto_impl(context))
+
+        # Set result type (element type of the array)
+        pb_node.array_access.result_type.CopyFrom(scalar_type_to_proto(self._array_type.element_enum))
 
         return pb_node
 
@@ -401,6 +402,9 @@ class ArrayStore(Value):
         for idx in self.indices:
             pb_node.array_store.indices.append(idx._to_proto_impl(context))
 
+        # Set result type (array type)
+        pb_node.array_store.result_type.CopyFrom(array_type_to_proto(self._array_type))
+
         return pb_node
 
 
@@ -504,12 +508,8 @@ class ArrayBinaryOp(Value):
         pb_node = ast_pb2.ASTNode()
         pb_node.array_binary_op.op_type = _binary_op_to_proto(self.op)
 
-        # Set result type (array shape) using repeated shape field
-        # For 1D: shape = (N,) -> [N]
-        # For 2D: shape = (M, N) -> [M, N]
-        # For 3D: shape = (M, N, P) -> [M, N, P]
-        pb_node.array_binary_op.result_type.shape.extend(self._result_type.shape)
-        pb_node.array_binary_op.result_type.element_type = self._result_type.element_enum
+        # Set result type using new TypeSpec with memref
+        pb_node.array_binary_op.result_type.CopyFrom(array_type_to_proto(self._result_type))
 
         # Set broadcast mode
         broadcast_map = {

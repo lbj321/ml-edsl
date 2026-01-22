@@ -2,7 +2,7 @@
 import ctypes
 from typing import Union
 from .ast import Value
-from .types import TYPE_TO_CTYPES, ArrayType
+from .types import TYPE_TO_CTYPES, ArrayType, type_to_proto, I32, F32, I1
 
 try:
     from . import _mlir_backend
@@ -45,8 +45,8 @@ class CppMLIRBackend:
 
         Args:
             name: Function name
-            params: List of (param_name, ValueType_enum) tuples using ast_pb2 enums
-            return_type: ValueType enum (ast_pb2.I32/F32/I1) OR ArrayType instance
+            params: List of (param_name, type_spec) tuples where type_spec is int enum or ArrayType
+            return_type: int enum (I32/F32/I1) OR ArrayType instance
             ast_node: Root AST node to compile
         """
         if not HAS_PROTOBUF:
@@ -56,25 +56,14 @@ class CppMLIRBackend:
         func_def = ast_pb2.FunctionDef()
         func_def.name = name
 
-        # Add parameters with enum types
+        # Add parameters with TypeSpec
         for param_name, param_type in params:
             param = func_def.params.add()
             param.name = param_name
-            param.type = param_type  # Direct enum assignment!
+            param.type.CopyFrom(type_to_proto(param_type))
 
-        # Set return type based on type (oneof field)
-        if isinstance(return_type, ArrayType):
-            # Array return type - populate array_return field
-            func_def.array_return.shape.extend(return_type.shape)
-            func_def.array_return.element_type = return_type.element_enum
-        elif isinstance(return_type, int):
-            # Scalar return type - populate scalar_return field
-            func_def.scalar_return = return_type
-        else:
-            raise TypeError(
-                f"Invalid return type: {type(return_type).__name__}. "
-                f"Expected int (scalar enum) or ArrayType instance."
-            )
+        # Set return type using unified TypeSpec
+        func_def.return_type.CopyFrom(type_to_proto(return_type))
 
         # Add function body (with SSA value reuse detection)
         func_def.body.CopyFrom(ast_node.to_proto_with_reuse())
@@ -83,16 +72,16 @@ class CppMLIRBackend:
         func_def_bytes = func_def.SerializeToString()
         self.builder.compile_function(func_def_bytes)
 
-        # Build signature from the func_def we already have
+        # Build signature for executor
         sig = ast_pb2.FunctionSignature()
         sig.name = name
-        sig.param_types.extend([param_type for _, param_type in params])
 
-        # Set return type based on type (mirror the oneof from func_def)
-        if isinstance(return_type, ArrayType):
-            sig.array_return.CopyFrom(func_def.array_return)
-        else:
-            sig.scalar_return = return_type
+        # Add parameter types as TypeSpec
+        for _, param_type in params:
+            sig.param_types.append(type_to_proto(param_type))
+
+        # Set return type
+        sig.return_type.CopyFrom(type_to_proto(return_type))
 
         # Register signature with executor
         sig_bytes = sig.SerializeToString()
@@ -114,7 +103,7 @@ class CppMLIRBackend:
             sig_bytes = self.executor.get_function_signature(name)
             sig = ast_pb2.FunctionSignature()
             sig.ParseFromString(sig_bytes)
-            
+
             # Get LLVM IR and JIT compile
             llvm_ir = self.builder.get_llvm_ir_string()
             self.executor.clear()
@@ -129,10 +118,17 @@ class CppMLIRBackend:
             # Get function pointer as integer
             func_ptr_int = self.executor.get_function_pointer(name)
 
-            # Determine return type from oneof field
-            if sig.HasField('scalar_return'):
-                c_return_type = TYPE_TO_CTYPES[sig.scalar_return]
-            elif sig.HasField('array_return'):
+            # Determine return type from TypeSpec
+            if sig.return_type.HasField('scalar'):
+                # Map ScalarTypeSpec.Kind to our enum values
+                scalar_kind = sig.return_type.scalar.kind
+                kind_to_enum = {
+                    ast_pb2.ScalarTypeSpec.I32: I32,
+                    ast_pb2.ScalarTypeSpec.F32: F32,
+                    ast_pb2.ScalarTypeSpec.I1: I1,
+                }
+                c_return_type = TYPE_TO_CTYPES[kind_to_enum[scalar_kind]]
+            elif sig.return_type.HasField('memref'):
                 raise RuntimeError(
                     f"Cannot execute function '{name}' from Python: it returns an array type.\n"
                     f"Array-returning functions can only be called from within other @ml_function decorated functions.\n"
@@ -141,8 +137,18 @@ class CppMLIRBackend:
             else:
                 raise RuntimeError(f"Function '{name}' has no return type specification")
 
-            # Build ctypes function signature
-            c_param_types = [TYPE_TO_CTYPES[pt] for pt in sig.param_types]
+            # Build ctypes function signature from TypeSpec param_types
+            c_param_types = []
+            kind_to_enum = {
+                ast_pb2.ScalarTypeSpec.I32: I32,
+                ast_pb2.ScalarTypeSpec.F32: F32,
+                ast_pb2.ScalarTypeSpec.I1: I1,
+            }
+            for pt in sig.param_types:
+                if pt.HasField('scalar'):
+                    c_param_types.append(TYPE_TO_CTYPES[kind_to_enum[pt.scalar.kind]])
+                else:
+                    raise RuntimeError("Array parameters not yet supported for JIT execution")
 
             # Create ctypes function wrapper
             func_type = ctypes.CFUNCTYPE(c_return_type, *c_param_types)

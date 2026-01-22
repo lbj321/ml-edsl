@@ -14,9 +14,9 @@ MemRefBuilder::MemRefBuilder(mlir::OpBuilder &builder,
     : builder(builder), context(context), parent(parent),
       arithBuilder(arithBuilder), scfBuilder(scfBuilder) {}
 
-mlir::MemRefType MemRefBuilder::buildMemRefType(const ArrayTypeSpec &spec) {
-  // Reuse parent's type converter - no duplication!
-  mlir::Type elementType = parent->protoTypeToMLIRType(spec.element_type());
+mlir::MemRefType MemRefBuilder::buildMemRefType(const MemRefTypeSpec &spec) {
+  // Use recursive type conversion for element type (new algebraic type system)
+  mlir::Type elementType = parent->convertType(spec.element_type());
 
   // Build shape from protobuf repeated field
   llvm::SmallVector<int64_t, 3> shape;
@@ -35,8 +35,11 @@ mlir::MemRefType MemRefBuilder::buildMemRefType(const ArrayTypeSpec &spec) {
 mlir::Value MemRefBuilder::buildArrayLiteral(const ArrayLiteral &arrayLit) {
   auto loc = builder.getUnknownLoc();
 
-  // 1. Build memref type
-  mlir::MemRefType memrefType = buildMemRefType(arrayLit.array_type());
+  // 1. Build memref type from TypeSpec
+  if (!arrayLit.type().has_memref()) {
+    throw std::runtime_error("ArrayLiteral must have memref type");
+  }
+  mlir::MemRefType memrefType = buildMemRefType(arrayLit.type().memref());
 
   // 2. Allocate with memref.alloca (stack allocation)
   auto allocOp = builder.create<mlir::memref::AllocaOp>(loc, memrefType);
@@ -150,7 +153,10 @@ mlir::Value MemRefBuilder::buildArrayBinaryOp(const ArrayBinaryOp &op) {
   auto opType = op.op_type();
 
   // 3. Allocate result memref
-  mlir::MemRefType resultType = buildMemRefType(op.result_type());
+  if (!op.result_type().has_memref()) {
+    throw std::runtime_error("ArrayBinaryOp must have memref result type");
+  }
+  mlir::MemRefType resultType = buildMemRefType(op.result_type().memref());
   auto allocOp = builder.create<mlir::memref::AllocaOp>(loc, resultType);
   mlir::Value resultArray = allocOp.getResult();
 
