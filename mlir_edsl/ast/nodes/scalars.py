@@ -29,8 +29,10 @@ class Constant(Value):
             self.value_type = i1
         elif isinstance(value, int):
             self.value_type = i32
-        else:
+        elif isinstance(value, float):
             self.value_type = f32
+        else:
+            raise TypeError(f"Cannot infer type for value: {value!r}")
 
     def infer_type(self) -> Type:
         """Constants know their own type"""

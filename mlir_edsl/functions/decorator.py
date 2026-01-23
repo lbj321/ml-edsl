@@ -1,15 +1,11 @@
 """Function decorator and compilation utilities"""
 
 from typing import Callable, Any, Union, Tuple, Dict, get_type_hints
-from .backend import get_backend
-from .ast import Parameter, Constant, BinaryOp, CallOp, CompareOp, IfOp
-from .types import Type, ScalarType, ArrayType, TypeSystem, i32, f32, i1
+from ..backend import get_backend
+from ..ast import Parameter, Constant, BinaryOp, CallOp, CompareOp, IfOp
+from ..types import Type, ScalarType, ArrayType, TypeSystem, i32, f32, i1
+from .context import symbolic_execution, in_symbolic_context
 import inspect
-
-# Global flag to track symbolic execution context
-# When True, function calls return CallOp AST nodes instead of executing
-# This allows @ml_function to call other @ml_function from within their body
-_in_symbolic_execution = False
 
 
 class MLFunction:
@@ -27,12 +23,11 @@ class MLFunction:
 
     def __call__(self, *args, **kwargs):
         """JIT compile and execute the function - returns numeric result OR AST node"""
-        global _in_symbolic_execution
-        from .ast import Value
+        from ..ast import Value
 
         # Check if we're in symbolic execution context (called from within another @ml_function)
         # This happens during decoration/validation when building the AST
-        if _in_symbolic_execution:
+        if in_symbolic_context():
             # Return CallOp AST node instead of executing
             ast_args = list(args) + list(kwargs.values())
             return_type = self._get_return_type()
@@ -134,7 +129,7 @@ class MLFunction:
 
     def _get_type_hints(self) -> dict:
         """Get type hints with proper namespace for MLIR types"""
-        from .types import i32, f32, i1
+        from ..types import i32, f32, i1
         return get_type_hints(
             self.func,
             globalns={'int': int, 'float': float, 'bool': bool},
@@ -177,11 +172,9 @@ class MLFunction:
     def _execute_symbolic(self, param_map: Dict):
         """Execute function symbolically to build AST
 
-        Sets global flag to indicate symbolic execution context,
-        ensuring nested @ml_function calls return CallOp nodes.
+        Uses symbolic_execution context to ensure nested
+        @ml_function calls return CallOp nodes.
         """
-        global _in_symbolic_execution
-
         signature = inspect.signature(self.func)
         param_names = list(signature.parameters.keys())
 
@@ -192,14 +185,8 @@ class MLFunction:
             else:
                 raise ValueError(f"Missing parameter: {param_name}")
 
-        # Set flag before calling function
-        old_value = _in_symbolic_execution
-        _in_symbolic_execution = True
-        try:
+        with symbolic_execution():
             return self.func(*symbolic_args)
-        finally:
-            # Always restore flag, even if exception occurs
-            _in_symbolic_execution = old_value
 
 
     # ==================== VALIDATION ====================
