@@ -441,136 +441,43 @@ class TypeSystem:
                 raise TypeError(f"Parameter '{param_name}' expects float/f32 but got {type(value).__name__}")
 
     @classmethod
-    def types_match(cls, inferred, declared) -> Tuple[bool, str]:
+    def types_match(cls, inferred: Type, declared: Type) -> Tuple[bool, str]:
         """Check if inferred type matches declared type.
-
-        Accepts both int (enum) and Type objects for backward compatibility.
 
         Returns:
             (matches: bool, error_message: str)
         """
-        # Normalize to comparable form
-        inferred_is_type = isinstance(inferred, Type)
-        declared_is_type = isinstance(declared, Type)
+        if inferred == declared:
+            return True, ""
 
-        # Both are Type objects
-        if inferred_is_type and declared_is_type:
-            if inferred == declared:
-                return True, ""
-
-            # Different type categories
-            if inferred.is_scalar() != declared.is_scalar():
-                return False, (
-                    f"Type category mismatch:\n"
-                    f"  Declared: {declared}\n"
-                    f"  Inferred: {inferred}\n"
-                    f"  Hint: Cannot mix scalar and array types"
-                )
-
-            # Same category but different types
-            if inferred.is_scalar():
-                return False, (
-                    f"Type mismatch:\n"
-                    f"  Declared: {declared}\n"
-                    f"  Inferred: {inferred}\n"
-                    f"  Hint: Change return type or add explicit cast"
-                )
-            else:
-                return False, (
-                    f"Array type mismatch:\n"
-                    f"  Declared: {declared}\n"
-                    f"  Inferred: {inferred}\n"
-                    f"  Hint: Ensure array shapes and element types match"
-                )
-
-        # Both are int enums
-        if not inferred_is_type and not declared_is_type:
-            if inferred == declared:
-                return True, ""
+        # Different type categories
+        if inferred.is_scalar() != declared.is_scalar():
             return False, (
-                f"Type mismatch:\n"
-                f"  Declared: {type_to_string(declared)}\n"
-                f"  Inferred: {type_to_string(inferred)}\n"
-                f"  Hint: Change return type to {type_to_string(inferred)} or add explicit cast"
-            )
-
-        # Mixed: one is Type, one is int - compare by kind
-        if inferred_is_type and not declared_is_type:
-            # inferred is Type, declared is int
-            if isinstance(inferred, ScalarType) and inferred.kind == declared:
-                return True, ""
-            if isinstance(inferred, ArrayType):
-                return False, (
-                    f"Type category mismatch:\n"
-                    f"  Declared: {type_to_string(declared)} (scalar)\n"
-                    f"  Inferred: {inferred} (array)\n"
-                    f"  Hint: Cannot mix scalar and array types"
-                )
-            return False, (
-                f"Type mismatch:\n"
-                f"  Declared: {type_to_string(declared)}\n"
+                f"Type category mismatch:\n"
+                f"  Declared: {declared}\n"
                 f"  Inferred: {inferred}\n"
-                f"  Hint: Change return type or add explicit cast"
+                f"  Hint: Cannot mix scalar and array types"
             )
 
-        if not inferred_is_type and declared_is_type:
-            # inferred is int, declared is Type
-            if isinstance(declared, ScalarType) and declared.kind == inferred:
-                return True, ""
-            if isinstance(declared, ArrayType):
-                return False, (
-                    f"Type category mismatch:\n"
-                    f"  Declared: {declared} (array)\n"
-                    f"  Inferred: {type_to_string(inferred)} (scalar)\n"
-                    f"  Hint: Cannot mix scalar and array types"
-                )
+        # Same category but different types
+        if inferred.is_scalar():
             return False, (
                 f"Type mismatch:\n"
                 f"  Declared: {declared}\n"
-                f"  Inferred: {type_to_string(inferred)}\n"
+                f"  Inferred: {inferred}\n"
                 f"  Hint: Change return type or add explicit cast"
             )
+        else:
+            return False, (
+                f"Array type mismatch:\n"
+                f"  Declared: {declared}\n"
+                f"  Inferred: {inferred}\n"
+                f"  Hint: Ensure array shapes and element types match"
+            )
 
-    @classmethod
-    def type_name(cls, type_spec: Type) -> str:
-        """Get display name for a type"""
-        return str(type_spec)
-
-
-# ============================================================================
-# LEGACY HELPER FUNCTIONS (Used internally by TypeSystem)
-# ============================================================================
-
-def type_to_string(t) -> str:
-    """Convert type to string. Works with int enum or Type object."""
-    if isinstance(t, Type):
-        return str(t)
-    # Int enum
-    return {
-        ScalarType.I32: 'i32',
-        ScalarType.F32: 'f32',
-        ScalarType.I1: 'i1',
-    }.get(t, f'unknown({t})')
-
-
-# ============================================================================
-# PROTOBUF CONVERSION (Standalone functions for backward compatibility)
-# ============================================================================
 
 def type_to_proto(t: Type) -> ast_pb2.TypeSpec:
-    """Convert Type to TypeSpec protobuf message.
-
-    This is a convenience function that delegates to Type.to_proto().
-    """
-    if isinstance(t, Type):
-        return t.to_proto()
-
-    # Legacy support: handle raw enum values during migration
-    if isinstance(t, int):
-        ts = ast_pb2.TypeSpec()
-        ts.scalar.kind = t
-        return ts
-
-    raise TypeError(f"Cannot convert to TypeSpec: {t}")
+    """Convert Type to TypeSpec protobuf message."""
+    return t.to_proto()
 
 

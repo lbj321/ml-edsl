@@ -1,9 +1,9 @@
 """Base Value class for all AST nodes"""
 
 from abc import ABC, abstractmethod
-from typing import Union, TYPE_CHECKING
+from typing import TYPE_CHECKING
 from .operators import OperatorMixin
-from ..types import ArrayType
+from ..types import Type
 
 # Import generated protobuf code
 try:
@@ -26,17 +26,11 @@ class Value(ABC, OperatorMixin):
         Value._next_id += 1
 
     @abstractmethod
-    def infer_type(self) -> Union[int, ArrayType]:
+    def infer_type(self) -> Type:
         """Infer the type of this value.
 
         Returns:
-            int: Protobuf ValueType enum (I32=0, F32=1, I1=2) for scalar values
-            ArrayType: For array values with size and element type
-
-        Examples:
-            Constant(5).infer_type()           # Returns 0 (I32)
-            Constant(3.14).infer_type()        # Returns 1 (F32)
-            ArrayLiteral([1,2,3], ...).infer_type()  # Returns ArrayType instance
+            Type: ScalarType (i32, f32, i1) or ArrayType
         """
         raise NotImplementedError(f"{self.__class__.__name__} must implement infer_type()")
 
