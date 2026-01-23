@@ -1,6 +1,5 @@
 """MLIR type system - algebraic type hierarchy with protobuf serialization"""
 
-import ctypes
 from abc import ABC, abstractmethod
 from typing import Any, Tuple, TYPE_CHECKING
 from mlir_edsl import ast_pb2
@@ -169,7 +168,20 @@ i32 = ScalarType(ScalarType.I32)
 f32 = ScalarType(ScalarType.F32)
 i1 = ScalarType(ScalarType.I1)
 
-# Legacy aliases (for backward compatibility - now point to ScalarType singletons)
+# All scalar types - add new types here
+SCALAR_TYPES = (i32, f32, i1)
+
+# Derived: string name -> instance (for type hint resolution)
+TYPE_HINT_NAMESPACE = {t.name: t for t in SCALAR_TYPES}
+
+# Python type -> MLIR type (semantic mapping)
+PYTHON_TO_MLIR = {
+    int: i32,
+    float: f32,
+    bool: i1,
+}
+
+# Legacy aliases (for backward compatibility)
 I32 = i32
 F32 = f32
 I1 = i1
@@ -385,13 +397,6 @@ class Array(metaclass=ArrayMeta):
 class TypeSystem:
     """Type validation and parsing utilities"""
 
-    # Python type -> ScalarType mapping
-    PYTHON_TYPE_MAP = {
-        int: i32,
-        float: f32,
-        bool: i1,
-    }
-
     @classmethod
     def parse_type_hint(cls, hint, context: str = "parameter") -> Type:
         """Parse type hint to Type object.
@@ -406,8 +411,8 @@ class TypeSystem:
             return hint
 
         # Handle Python built-in types
-        if hint in cls.PYTHON_TYPE_MAP:
-            return cls.PYTHON_TYPE_MAP[hint]
+        if hint in PYTHON_TO_MLIR:
+            return PYTHON_TO_MLIR[hint]
 
         raise TypeError(f"Invalid type hint for {context}: {hint}")
 
@@ -569,13 +574,3 @@ def type_to_proto(t: Type) -> ast_pb2.TypeSpec:
     raise TypeError(f"Cannot convert to TypeSpec: {t}")
 
 
-# ============================================================================
-# BACKEND MAPPINGS
-# ============================================================================
-
-# Type mapping for ctypes (JIT execution)
-TYPE_TO_CTYPES = {
-    ScalarType.I32: ctypes.c_int32,
-    ScalarType.F32: ctypes.c_float,
-    ScalarType.I1: ctypes.c_bool,
-}

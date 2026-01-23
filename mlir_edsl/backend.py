@@ -2,7 +2,14 @@
 import ctypes
 from typing import Union
 from .ast import Value
-from .types import Type, ArrayType, type_to_proto, TYPE_TO_CTYPES
+from .types import Type, ArrayType, ScalarType, type_to_proto
+
+# ctypes mapping for JIT execution (backend-specific)
+TYPE_TO_CTYPES = {
+    ScalarType.I32: ctypes.c_int32,
+    ScalarType.F32: ctypes.c_float,
+    ScalarType.I1: ctypes.c_bool,
+}
 
 try:
     from . import _mlir_backend

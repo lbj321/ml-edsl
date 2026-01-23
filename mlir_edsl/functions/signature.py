@@ -3,7 +3,7 @@ from typing import Callable, Dict, List, Any, Tuple, get_type_hints
 from dataclasses import dataclass
 import inspect
 
-from ..types import Type, TypeSystem, i32, f32, i1
+from ..types import Type, TypeSystem, TYPE_HINT_NAMESPACE
 
 
 @dataclass
@@ -82,5 +82,5 @@ def _get_type_hints(func: Callable) -> dict:
     return get_type_hints(
         func,
         globalns={'int': int, 'float': float, 'bool': bool},
-        localns={'i32': i32, 'f32': f32, 'i1': i1}
+        localns=TYPE_HINT_NAMESPACE
     )
