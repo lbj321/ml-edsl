@@ -1,8 +1,7 @@
 """C++ MLIR backend integration"""
 import ctypes
 from typing import Union
-from .ast import Value
-from .types import Type, ArrayType, ScalarType, type_to_proto
+from .types import Type, ScalarType, type_to_proto
 
 # ctypes mapping for JIT execution (backend-specific)
 TYPE_TO_CTYPES = {
@@ -13,18 +12,17 @@ TYPE_TO_CTYPES = {
 
 try:
     from . import _mlir_backend
-    HAS_CPP_BACKEND = True
 except ImportError:
-    HAS_CPP_BACKEND = False
+    _mlir_backend = None
 
 try:
     from . import ast_pb2
-    HAS_PROTOBUF = True
 except ImportError:
-    HAS_PROTOBUF = False
     ast_pb2 = None
 
-# Global instance to keep the builder alive
+HAS_CPP_BACKEND = _mlir_backend is not None
+HAS_PROTOBUF = ast_pb2 is not None
+
 _global_builder = None
 
 class CppMLIRBackend:
@@ -45,10 +43,59 @@ class CppMLIRBackend:
         # Cache for ctypes function wrappers
         self._function_cache = {}
 
+    # ==================== COMPILATION HELPERS (PRIVATE) ====================
+    def _build_function_def_proto(self, name: str, params: list,
+                                   return_type: Type, ast_node) -> bytes:
+        """Build and serialize FunctionDef protobuf.
+
+        Args:
+            name: Function name
+            params: List of (param_name, param_type) tuples
+            return_type: Function return type
+            ast_node: Root AST node for function body
+
+        Returns:
+            Serialized FunctionDef protobuf bytes
+        """
+        func_def = ast_pb2.FunctionDef()
+        func_def.name = name
+
+        for param_name, param_type in params:
+            param = func_def.params.add()
+            param.name = param_name
+            param.type.CopyFrom(type_to_proto(param_type))
+
+        func_def.return_type.CopyFrom(type_to_proto(return_type))
+        func_def.body.CopyFrom(ast_node.to_proto_with_reuse())
+
+        return func_def.SerializeToString()
+
+    def _build_signature_proto(self, name: str, params: list,
+                                return_type: Type) -> bytes:
+        """Build and serialize FunctionSignature protobuf.
+
+        Args:
+            name: Function name
+            params: List of (param_name, param_type) tuples
+            return_type: Function return type
+
+        Returns:
+            Serialized FunctionSignature protobuf bytes
+        """
+        sig = ast_pb2.FunctionSignature()
+        sig.name = name
+
+        for _, param_type in params:
+            sig.param_types.append(type_to_proto(param_type))
+
+        sig.return_type.CopyFrom(type_to_proto(return_type))
+
+        return sig.SerializeToString()
+
     # ==================== CORE COMPILATION ====================
     def compile_function_from_ast(self, name: str, params: list,
-                                   return_type: Type, ast_node: Value) -> None:
-        """Compile complete function from AST - single protobuf entry point
+                                   return_type: Type, ast_node) -> None:
+        """Compile complete function from AST.
 
         Args:
             name: Function name
@@ -59,43 +106,99 @@ class CppMLIRBackend:
         if not HAS_PROTOBUF:
             raise RuntimeError("Protobuf not available. Run ./build.sh")
 
-        # Build complete FunctionDef protobuf message
-        func_def = ast_pb2.FunctionDef()
-        func_def.name = name
-
-        # Add parameters with TypeSpec
-        for param_name, param_type in params:
-            param = func_def.params.add()
-            param.name = param_name
-            param.type.CopyFrom(type_to_proto(param_type))
-
-        # Set return type using unified TypeSpec
-        func_def.return_type.CopyFrom(type_to_proto(return_type))
-
-        # Add function body (with SSA value reuse detection)
-        func_def.body.CopyFrom(ast_node.to_proto_with_reuse())
-
-        # Serialize and compile (errors propagate via exceptions)
-        func_def_bytes = func_def.SerializeToString()
+        # Build and compile function definition
+        func_def_bytes = self._build_function_def_proto(name, params, return_type, ast_node)
         self.builder.compile_function(func_def_bytes)
 
-        # Build signature for executor
-        sig = ast_pb2.FunctionSignature()
-        sig.name = name
-
-        # Add parameter types as TypeSpec
-        for _, param_type in params:
-            sig.param_types.append(type_to_proto(param_type))
-
-        # Set return type
-        sig.return_type.CopyFrom(type_to_proto(return_type))
-
-        # Register signature with executor
-        sig_bytes = sig.SerializeToString()
+        # Register signature with executor (needed for JIT execution)
+        sig_bytes = self._build_signature_proto(name, params, return_type)
         self.executor.register_function_signature(sig_bytes)
 
+    # ==================== EXECUTION HELPERS (PRIVATE) ====================
+    def _typespec_to_ctype(self, type_spec, context: str) -> type:
+        """Convert protobuf TypeSpec to ctypes type.
+
+        Args:
+            type_spec: Protobuf TypeSpec message
+            context: Description for error messages (e.g., "return type", "parameter 0")
+
+        Returns:
+            Corresponding ctypes type (c_int32, c_float, c_bool)
+
+        Raises:
+            RuntimeError: If type is not supported for JIT execution
+        """
+        if type_spec.HasField('scalar'):
+            return TYPE_TO_CTYPES[type_spec.scalar.kind]
+        elif type_spec.HasField('memref'):
+            if "return" in context:
+                raise RuntimeError(
+                    f"Cannot execute function from Python: it returns an array type.\n"
+                    f"Array-returning functions can only be called from within other "
+                    f"@ml_function decorated functions.\n"
+                    f"Hint: Create a wrapper function that extracts scalar values from the array."
+                )
+            else:
+                raise RuntimeError("Array parameters not yet supported for JIT execution")
+        else:
+            raise RuntimeError(f"Unknown type specification for {context}")
+
+    def _jit_compile_and_get_pointer(self, name: str, sig_bytes: bytes) -> int:
+        """JIT compile function and return function pointer.
+
+        Handles the "signature dance" required because executor.clear() wipes
+        the signature registry. We must:
+        1. Get LLVM IR from builder
+        2. Clear executor state (required before new JIT compilation)
+        3. JIT compile the LLVM IR
+        4. Re-register the signature (lost during clear)
+        5. Return the function pointer
+
+        Args:
+            name: Function name
+            sig_bytes: Serialized FunctionSignature protobuf
+
+        Returns:
+            Function pointer as integer
+
+        Raises:
+            RuntimeError: If JIT compilation fails
+        """
+        llvm_ir = self.builder.get_llvm_ir_string()
+        self.executor.clear()
+
+        func_ptr = self.executor.compile_function(llvm_ir, name)
+        if func_ptr is None:
+            raise RuntimeError(f"JIT compilation failed: {self.executor.get_last_error()}")
+
+        self.executor.register_function_signature(sig_bytes)
+        return self.executor.get_function_pointer(name)
+
+    def _build_ctypes_wrapper(self, func_ptr: int, sig) -> ctypes.CFUNCTYPE:
+        """Build ctypes function wrapper from signature.
+
+        Args:
+            func_ptr: Function pointer as integer
+            sig: Parsed FunctionSignature protobuf
+
+        Returns:
+            Callable ctypes function wrapper
+
+        Raises:
+            RuntimeError: If types are not supported for JIT execution
+        """
+        c_return_type = self._typespec_to_ctype(sig.return_type, "return type")
+
+        c_param_types = []
+        for i, pt in enumerate(sig.param_types):
+            c_param_types.append(self._typespec_to_ctype(pt, f"parameter {i}"))
+
+        func_type = ctypes.CFUNCTYPE(c_return_type, *c_param_types)
+        return func_type(func_ptr)
+
+    # ==================== JIT EXECUTION ====================
     def execute_function(self, name: str, *args) -> Union[int, float, bool]:
-        """Execute compiled function via JIT with ctypes
+        """Execute compiled function via JIT with ctypes.
 
         Args:
             name: Function name to execute
@@ -104,56 +207,18 @@ class CppMLIRBackend:
         Returns:
             Execution result (int, float, or bool)
         """
-        # Build ctypes function wrapper (cached)
         if name not in self._function_cache:
-            # Get signature BEFORE clearing (it was registered during compile_function_from_ast)
+            # Get signature (registered during compile_function_from_ast)
             sig_bytes = self.executor.get_function_signature(name)
             sig = ast_pb2.FunctionSignature()
             sig.ParseFromString(sig_bytes)
 
-            # Get LLVM IR and JIT compile
-            llvm_ir = self.builder.get_llvm_ir_string()
-            self.executor.clear()
+            # JIT compile and get function pointer
+            func_ptr = self._jit_compile_and_get_pointer(name, sig_bytes)
 
-            func_ptr = self.executor.compile_function(llvm_ir, name)
-            if func_ptr is None:
-                raise RuntimeError(f"JIT compilation failed: {self.executor.get_last_error()}")
+            # Build and cache ctypes wrapper
+            self._function_cache[name] = self._build_ctypes_wrapper(func_ptr, sig)
 
-            # Re-register signature (it was cleared by clear())
-            self.executor.register_function_signature(sig_bytes)
-
-            # Get function pointer as integer
-            func_ptr_int = self.executor.get_function_pointer(name)
-
-            # Determine return type from TypeSpec
-            if sig.return_type.HasField('scalar'):
-                # TYPE_TO_CTYPES uses ScalarTypeSpec.Kind directly
-                c_return_type = TYPE_TO_CTYPES[sig.return_type.scalar.kind]
-            elif sig.return_type.HasField('memref'):
-                raise RuntimeError(
-                    f"Cannot execute function '{name}' from Python: it returns an array type.\n"
-                    f"Array-returning functions can only be called from within other @ml_function decorated functions.\n"
-                    f"Hint: Create a wrapper function that extracts scalar values from the array."
-                )
-            else:
-                raise RuntimeError(f"Function '{name}' has no return type specification")
-
-            # Build ctypes function signature from TypeSpec param_types
-            c_param_types = []
-            for pt in sig.param_types:
-                if pt.HasField('scalar'):
-                    c_param_types.append(TYPE_TO_CTYPES[pt.scalar.kind])
-                else:
-                    raise RuntimeError("Array parameters not yet supported for JIT execution")
-
-            # Create ctypes function wrapper
-            func_type = ctypes.CFUNCTYPE(c_return_type, *c_param_types)
-            ctypes_func = func_type(func_ptr_int)
-
-            # Cache it
-            self._function_cache[name] = ctypes_func
-
-        # Call the cached function
         return self._function_cache[name](*args)
 
     # ==================== INSPECTION ====================
