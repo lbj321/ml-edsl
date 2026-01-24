@@ -18,11 +18,6 @@ class MLFunction:
         # Do a symbolic dry-run to catch type errors early
         validate_function_body(func, self.signature)
 
-    @property
-    def func_name(self) -> str:
-        """Function name (for backward compatibility)."""
-        return self.signature.name
-
     def __call__(self, *args, **kwargs) -> Union[int, float, bool, Value]:
         """JIT compile and execute the function - returns numeric result OR AST node"""
         if self._is_symbolic_call(args, kwargs):
