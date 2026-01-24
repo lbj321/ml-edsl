@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from typing import Any, Tuple, TYPE_CHECKING
 from mlir_edsl import ast_pb2
 
-
 # ============================================================================
 # TYPE BASE CLASS (Algebraic Type System)
 # ============================================================================
@@ -57,7 +56,7 @@ class Type(ABC):
         return self.is_scalar() and target.is_scalar()
 
     @abstractmethod
-    def to_proto(self) -> ast_pb2.TypeSpec:
+    def to_proto(self) -> ast_pb2.TypeSpec: # pyright: ignore[reportInvalidTypeForm]
         """Convert to protobuf TypeSpec"""
         pass
 
@@ -135,7 +134,7 @@ class ScalarType(Type):
         return self.kind in self._BOOLEAN_KINDS
 
     # Serialization
-    def to_proto(self) -> ast_pb2.TypeSpec:
+    def to_proto(self) -> ast_pb2.TypeSpec: # pyright: ignore[reportInvalidTypeForm]
         ts = ast_pb2.TypeSpec()
         ts.scalar.kind = self.kind
         return ts
@@ -180,11 +179,6 @@ PYTHON_TO_MLIR = {
     float: f32,
     bool: i1,
 }
-
-# Legacy aliases (for backward compatibility)
-I32 = i32
-F32 = f32
-I1 = i1
 
 
 # ============================================================================
@@ -289,7 +283,7 @@ class ArrayType(Type):
         return False
 
     # Serialization
-    def to_proto(self) -> ast_pb2.TypeSpec:
+    def to_proto(self) -> ast_pb2.TypeSpec: # pyright: ignore[reportInvalidTypeForm]
         ts = ast_pb2.TypeSpec()
         ts.memref.shape.extend(self.shape)
         ts.memref.element_type.CopyFrom(self.element_type.to_proto())
@@ -476,7 +470,7 @@ class TypeSystem:
             )
 
 
-def type_to_proto(t: Type) -> ast_pb2.TypeSpec:
+def type_to_proto(t: Type) -> ast_pb2.TypeSpec: # pyright: ignore[reportInvalidTypeForm]
     """Convert Type to TypeSpec protobuf message."""
     return t.to_proto()
 

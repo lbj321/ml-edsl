@@ -12,7 +12,7 @@ import pytest
 from mlir_edsl import Array, i32, f32, i1
 from mlir_edsl.ast import ArrayLiteral, ArrayAccess, ArrayStore, Constant
 from mlir_edsl.ast.serialization import SerializationContext
-from mlir_edsl.types import ArrayType, ScalarType, I32, F32, I1
+from mlir_edsl.types import ArrayType, ScalarType, i32, f32, i1
 
 
 # ==================== ARRAY LITERAL CREATION ====================
@@ -113,7 +113,7 @@ class TestArrayLiteralTypeInference:
         inferred = arr.infer_type()
         assert inferred.size == 5
         assert inferred.element_type == f32
-        assert inferred.element_enum == F32
+        assert inferred.element_enum == f32
 
 
 # ==================== ARRAY ACCESS ====================
@@ -134,7 +134,7 @@ class TestArrayAccess:
     def test_array_access_with_value_index(self):
         """Test ArrayAccess with Value node as index"""
         arr = ArrayLiteral([10, 20, 30], Array[3, i32])
-        idx = Constant(1, I32)
+        idx = Constant(1, i32)
         access = ArrayAccess(arr, idx)
 
         assert access.indices[0] == idx
@@ -146,14 +146,14 @@ class TestArrayAccess:
 
         inferred = access.infer_type()
         assert isinstance(inferred, ScalarType)  # Returns ScalarType, not ArrayType
-        assert inferred == I32
+        assert inferred == i32
 
     def test_array_access_f32_array_returns_f32(self):
         """Test accessing f32 array returns f32"""
         arr = ArrayLiteral([1.0, 2.0, 3.0], Array[3, f32])
         access = ArrayAccess(arr, 1)
 
-        assert access.infer_type() == F32
+        assert access.infer_type() == f32
 
 
 # ==================== ARRAY ACCESS TYPE CHECKING ====================
@@ -163,7 +163,7 @@ class TestArrayAccessTypeChecking:
 
     def test_array_access_requires_array(self):
         """Test that indexing non-array fails"""
-        scalar = Constant(42, I32)
+        scalar = Constant(42, i32)
 
         with pytest.raises(TypeError, match="Cannot index into non-array"):
             ArrayAccess(scalar, 0)
@@ -171,7 +171,7 @@ class TestArrayAccessTypeChecking:
     def test_array_access_index_must_be_i32(self):
         """Test that index must be i32"""
         arr = ArrayLiteral([1.0, 2.0], Array[2, f32])
-        float_idx = Constant(1.5, F32)
+        float_idx = Constant(1.5, f32)
 
         with pytest.raises(TypeError, match="Array index .* must be i32"):
             ArrayAccess(arr, float_idx)
@@ -182,7 +182,7 @@ class TestArrayAccessTypeChecking:
         access = ArrayAccess(arr, 1)  # Python int
 
         assert isinstance(access.indices[0], Constant)
-        assert access.indices[0].value_type == I32
+        assert access.indices[0].value_type == i32
 
 
 # ==================== ARRAY STORE ====================
@@ -205,8 +205,8 @@ class TestArrayStore:
     def test_array_store_with_ast_nodes(self):
         """Test ArrayStore with Value nodes"""
         arr = ArrayLiteral([10, 20], Array[2, i32])
-        idx = Constant(1, I32)
-        val = Constant(42, I32)
+        idx = Constant(1, i32)
+        val = Constant(42, i32)
         store = ArrayStore(arr, idx, val)
 
         assert store.indices[0] == idx
@@ -229,7 +229,7 @@ class TestArrayStoreTypeChecking:
 
     def test_array_store_requires_array(self):
         """Test that storing to non-array fails"""
-        scalar = Constant(42, I32)
+        scalar = Constant(42, i32)
 
         with pytest.raises(TypeError, match="Cannot use \\[\\]= on non-array"):
             ArrayStore(scalar, 0, 99)
@@ -237,7 +237,7 @@ class TestArrayStoreTypeChecking:
     def test_array_store_index_must_be_i32(self):
         """Test that index must be i32"""
         arr = ArrayLiteral([1, 2], Array[2, i32])
-        float_idx = Constant(1.5, F32)
+        float_idx = Constant(1.5, f32)
 
         with pytest.raises(TypeError, match="Array index .* must be i32"):
             ArrayStore(arr, float_idx, 99)
@@ -256,7 +256,7 @@ class TestArrayStoreTypeChecking:
         store = ArrayStore(arr, 0, 5.5)  # Should work
 
         assert store.value.value == 5.5
-        assert store.value.value_type == F32
+        assert store.value.value_type == f32
 
     def test_array_store_rejects_array_in_element(self):
         """Test that storing array into array element fails"""
@@ -297,7 +297,7 @@ class TestSubscriptSyntax:
 
         # This should work
         access = arr[0]
-        assert access.infer_type() == I32
+        assert access.infer_type() == i32
 
         # This should fail - wrong value type
         with pytest.raises(TypeError, match="Cannot store f32"):

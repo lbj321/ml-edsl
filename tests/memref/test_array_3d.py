@@ -14,7 +14,7 @@ from mlir_edsl import ml_function, Array
 from mlir_edsl import i32, f32
 from mlir_edsl.ast import ArrayLiteral, ArrayAccess, ArrayStore
 from mlir_edsl.ast.serialization import SerializationContext
-from mlir_edsl.types import ArrayType, I32, F32
+from mlir_edsl.types import ArrayType, i32, f32
 from mlir_edsl.backend import HAS_CPP_BACKEND
 from tests.test_base import MLIRTestBase
 
@@ -153,7 +153,7 @@ class TestArray3DAccess(MLIRTestBase):
         ], Array[2, 2, 2, f32])
 
         access = ArrayAccess(arr, (0, 0, 0))
-        assert access.infer_type() == F32  # Returns scalar, not array
+        assert access.infer_type() == f32  # Returns scalar, not array
 
     def test_3d_wrong_index_count(self):
         """Test that wrong number of indices is rejected"""
@@ -280,7 +280,7 @@ class TestArray3DElementwise(MLIRTestBase):
 
         # Validate AST structure
         assert result.infer_type().shape == (2, 2, 2)
-        assert result.infer_type().element_enum == I32
+        assert result.infer_type().element_enum == i32
 
     def test_3d_array_add_scalar(self):
         """Test 3D array + scalar broadcasting"""
