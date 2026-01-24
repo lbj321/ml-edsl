@@ -16,7 +16,7 @@ class MLFunction:
         self.signature = FunctionSignature.from_callable(func)
         self._compiled: CompiledFunction | None = None
         # Validate and cache AST for later compilation
-        self._cached_ast: Value | None = validate_function_body(func, self.signature)
+        self._cached_ast: Value = validate_function_body(func, self.signature)
 
     def __call__(self, *args, **kwargs) -> Union[int, float, bool, Value]:
         """JIT compile and execute the function - returns numeric result OR AST node"""
