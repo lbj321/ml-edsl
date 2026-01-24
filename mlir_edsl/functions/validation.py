@@ -3,6 +3,7 @@ from typing import Callable
 
 from ..ast import Parameter
 from ..types import TypeSystem
+from .context import symbolic_execution
 from .signature import FunctionSignature
 
 
@@ -26,7 +27,8 @@ def validate_function_body(func: Callable, signature: FunctionSignature):
 
     # Execute symbolically - this will trigger type checking in operations
     try:
-        result_ast = func(*dummy_params)
+        with symbolic_execution():
+            result_ast = func(*dummy_params)
 
         # Also validate return type matches
         inferred_type = result_ast.infer_type()

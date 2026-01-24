@@ -20,28 +20,15 @@ class MLFunction:
 
     def __call__(self, *args, **kwargs) -> Union[int, float, bool, Value]:
         """JIT compile and execute the function - returns numeric result OR AST node"""
-        if self._is_symbolic_call(args, kwargs):
-            ast_args = list(args) + list(kwargs.values())
-            return CallOp(self.signature.name, ast_args, self.signature.return_type)
-
-        # Runtime execution path
+        # Ensure function is compiled (needed for both symbolic CallOp and runtime execution)
         if self._compiled is None:
             self._compiled = compile_function(self.func, self.signature)
 
-        return self._compiled.execute(args, kwargs)
-
-    def _is_symbolic_call(self, args: tuple, kwargs: dict) -> bool:
-        """Check if this is a symbolic call (AST building) vs runtime call."""
         if in_symbolic_context():
-            return True
-        return (
-            any(isinstance(a, Value) for a in args) or
-            any(isinstance(v, Value) for v in kwargs.values())
-        )
+            ast_args = list(args) + list(kwargs.values())
+            return CallOp(self.signature.name, ast_args, self.signature.return_type)
 
-    def execute(self) -> Union[int, float]:
-        """Convenience method - same as calling the function directly"""
-        return self.__call__()
+        return self._compiled.execute(args, kwargs)
 
 
 def ml_function(func: Callable) -> MLFunction:
