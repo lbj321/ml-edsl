@@ -1,45 +1,48 @@
 """Early validation of ml_function decorated functions"""
-from typing import Callable
+from typing import Callable, Optional
 
-from ..ast import Parameter
+from ..ast import Parameter, Value
 from ..types import TypeSystem
 from .context import symbolic_execution
 from .signature import FunctionSignature
 
 
-def validate_function_body(func: Callable, signature: FunctionSignature):
+def validate_function_body(func: Callable, signature: FunctionSignature) -> Optional[Value]:
     """Execute function symbolically to catch type errors at decoration time.
 
-    This runs the function with dummy Parameter objects to trigger type
-    checking in operations before any actual compilation happens.
+    This runs the function with Parameter objects to trigger type checking
+    in operations before any actual compilation happens.
 
     Args:
         func: The decorated function
         signature: Parsed function signature with types
 
+    Returns:
+        The result AST node (for reuse in compilation), or None if validation
+        failed for non-type reasons.
+
     Raises:
         TypeError: If type errors are detected in the function body
     """
-    dummy_params = [
+    symbolic_args = [
         Parameter(name, signature.param_types[name])
         for name in signature.param_names
     ]
 
-    # Execute symbolically - this will trigger type checking in operations
     try:
         with symbolic_execution():
-            result_ast = func(*dummy_params)
+            result_ast = func(*symbolic_args)
 
-        # Also validate return type matches
+        # Validate return type matches
         inferred_type = result_ast.infer_type()
         matches, error_msg = TypeSystem.types_match(inferred_type, signature.return_type)
         if not matches:
             raise TypeError(f"Return type mismatch in '{signature.name}':\n{error_msg}")
 
+        return result_ast
+
     except TypeError:
-        # Re-raise type errors (these are validation failures we want to catch)
         raise
     except Exception:
-        # Ignore other errors (e.g., backend issues, runtime problems)
-        # Those will be caught at execution time
-        pass
+        # Other errors (e.g., backend issues) caught at execution time
+        return None

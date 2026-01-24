@@ -1,10 +1,8 @@
 """Compilation and execution of ML functions"""
-from typing import Callable, Union
+from typing import Callable, Optional, Union
 
-from ..ast import Parameter
+from ..ast import Value
 from ..backend import get_backend
-from ..types import TypeSystem
-from .context import symbolic_execution
 from .signature import FunctionSignature
 
 
@@ -23,19 +21,18 @@ class CompiledFunction:
         return self._backend.execute_function(self.name, *ordered_args)
 
 
-def compile_function(func: Callable, signature: FunctionSignature) -> CompiledFunction:
-    """Compile a Python function to MLIR.
+def compile_function(signature: FunctionSignature, result_ast: Value) -> CompiledFunction:
+    """Compile a function AST to MLIR.
 
     Args:
-        func: The decorated Python function
         signature: Parsed function signature with types
+        result_ast: Pre-built AST from validation
 
     Returns:
         CompiledFunction ready for execution
 
     Raises:
         RuntimeError: If backend is not available
-        TypeError: If return type doesn't match
     """
     backend = get_backend()
     if backend is None:
@@ -44,15 +41,6 @@ def compile_function(func: Callable, signature: FunctionSignature) -> CompiledFu
     # Already compiled? Return wrapper.
     if backend.has_function(signature.name):
         return CompiledFunction(signature.name, signature, backend)
-
-    # Build AST via symbolic execution
-    result_ast = _execute_symbolic(func, signature)
-
-    # Validate return type
-    inferred_type = result_ast.infer_type()
-    matches, error_msg = TypeSystem.types_match(inferred_type, signature.return_type)
-    if not matches:
-        raise TypeError(f"Return type mismatch in '{signature.name}':\n{error_msg}")
 
     # Compile to backend
     backend.compile_function_from_ast(
@@ -63,14 +51,3 @@ def compile_function(func: Callable, signature: FunctionSignature) -> CompiledFu
     )
 
     return CompiledFunction(signature.name, signature, backend)
-
-
-def _execute_symbolic(func: Callable, signature: FunctionSignature):
-    """Execute function with symbolic Parameter values to build AST."""
-    symbolic_args = [
-        Parameter(name, signature.param_types[name])
-        for name in signature.param_names
-    ]
-
-    with symbolic_execution():
-        return func(*symbolic_args)

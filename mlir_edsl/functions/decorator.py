@@ -15,14 +15,14 @@ class MLFunction:
         self.func = func
         self.signature = FunctionSignature.from_callable(func)
         self._compiled: CompiledFunction | None = None
-        # Do a symbolic dry-run to catch type errors early
-        validate_function_body(func, self.signature)
+        # Validate and cache AST for later compilation
+        self._cached_ast: Value | None = validate_function_body(func, self.signature)
 
     def __call__(self, *args, **kwargs) -> Union[int, float, bool, Value]:
         """JIT compile and execute the function - returns numeric result OR AST node"""
-        # Ensure function is compiled (needed for both symbolic CallOp and runtime execution)
+        # Compile on first call using cached AST
         if self._compiled is None:
-            self._compiled = compile_function(self.func, self.signature)
+            self._compiled = compile_function(self.signature, self._cached_ast)
 
         if in_symbolic_context():
             ast_args = list(args) + list(kwargs.values())
