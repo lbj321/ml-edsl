@@ -52,9 +52,8 @@ PYBIND11_MODULE(_mlir_backend, m) {
         .def(py::init<>())
         .def("initialize", &mlir_edsl::MLIRExecutor::initialize,
              "Initialize the JIT execution engine")
-        .def("compile_function", &mlir_edsl::MLIRExecutor::compileFunction,
-             "Compile LLVM IR string to executable function",
-             py::return_value_policy::reference)
+        .def("compile_module", &mlir_edsl::MLIRExecutor::compileModule,
+             "Compile entire LLVM IR module (all functions at once)")
         .def("register_function_signature", [](mlir_edsl::MLIRExecutor& self, const std::string& signature_bytes) {
             mlir_edsl::FunctionSignature sig;
             if (!sig.ParseFromString(signature_bytes)) {
@@ -77,8 +76,12 @@ PYBIND11_MODULE(_mlir_backend, m) {
              "Check if executor is initialized")
         .def("get_last_error", &mlir_edsl::MLIRExecutor::getLastError,
              "Get last error message")
-        .def("clear", &mlir_edsl::MLIRExecutor::clear,
-             "Clear JIT engine")
+        .def("is_jit_empty", &mlir_edsl::MLIRExecutor::isJitEmpty,
+             "Check if JIT has no compiled functions")
+        .def("clear_jit", &mlir_edsl::MLIRExecutor::clearJit,
+             "Clear JIT only, keep signatures")
+        .def("clear_all", &mlir_edsl::MLIRExecutor::clearAll,
+             "Clear JIT and signatures")
         .def("set_optimization_level", [](mlir_edsl::MLIRExecutor& self, int level) {
             mlir_edsl::MLIRExecutor::OptLevel opt;
             if (level == 0) opt = mlir_edsl::MLIRExecutor::OptLevel::O0;

@@ -138,9 +138,10 @@ class MLIRTestBase:
         func_name = functions[0]
 
         # Read IR files written by C++ backend (in ir_output/)
+        # MLIR is saved per-function, LLVM IR is saved as full module
         mlir_path = os.path.join(self.ir_output_dir, f"{func_name}.mlir")
-        unopt_path = os.path.join(self.ir_output_dir, f"{func_name}_unopt.ll")
-        opt_path = os.path.join(self.ir_output_dir, f"{func_name}_opt.ll")
+        unopt_path = os.path.join(self.ir_output_dir, "module_unopt.ll")
+        opt_path = os.path.join(self.ir_output_dir, "module_opt.ll")
 
         mlir_ir = self._read_file(mlir_path)
         unopt_ir = self._read_file(unopt_path)
@@ -153,7 +154,7 @@ class MLIRTestBase:
             f.write(html_content)
 
         print(f"\nSaved HTML: {html_path}")
-        print(f"Raw IR files: ir_output/{func_name}.{{mlir,_unopt.ll,_opt.ll}}")
+        print(f"Raw IR files: ir_output/{func_name}.mlir, ir_output/module_{{unopt,opt}}.ll")
 
     def _install_ast_capture(self):
         """Monkey-patch backend to capture protobuf ASTs during compilation"""
