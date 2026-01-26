@@ -224,11 +224,6 @@ class ArrayType(Type):
         self.element_type = element_type
 
     @property
-    def element_enum(self) -> int:
-        """Backward compatibility: returns element type's protobuf enum value"""
-        return self.element_type.kind
-
-    @property
     def size(self) -> int:
         """For 1D arrays only: returns the size.
 

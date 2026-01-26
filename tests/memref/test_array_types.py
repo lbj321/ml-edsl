@@ -25,7 +25,6 @@ class TestArrayTypeCreation:
         assert isinstance(arr_type, ArrayType)
         assert arr_type.size == 10
         assert arr_type.element_type == i32
-        assert arr_type.element_enum == 0  # I32 protobuf enum
 
     def test_array_type_creation_f32(self):
         """Test creating Array[5, f32] type"""
@@ -34,7 +33,6 @@ class TestArrayTypeCreation:
         assert isinstance(arr_type, ArrayType)
         assert arr_type.size == 5
         assert arr_type.element_type == f32
-        assert arr_type.element_enum == 1  # F32 protobuf enum
 
     def test_array_type_creation_i1(self):
         """Test creating Array[3, i1] type"""
@@ -43,7 +41,6 @@ class TestArrayTypeCreation:
         assert isinstance(arr_type, ArrayType)
         assert arr_type.size == 3
         assert arr_type.element_type == i1
-        assert arr_type.element_enum == 2  # I1 protobuf enum
 
     def test_array_type_various_sizes(self):
         """Test arrays with various sizes"""
