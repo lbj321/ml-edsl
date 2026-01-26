@@ -425,7 +425,9 @@ class TypeSystem:
         elif type_spec.is_float():
             if not isinstance(value, (int, float, bool)):
                 raise TypeError(f"Parameter '{param_name}' expects float/f32 but got {type(value).__name__}")
-
+        else:
+            raise TypeError(f"Parameter '{param_name}': unknown scalar type {type_spec}")
+        
     @classmethod
     def types_match(cls, inferred: Type, declared: Type) -> Tuple[bool, str]:
         """Check if inferred type matches declared type.
