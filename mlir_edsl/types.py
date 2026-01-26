@@ -143,9 +143,6 @@ class ScalarType(Type):
     def __eq__(self, other) -> bool:
         if isinstance(other, ScalarType):
             return self.kind == other.kind
-        # Allow comparison with int enum for backward compatibility
-        if isinstance(other, int):
-            return self.kind == other
         return False
 
     def __hash__(self) -> int:

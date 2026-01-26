@@ -283,7 +283,7 @@ class TestArray3DElementwise(MLIRTestBase):
 
         # Validate AST structure
         assert result.infer_type().shape == (2, 2, 2)
-        assert result.infer_type().element_enum == i32
+        assert result.infer_type().element_type == i32
 
     def test_3d_array_add_scalar(self):
         """Test 3D array + scalar broadcasting"""

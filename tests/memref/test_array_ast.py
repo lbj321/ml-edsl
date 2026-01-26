@@ -113,7 +113,7 @@ class TestArrayLiteralTypeInference:
         inferred = arr.infer_type()
         assert inferred.size == 5
         assert inferred.element_type == f32
-        assert inferred.element_enum == f32
+        assert inferred.element_type == f32
 
 
 # ==================== ARRAY ACCESS ====================
