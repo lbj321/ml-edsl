@@ -33,8 +33,8 @@ class Parameter(Value):
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
         pb_node = ast_pb2.ASTNode()
-        pb_node.parameter.name = self.name
-        pb_node.parameter.type.CopyFrom(self.value_type.to_proto())
+        pb_node.function.parameter.name = self.name
+        pb_node.function.parameter.type.CopyFrom(self.value_type.to_proto())
         return pb_node
 
 
@@ -59,13 +59,13 @@ class CallOp(Value):
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
         pb_node = ast_pb2.ASTNode()
-        pb_node.call_op.func_name = self.func_name
+        pb_node.function.call.func_name = self.func_name
 
         # Set return type using TypeSpec
-        pb_node.call_op.return_type.CopyFrom(self.return_type.to_proto())
+        pb_node.function.call.return_type.CopyFrom(self.return_type.to_proto())
 
         # Context-aware child serialization
         for arg in self.args:
-            pb_node.call_op.args.append(arg._to_proto_impl(context))
+            pb_node.function.call.args.append(arg._to_proto_impl(context))
 
         return pb_node

@@ -224,17 +224,18 @@ class TestArray2DProtobufSerialization(MLIRTestBase):
         context = SerializationContext()
         pb = arr.to_proto(context)
 
-        assert pb.HasField("array_literal")
+        assert pb.HasField("array")
+        assert pb.array.HasField("literal")
         # Check shape is [2, 2] (uses new TypeSpec with memref field)
-        assert pb.array_literal.type.HasField("memref")
-        assert len(pb.array_literal.type.memref.shape) == 2
-        assert pb.array_literal.type.memref.shape[0] == 2
-        assert pb.array_literal.type.memref.shape[1] == 2
+        assert pb.array.literal.type.HasField("memref")
+        assert len(pb.array.literal.type.memref.shape) == 2
+        assert pb.array.literal.type.memref.shape[0] == 2
+        assert pb.array.literal.type.memref.shape[1] == 2
         # Element type is nested: type.memref.element_type.scalar.kind
         from mlir_edsl import ast_pb2
-        assert pb.array_literal.type.memref.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.I32
+        assert pb.array.literal.type.memref.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.I32
         # Check flattened elements
-        assert len(pb.array_literal.elements) == 4
+        assert len(pb.array.literal.elements) == 4
 
     def test_2d_array_access_to_proto(self):
         """Test that 2D ArrayAccess serializes with multiple indices"""
@@ -244,9 +245,10 @@ class TestArray2DProtobufSerialization(MLIRTestBase):
         context = SerializationContext()
         pb = access.to_proto(context)
 
-        assert pb.HasField("array_access")
+        assert pb.HasField("array")
+        assert pb.array.HasField("access")
         # Check indices count
-        assert len(pb.array_access.indices) == 2
+        assert len(pb.array.access.indices) == 2
 
     def test_2d_array_store_to_proto(self):
         """Test that 2D ArrayStore serializes with multiple indices"""
@@ -256,8 +258,9 @@ class TestArray2DProtobufSerialization(MLIRTestBase):
         context = SerializationContext()
         pb = store.to_proto(context)
 
-        assert pb.HasField("array_store")
-        assert len(pb.array_store.indices) == 2
+        assert pb.HasField("array")
+        assert pb.array.HasField("store")
+        assert len(pb.array.store.indices) == 2
 
 
 # ==================== 2D ELEMENT-WISE OPERATIONS ====================

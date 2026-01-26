@@ -55,43 +55,100 @@ void MLIRBuilder::initializeModule() {
 }
 
 mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
-  // Cross-cutting concerns (value caching, parameters, function calls)
-  if (node.has_let_binding()) return handleLetBinding(node);
-  if (node.has_value_ref()) return handleValueRef(node);
-  if (node.has_parameter()) return handleParameter(node);
-  if (node.has_call_op()) return handleCallOp(node);
+  // Two-tier dispatch for scalability (switch on category, then specific type)
+  switch (node.node_case()) {
+    case mlir_edsl::ASTNode::kScalar:
+      return buildFromScalarNode(node.scalar());
+    case mlir_edsl::ASTNode::kArray:
+      return buildFromArrayNode(node.array());
+    case mlir_edsl::ASTNode::kControlFlow:
+      return buildFromControlFlowNode(node.control_flow());
+    case mlir_edsl::ASTNode::kFunction:
+      return buildFromFunctionNode(node.function());
+    case mlir_edsl::ASTNode::kBinding:
+      return buildFromBindingNode(node.binding());
+    default:
+      throw std::runtime_error("Unknown AST node category");
+  }
+}
 
-  // Arithmetic operations
-  if (node.has_constant()) return handleConstant(node);
-  if (node.has_binary_op()) return handleBinaryOp(node);
-  if (node.has_compare_op()) return handleCompareOp(node);
-  if (node.has_cast_op()) return handleCastOp(node);
+mlir::Value MLIRBuilder::buildFromScalarNode(const mlir_edsl::ScalarNode &node) {
+  switch (node.value_case()) {
+    case mlir_edsl::ScalarNode::kConstant:
+      return handleConstant(node.constant());
+    case mlir_edsl::ScalarNode::kBinaryOp:
+      return handleBinaryOp(node.binary_op());
+    case mlir_edsl::ScalarNode::kCompareOp:
+      return handleCompareOp(node.compare_op());
+    case mlir_edsl::ScalarNode::kCastOp:
+      return handleCastOp(node.cast_op());
+    default:
+      throw std::runtime_error("Unknown scalar node type");
+  }
+}
 
-  // Control flow operations
-  if (node.has_if_op()) return handleIfOp(node);
-  // if (node.has_for_loop_op()) return handleForLoopOp(node);
-  if (node.has_while_loop_op()) return handleWhileLoopOp(node);
+mlir::Value MLIRBuilder::buildFromArrayNode(const mlir_edsl::ArrayNode &node) {
+  switch (node.value_case()) {
+    case mlir_edsl::ArrayNode::kLiteral:
+      return memrefBuilder->buildArrayLiteral(node.literal());
+    case mlir_edsl::ArrayNode::kAccess:
+      return memrefBuilder->buildArrayAccess(node.access());
+    case mlir_edsl::ArrayNode::kStore:
+      return memrefBuilder->buildArrayStore(node.store());
+    case mlir_edsl::ArrayNode::kBinaryOp:
+      return memrefBuilder->buildArrayBinaryOp(node.binary_op());
+    default:
+      throw std::runtime_error("Unknown array node type");
+  }
+}
 
-  // Memory operations
-  if (node.has_array_literal()) return handleArrayLiteral(node);
-  if (node.has_array_access()) return handleArrayAccess(node);
-  if (node.has_array_store()) return handleArrayStore(node);
-  if (node.has_array_binary_op()) return handleArrayBinaryOp(node);
+mlir::Value MLIRBuilder::buildFromControlFlowNode(const mlir_edsl::ControlFlowNode &node) {
+  switch (node.value_case()) {
+    case mlir_edsl::ControlFlowNode::kIfOp:
+      return handleIfOp(node.if_op());
+    // case mlir_edsl::ControlFlowNode::kForLoop:
+    //   return handleForLoopOp(node.for_loop());
+    case mlir_edsl::ControlFlowNode::kWhileLoop:
+      return handleWhileLoopOp(node.while_loop());
+    default:
+      throw std::runtime_error("Unknown control flow node type");
+  }
+}
 
-  throw std::runtime_error("Unknown protobuf node type");
+mlir::Value MLIRBuilder::buildFromFunctionNode(const mlir_edsl::FunctionNode &node) {
+  switch (node.value_case()) {
+    case mlir_edsl::FunctionNode::kParameter:
+      return handleParameter(node.parameter());
+    case mlir_edsl::FunctionNode::kCall:
+      return handleCallOp(node.call());
+    default:
+      throw std::runtime_error("Unknown function node type");
+  }
+}
+
+mlir::Value MLIRBuilder::buildFromBindingNode(const mlir_edsl::BindingNode &node) {
+  switch (node.value_case()) {
+    case mlir_edsl::BindingNode::kLet:
+      return handleLetBinding(node.let());
+    case mlir_edsl::BindingNode::kRef:
+      return handleValueRef(node.ref());
+    default:
+      throw std::runtime_error("Unknown binding node type");
+  }
 }
 
 // ==================== AST Node Handlers ====================
 
-mlir::Value MLIRBuilder::handleLetBinding(const mlir_edsl::ASTNode &node) {
-  int64_t nodeId = node.let_binding().node_id();
-  mlir::Value result = buildFromProtobufNode(node.let_binding().value());
+// Binding handlers
+mlir::Value MLIRBuilder::handleLetBinding(const mlir_edsl::LetBinding &binding) {
+  int64_t nodeId = binding.node_id();
+  mlir::Value result = buildFromProtobufNode(binding.value());
   valueCache[nodeId] = result;
   return result;
 }
 
-mlir::Value MLIRBuilder::handleValueRef(const mlir_edsl::ASTNode &node) {
-  int64_t nodeId = node.value_ref().node_id();
+mlir::Value MLIRBuilder::handleValueRef(const mlir_edsl::ValueReference &ref) {
+  int64_t nodeId = ref.node_id();
   auto it = valueCache.find(nodeId);
   if (it != valueCache.end()) {
     return it->second;
@@ -99,8 +156,8 @@ mlir::Value MLIRBuilder::handleValueRef(const mlir_edsl::ASTNode &node) {
   throw std::runtime_error("Reference to unbound value ID: " + std::to_string(nodeId));
 }
 
-mlir::Value MLIRBuilder::handleConstant(const mlir_edsl::ASTNode &node) {
-  const auto &constant = node.constant();
+// Scalar handlers
+mlir::Value MLIRBuilder::handleConstant(const mlir_edsl::Constant &constant) {
   const auto &typeSpec = constant.type();
 
   if (!typeSpec.has_scalar()) {
@@ -120,13 +177,7 @@ mlir::Value MLIRBuilder::handleConstant(const mlir_edsl::ASTNode &node) {
   }
 }
 
-mlir::Value MLIRBuilder::handleParameter(const mlir_edsl::ASTNode &node) {
-  const auto &param = node.parameter();
-  return getParameter(param.name());
-}
-
-mlir::Value MLIRBuilder::handleBinaryOp(const mlir_edsl::ASTNode &node) {
-  const auto &binop = node.binary_op();
+mlir::Value MLIRBuilder::handleBinaryOp(const mlir_edsl::BinaryOp &binop) {
   mlir::Value left = buildFromProtobufNode(binop.left());
   mlir::Value right = buildFromProtobufNode(binop.right());
 
@@ -147,8 +198,7 @@ mlir::Value MLIRBuilder::handleBinaryOp(const mlir_edsl::ASTNode &node) {
   }
 }
 
-mlir::Value MLIRBuilder::handleCompareOp(const mlir_edsl::ASTNode &node) {
-  const auto &cmp = node.compare_op();
+mlir::Value MLIRBuilder::handleCompareOp(const mlir_edsl::CompareOp &cmp) {
   mlir::Value left = buildFromProtobufNode(cmp.left());
   mlir::Value right = buildFromProtobufNode(cmp.right());
 
@@ -158,8 +208,14 @@ mlir::Value MLIRBuilder::handleCompareOp(const mlir_edsl::ASTNode &node) {
   return arithBuilder->buildCompare(cmp.predicate(), promotedLhs, promotedRhs);
 }
 
-mlir::Value MLIRBuilder::handleIfOp(const mlir_edsl::ASTNode &node) {
-  const auto &ifop = node.if_op();
+mlir::Value MLIRBuilder::handleCastOp(const mlir_edsl::CastOp &cast) {
+  mlir::Value sourceValue = buildFromProtobufNode(cast.value());
+  mlir::Type targetType = convertType(cast.target_type());
+  return arithBuilder->buildCast(sourceValue, targetType);
+}
+
+// Control flow handlers
+mlir::Value MLIRBuilder::handleIfOp(const mlir_edsl::IfOp &ifop) {
   mlir::Value cond = buildFromProtobufNode(ifop.condition());
   mlir::Type resultType = convertType(ifop.result_type());
 
@@ -173,17 +229,7 @@ mlir::Value MLIRBuilder::handleIfOp(const mlir_edsl::ASTNode &node) {
   return scfBuilder->buildIf(cond, buildThen, buildElse, resultType);
 }
 
-mlir::Value MLIRBuilder::handleCallOp(const mlir_edsl::ASTNode &node) {
-  const auto &call = node.call_op();
-  std::vector<mlir::Value> args;
-  for (const auto &arg : call.args()) {
-    args.push_back(buildFromProtobufNode(arg));
-  }
-  return callFunction(call.func_name(), args);
-}
-
-// mlir::Value MLIRBuilder::handleForLoopOp(const mlir_edsl::ASTNode &node) {
-//   const auto &forloop = node.for_loop_op();
+// mlir::Value MLIRBuilder::handleForLoopOp(const mlir_edsl::ForLoopOp &forloop) {
 //   mlir::Value start = buildFromProtobufNode(forloop.start());
 //   mlir::Value end = buildFromProtobufNode(forloop.end());
 //   mlir::Value step = buildFromProtobufNode(forloop.step());
@@ -191,35 +237,24 @@ mlir::Value MLIRBuilder::handleCallOp(const mlir_edsl::ASTNode &node) {
 //   return scfBuilder->buildForWithOp(start, end, step, init_value, forloop.operation());
 // }
 
-mlir::Value MLIRBuilder::handleWhileLoopOp(const mlir_edsl::ASTNode &node) {
-  const auto &whileloop = node.while_loop_op();
+mlir::Value MLIRBuilder::handleWhileLoopOp(const mlir_edsl::WhileLoopOp &whileloop) {
   mlir::Value init_value = buildFromProtobufNode(whileloop.init_value());
   mlir::Value target = buildFromProtobufNode(whileloop.target());
   return scfBuilder->buildWhileWithOp(init_value, target, whileloop.operation(),
                                       whileloop.predicate());
 }
 
-mlir::Value MLIRBuilder::handleCastOp(const mlir_edsl::ASTNode &node) {
-  const auto &cast = node.cast_op();
-  mlir::Value sourceValue = buildFromProtobufNode(cast.value());
-  mlir::Type targetType = convertType(cast.target_type());
-  return arithBuilder->buildCast(sourceValue, targetType);
+// Function handlers
+mlir::Value MLIRBuilder::handleParameter(const mlir_edsl::Parameter &param) {
+  return getParameter(param.name());
 }
 
-mlir::Value MLIRBuilder::handleArrayLiteral(const mlir_edsl::ASTNode &node) {
-  return memrefBuilder->buildArrayLiteral(node.array_literal());
-}
-
-mlir::Value MLIRBuilder::handleArrayAccess(const mlir_edsl::ASTNode &node) {
-  return memrefBuilder->buildArrayAccess(node.array_access());
-}
-
-mlir::Value MLIRBuilder::handleArrayStore(const mlir_edsl::ASTNode &node) {
-  return memrefBuilder->buildArrayStore(node.array_store());
-}
-
-mlir::Value MLIRBuilder::handleArrayBinaryOp(const mlir_edsl::ASTNode &node) {
-  return memrefBuilder->buildArrayBinaryOp(node.array_binary_op());
+mlir::Value MLIRBuilder::handleCallOp(const mlir_edsl::CallOp &call) {
+  std::vector<mlir::Value> args;
+  for (const auto &arg : call.args()) {
+    args.push_back(buildFromProtobufNode(arg));
+  }
+  return callFunction(call.func_name(), args);
 }
 
 std::string MLIRBuilder::getMLIRString() {

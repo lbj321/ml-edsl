@@ -68,15 +68,15 @@ class Value(ABC, OperatorMixin):
         # If this value was already serialized, emit a reference
         if context.is_serialized(self):
             pb_node = ast_pb2.ASTNode()
-            pb_node.value_ref.node_id = self.id
+            pb_node.binding.ref.node_id = self.id
             return pb_node
 
         # If this value will be reused, wrap it in a let binding
         if context.is_reused(self):
             context.mark_serialized(self)
             pb_node = ast_pb2.ASTNode()
-            pb_node.let_binding.node_id = self.id
-            pb_node.let_binding.value.CopyFrom(self.to_proto(context))
+            pb_node.binding.let.node_id = self.id
+            pb_node.binding.let.value.CopyFrom(self.to_proto(context))
             return pb_node
 
         # Otherwise, inline it normally

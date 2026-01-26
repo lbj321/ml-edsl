@@ -25,10 +25,26 @@ namespace mlir_edsl {
 enum ComparisonPredicate : int;
 enum BinaryOpType : int;
 class ASTNode;
+class ScalarNode;
+class ArrayNode;
+class ControlFlowNode;
+class FunctionNode;
+class BindingNode;
 class FunctionDef;
 class TypeSpec;
 class ScalarTypeSpec;
 class MemRefTypeSpec;
+class Constant;
+class BinaryOp;
+class CompareOp;
+class CastOp;
+class IfOp;
+class ForLoopOp;
+class WhileLoopOp;
+class Parameter;
+class CallOp;
+class LetBinding;
+class ValueReference;
 
 class MLIRBuilder {
 public:
@@ -90,22 +106,31 @@ private:
   std::pair<mlir::Value, mlir::Value>
   promoteToType(mlir::Value lhs, mlir::Value rhs, mlir::Type targetType);
 
-  // AST node handlers
-  mlir::Value handleLetBinding(const mlir_edsl::ASTNode &node);
-  mlir::Value handleValueRef(const mlir_edsl::ASTNode &node);
-  mlir::Value handleConstant(const mlir_edsl::ASTNode &node);
-  mlir::Value handleParameter(const mlir_edsl::ASTNode &node);
-  mlir::Value handleBinaryOp(const mlir_edsl::ASTNode &node);
-  mlir::Value handleCompareOp(const mlir_edsl::ASTNode &node);
-  mlir::Value handleIfOp(const mlir_edsl::ASTNode &node);
-  mlir::Value handleCallOp(const mlir_edsl::ASTNode &node);
-  // mlir::Value handleForLoopOp(const mlir_edsl::ASTNode &node);
-  mlir::Value handleWhileLoopOp(const mlir_edsl::ASTNode &node);
-  mlir::Value handleCastOp(const mlir_edsl::ASTNode &node);
-  mlir::Value handleArrayLiteral(const mlir_edsl::ASTNode &node);
-  mlir::Value handleArrayAccess(const mlir_edsl::ASTNode &node);
-  mlir::Value handleArrayStore(const mlir_edsl::ASTNode &node);
-  mlir::Value handleArrayBinaryOp(const mlir_edsl::ASTNode &node);
+  // AST node category dispatchers (two-tier dispatch for scalability)
+  mlir::Value buildFromScalarNode(const mlir_edsl::ScalarNode &node);
+  mlir::Value buildFromArrayNode(const mlir_edsl::ArrayNode &node);
+  mlir::Value buildFromControlFlowNode(const mlir_edsl::ControlFlowNode &node);
+  mlir::Value buildFromFunctionNode(const mlir_edsl::FunctionNode &node);
+  mlir::Value buildFromBindingNode(const mlir_edsl::BindingNode &node);
+
+  // Scalar node handlers
+  mlir::Value handleConstant(const mlir_edsl::Constant &constant);
+  mlir::Value handleBinaryOp(const mlir_edsl::BinaryOp &op);
+  mlir::Value handleCompareOp(const mlir_edsl::CompareOp &op);
+  mlir::Value handleCastOp(const mlir_edsl::CastOp &op);
+
+  // Control flow node handlers
+  mlir::Value handleIfOp(const mlir_edsl::IfOp &op);
+  // mlir::Value handleForLoopOp(const mlir_edsl::ForLoopOp &op);
+  mlir::Value handleWhileLoopOp(const mlir_edsl::WhileLoopOp &op);
+
+  // Function node handlers
+  mlir::Value handleParameter(const mlir_edsl::Parameter &param);
+  mlir::Value handleCallOp(const mlir_edsl::CallOp &op);
+
+  // Binding node handlers
+  mlir::Value handleLetBinding(const mlir_edsl::LetBinding &binding);
+  mlir::Value handleValueRef(const mlir_edsl::ValueReference &ref);
 
   // Dialect builders
   std::unique_ptr<mlir_edsl::ArithBuilder> arithBuilder;

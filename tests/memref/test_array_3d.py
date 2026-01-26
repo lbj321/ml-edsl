@@ -230,18 +230,19 @@ class TestArray3DProtobufSerialization(MLIRTestBase):
         context = SerializationContext()
         pb = arr.to_proto(context)
 
-        assert pb.HasField("array_literal")
+        assert pb.HasField("array")
+        assert pb.array.HasField("literal")
         # Check shape is [2, 2, 2] (uses new TypeSpec with memref field)
-        assert pb.array_literal.type.HasField("memref")
-        assert len(pb.array_literal.type.memref.shape) == 3
-        assert pb.array_literal.type.memref.shape[0] == 2
-        assert pb.array_literal.type.memref.shape[1] == 2
-        assert pb.array_literal.type.memref.shape[2] == 2
+        assert pb.array.literal.type.HasField("memref")
+        assert len(pb.array.literal.type.memref.shape) == 3
+        assert pb.array.literal.type.memref.shape[0] == 2
+        assert pb.array.literal.type.memref.shape[1] == 2
+        assert pb.array.literal.type.memref.shape[2] == 2
         # Element type is nested: type.memref.element_type.scalar.kind
         from mlir_edsl import ast_pb2
-        assert pb.array_literal.type.memref.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.I32
+        assert pb.array.literal.type.memref.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.I32
         # Check flattened elements
-        assert len(pb.array_literal.elements) == 8
+        assert len(pb.array.literal.elements) == 8
 
     def test_3d_array_access_to_proto(self):
         """Test that 3D ArrayAccess serializes with 3 indices"""
@@ -251,8 +252,9 @@ class TestArray3DProtobufSerialization(MLIRTestBase):
         context = SerializationContext()
         pb = access.to_proto(context)
 
-        assert pb.HasField("array_access")
-        assert len(pb.array_access.indices) == 3
+        assert pb.HasField("array")
+        assert pb.array.HasField("access")
+        assert len(pb.array.access.indices) == 3
 
     def test_3d_array_store_to_proto(self):
         """Test that 3D ArrayStore serializes with 3 indices"""
@@ -262,8 +264,9 @@ class TestArray3DProtobufSerialization(MLIRTestBase):
         context = SerializationContext()
         pb = store.to_proto(context)
 
-        assert pb.HasField("array_store")
-        assert len(pb.array_store.indices) == 3
+        assert pb.HasField("array")
+        assert pb.array.HasField("store")
+        assert len(pb.array.store.indices) == 3
 
 
 # ==================== 3D ELEMENT-WISE OPERATIONS ====================

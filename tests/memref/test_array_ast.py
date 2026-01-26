@@ -350,19 +350,20 @@ class TestArrayProtobufSerialization:
         context = SerializationContext()
         pb = arr.to_proto(context)
 
-        # Should have array_literal field set
-        assert pb.HasField("array_literal")
+        # Should have array.literal field set (hierarchical schema)
+        assert pb.HasField("array")
+        assert pb.array.HasField("literal")
 
         # Check array type spec (uses new TypeSpec with memref field)
-        assert pb.array_literal.type.HasField("memref")
-        assert len(pb.array_literal.type.memref.shape) == 1  # 1D array
-        assert pb.array_literal.type.memref.shape[0] == 3    # size is 3
+        assert pb.array.literal.type.HasField("memref")
+        assert len(pb.array.literal.type.memref.shape) == 1  # 1D array
+        assert pb.array.literal.type.memref.shape[0] == 3    # size is 3
         # Element type is nested: type.memref.element_type.scalar.kind
         from mlir_edsl import ast_pb2
-        assert pb.array_literal.type.memref.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.I32
+        assert pb.array.literal.type.memref.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.I32
 
         # Check elements
-        assert len(pb.array_literal.elements) == 3
+        assert len(pb.array.literal.elements) == 3
 
     def test_array_access_to_proto(self):
         """Test that ArrayAccess.to_proto() works"""
@@ -371,12 +372,13 @@ class TestArrayProtobufSerialization:
         context = SerializationContext()
         pb = access.to_proto(context)
 
-        # Should have array_access field set
-        assert pb.HasField("array_access")
+        # Should have array.access field set (hierarchical schema)
+        assert pb.HasField("array")
+        assert pb.array.HasField("access")
 
         # Check that array and indices are serialized (now uses repeated field)
-        assert pb.array_access.HasField("array")
-        assert len(pb.array_access.indices) == 1  # 1D array has single index
+        assert pb.array.access.HasField("array")
+        assert len(pb.array.access.indices) == 1  # 1D array has single index
 
     def test_array_store_to_proto(self):
         """Test that ArrayStore.to_proto() works"""
@@ -385,13 +387,14 @@ class TestArrayProtobufSerialization:
         context = SerializationContext()
         pb = store.to_proto(context)
 
-        # Should have array_store field set
-        assert pb.HasField("array_store")
+        # Should have array.store field set (hierarchical schema)
+        assert pb.HasField("array")
+        assert pb.array.HasField("store")
 
         # Check that array, indices, and value are serialized (now uses repeated field for indices)
-        assert pb.array_store.HasField("array")
-        assert len(pb.array_store.indices) == 1  # 1D array has single index
-        assert pb.array_store.HasField("value")
+        assert pb.array.store.HasField("array")
+        assert len(pb.array.store.indices) == 1  # 1D array has single index
+        assert pb.array.store.HasField("value")
 
     def test_array_literal_with_reuse(self):
         """Test ArrayLiteral serialization with SSA value reuse"""
@@ -400,7 +403,8 @@ class TestArrayProtobufSerialization:
         # Use to_proto_with_reuse (which handles SSA value reuse)
         pb = arr.to_proto_with_reuse()
 
-        assert pb.HasField("array_literal")
+        assert pb.HasField("array")
+        assert pb.array.HasField("literal")
 
     def test_nested_array_operations_to_proto(self):
         """Test serialization of nested array operations"""
@@ -411,9 +415,11 @@ class TestArrayProtobufSerialization:
         context = SerializationContext()
         pb = access.to_proto(context)
 
-        assert pb.HasField("array_access")
-        # The nested array should be serialized
-        assert pb.array_access.array.HasField("array_literal")
+        assert pb.HasField("array")
+        assert pb.array.HasField("access")
+        # The nested array should be serialized (hierarchical schema)
+        assert pb.array.access.array.HasField("array")
+        assert pb.array.access.array.array.HasField("literal")
 
 
 # ==================== INTEGRATION WITH ARRAY TYPE CONSTRUCTION ====================

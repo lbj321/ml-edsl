@@ -1,8 +1,5 @@
 // Protocol Buffers schema for MLIR EDSL AST - NEW ALGEBRAIC TYPE SYSTEM
 // Serialization between Python frontend and C++ backend
-//
-// This is the PROPOSED schema after type system migration.
-// See TYPE_SYSTEM_MIGRATION.md for migration plan.
 
 syntax = "proto3";
 
@@ -107,24 +104,59 @@ enum ComparisonPredicate {
 // AST NODE DEFINITIONS (Updated to use TypeSpec)
 // ============================================================================
 
-// Main AST node container
+// Main AST node container - hierarchical for scalability
 message ASTNode {
-  oneof value_data {
+  oneof node {
+    ScalarNode scalar = 1;
+    ArrayNode array = 2;
+    ControlFlowNode control_flow = 3;
+    FunctionNode function = 4;
+    BindingNode binding = 5;
+  }
+}
+
+// Scalar operations (constants, arithmetic, comparisons, casts)
+message ScalarNode {
+  oneof value {
     Constant constant = 1;
-    Parameter parameter = 2;
-    BinaryOp binary_op = 3;
-    CompareOp compare_op = 4;
-    IfOp if_op = 5;
-    CallOp call_op = 6;
-    ForLoopOp for_loop_op = 7;
-    WhileLoopOp while_loop_op = 8;
-    CastOp cast_op = 9;
-    LetBinding let_binding = 10;
-    ValueReference value_ref = 11;
-    ArrayLiteral array_literal = 12;
-    ArrayAccess array_access = 13;
-    ArrayStore array_store = 14;
-    ArrayBinaryOp array_binary_op = 15;
+    BinaryOp binary_op = 2;
+    CompareOp compare_op = 3;
+    CastOp cast_op = 4;
+  }
+}
+
+// Array/MemRef operations
+message ArrayNode {
+  oneof value {
+    ArrayLiteral literal = 1;
+    ArrayAccess access = 2;
+    ArrayStore store = 3;
+    ArrayBinaryOp binary_op = 4;
+  }
+}
+
+// Control flow operations
+message ControlFlowNode {
+  oneof value {
+    IfOp if_op = 1;
+    ForLoopOp for_loop = 2;
+    WhileLoopOp while_loop = 3;
+  }
+}
+
+// Function-related operations
+message FunctionNode {
+  oneof value {
+    Parameter parameter = 1;
+    CallOp call = 2;
+  }
+}
+
+// SSA value binding operations
+message BindingNode {
+  oneof value {
+    LetBinding let = 1;
+    ValueReference ref = 2;
   }
 }
 

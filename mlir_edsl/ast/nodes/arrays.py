@@ -155,11 +155,11 @@ class ArrayLiteral(Value):
         pb_node = ast_pb2.ASTNode()
 
         # Set array type using TypeSpec
-        pb_node.array_literal.type.CopyFrom(self.array_type.to_proto())
+        pb_node.array.literal.type.CopyFrom(self.array_type.to_proto())
 
         # Serialize each element (with context-aware serialization)
         for elem in self.elements:
-            pb_node.array_literal.elements.append(elem._to_proto_impl(context))
+            pb_node.array.literal.elements.append(elem._to_proto_impl(context))
 
         return pb_node
 
@@ -252,14 +252,14 @@ class ArrayAccess(Value):
         pb_node = ast_pb2.ASTNode()
 
         # Serialize array (context-aware)
-        pb_node.array_access.array.CopyFrom(self.array._to_proto_impl(context))
+        pb_node.array.access.array.CopyFrom(self.array._to_proto_impl(context))
 
         # Serialize all indices using repeated field
         for idx in self.indices:
-            pb_node.array_access.indices.append(idx._to_proto_impl(context))
+            pb_node.array.access.indices.append(idx._to_proto_impl(context))
 
         # Set result type (element type of the array)
-        pb_node.array_access.result_type.CopyFrom(self._array_type.element_type.to_proto())
+        pb_node.array.access.result_type.CopyFrom(self._array_type.element_type.to_proto())
 
         return pb_node
 
@@ -381,15 +381,15 @@ class ArrayStore(Value):
         pb_node = ast_pb2.ASTNode()
 
         # Serialize array and value (context-aware)
-        pb_node.array_store.array.CopyFrom(self.array._to_proto_impl(context))
-        pb_node.array_store.value.CopyFrom(self.value._to_proto_impl(context))
+        pb_node.array.store.array.CopyFrom(self.array._to_proto_impl(context))
+        pb_node.array.store.value.CopyFrom(self.value._to_proto_impl(context))
 
         # Serialize all indices using repeated field
         for idx in self.indices:
-            pb_node.array_store.indices.append(idx._to_proto_impl(context))
+            pb_node.array.store.indices.append(idx._to_proto_impl(context))
 
         # Set result type (array type)
-        pb_node.array_store.result_type.CopyFrom(self._array_type.to_proto())
+        pb_node.array.store.result_type.CopyFrom(self._array_type.to_proto())
 
         return pb_node
 
@@ -488,10 +488,10 @@ class ArrayBinaryOp(Value):
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
         pb_node = ast_pb2.ASTNode()
-        pb_node.array_binary_op.op_type = _binary_op_to_proto(self.op)
+        pb_node.array.binary_op.op_type = _binary_op_to_proto(self.op)
 
         # Set result type using TypeSpec
-        pb_node.array_binary_op.result_type.CopyFrom(self._result_type.to_proto())
+        pb_node.array.binary_op.result_type.CopyFrom(self._result_type.to_proto())
 
         # Set broadcast mode
         broadcast_map = {
@@ -499,10 +499,10 @@ class ArrayBinaryOp(Value):
             "SCALAR_LEFT": ast_pb2.SCALAR_LEFT,
             "SCALAR_RIGHT": ast_pb2.SCALAR_RIGHT,
         }
-        pb_node.array_binary_op.broadcast = broadcast_map[self._broadcast_mode]
+        pb_node.array.binary_op.broadcast = broadcast_map[self._broadcast_mode]
 
         # Context-aware child serialization
-        pb_node.array_binary_op.left.CopyFrom(self.left._to_proto_impl(context))
-        pb_node.array_binary_op.right.CopyFrom(self.right._to_proto_impl(context))
+        pb_node.array.binary_op.left.CopyFrom(self.left._to_proto_impl(context))
+        pb_node.array.binary_op.right.CopyFrom(self.right._to_proto_impl(context))
 
         return pb_node
