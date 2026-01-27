@@ -5,14 +5,9 @@ All operations (add, sub, mul, div) automatically dispatch to:
 - ArrayBinaryOp for array operands (element-wise)
 """
 
-from typing import Union
-from ..ast import BinaryOp, Constant, Value, ArrayBinaryOp
+from ..ast import BinaryOp, Value, ArrayBinaryOp, to_value
 from ..types import ArrayType
 from .. import ast_pb2
-
-
-def _to_value(x) -> Value:
-    return x if isinstance(x, Value) else Constant(x)
 
 
 def _dispatch_binary_op(op: int, left: Value, right: Value):
@@ -26,16 +21,16 @@ def _dispatch_binary_op(op: int, left: Value, right: Value):
 
 
 def add(left, right):
-    return _dispatch_binary_op(ast_pb2.ADD, _to_value(left), _to_value(right))
+    return _dispatch_binary_op(ast_pb2.ADD, to_value(left), to_value(right))
 
 
 def sub(left, right):
-    return _dispatch_binary_op(ast_pb2.SUB, _to_value(left), _to_value(right))
+    return _dispatch_binary_op(ast_pb2.SUB, to_value(left), to_value(right))
 
 
 def mul(left, right):
-    return _dispatch_binary_op(ast_pb2.MUL, _to_value(left), _to_value(right))
+    return _dispatch_binary_op(ast_pb2.MUL, to_value(left), to_value(right))
 
 
 def div(left, right):
-    return _dispatch_binary_op(ast_pb2.DIV, _to_value(left), _to_value(right))
+    return _dispatch_binary_op(ast_pb2.DIV, to_value(left), to_value(right))

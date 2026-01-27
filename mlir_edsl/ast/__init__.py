@@ -3,6 +3,7 @@
 # Core infrastructure
 from .base import Value
 from .serialization import SerializationContext
+from .helpers import to_value
 
 # AST nodes (re-exported from nodes/)
 from .nodes import (
@@ -17,7 +18,7 @@ from .nodes import (
 )
 
 __all__ = [
-    'Value', 'SerializationContext',
+    'Value', 'SerializationContext', 'to_value',
     'Constant', 'BinaryOp', 'CompareOp', 'CastOp',
     'ArrayLiteral', 'ArrayAccess', 'ArrayStore', 'ArrayBinaryOp',
     'IfOp', 'ForLoopOp', 'WhileLoopOp',

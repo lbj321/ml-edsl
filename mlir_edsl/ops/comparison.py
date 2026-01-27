@@ -5,7 +5,7 @@ Maps base predicates to their float/int variants:
 - Integer comparisons use signed predicates (SLT, SLE, SGT, SGE, EQ, NE)
 """
 
-from ..ast import CompareOp, Constant, Value
+from ..ast import CompareOp, Constant, Value, to_value
 from .. import ast_pb2
 
 
@@ -14,13 +14,9 @@ def _infer_predicate(float_pred: int, int_pred: int, left_type, right_type) -> i
     return float_pred if is_float else int_pred
 
 
-def _to_value(x):
-    return x if isinstance(x, Value) else Constant(x)
-
-
 def _make_compare(float_pred: int, int_pred: int, left, right) -> CompareOp:
-    left = _to_value(left)
-    right = _to_value(right)
+    left = to_value(left)
+    right = to_value(right)
     predicate = _infer_predicate(float_pred, int_pred, left.infer_type(), right.infer_type())
     return CompareOp(predicate, left, right)
 

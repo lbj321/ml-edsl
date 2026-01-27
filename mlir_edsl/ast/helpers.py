@@ -1,9 +1,28 @@
-"""Helper classes for JAX-style .at[] array indexing syntax"""
+"""Helper utilities and JAX-style .at[] array indexing syntax"""
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .base import Value
+
+
+# ==================== VALUE CONVERSION ====================
+
+def to_value(x):
+    """Convert Python scalar to Value, or pass through existing Values.
+
+    Args:
+        x: Python scalar (int, float, bool) or existing Value
+
+    Returns:
+        Value node (Constant for scalars, unchanged for Values)
+
+    Raises:
+        TypeError: If x cannot be converted (via Constant)
+    """
+    from .base import Value
+    from .nodes.scalars import Constant
+    return x if isinstance(x, Value) else Constant(x)
 
 
 # ==================== JAX-STYLE .at[] SYNTAX ====================

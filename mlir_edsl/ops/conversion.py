@@ -1,8 +1,7 @@
 """Type conversion and function call utilities"""
 
 from typing import Union
-from ..ast import CastOp, CallOp, Constant, Value
-from ..types import ScalarType
+from ..ast import CastOp, CallOp, Value, to_value
 
 
 def cast(value: Union[int, float, Value], target_type) -> CastOp:
@@ -21,10 +20,8 @@ def cast(value: Union[int, float, Value], target_type) -> CastOp:
         cast(5.7, i32)       # Constant 5.7 -> i32
         result = add(cast(a, f32), b)  # a is i32, b is f32
     """
-    if isinstance(value, (int, float)):
-        value = Constant(value)
 
-    return CastOp(value, target_type)
+    return CastOp(to_value(value), target_type)
 
 
 def call(func_name: str, args: list[Union[int, float, Value]], return_type) -> CallOp:
@@ -41,9 +38,6 @@ def call(func_name: str, args: list[Union[int, float, Value]], return_type) -> C
     # Convert primitive types to Constants
     converted_args = []
     for arg in args:
-        if isinstance(arg, (int, float)):
-            converted_args.append(Constant(arg))
-        else:
-            converted_args.append(arg)
+        converted_args.append(to_value(arg))
 
     return CallOp(func_name, converted_args, return_type)
