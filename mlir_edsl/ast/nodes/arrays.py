@@ -10,7 +10,7 @@ try:
 except ImportError:
     ast_pb2 = None
 
-from ..serialization import SerializationContext, _binary_op_to_proto
+from ..serialization import SerializationContext, OP_NAMES
 
 if TYPE_CHECKING:
     from ...types import Type
@@ -401,14 +401,9 @@ class ArrayBinaryOp(Value):
     - Array + Array: Element-wise with matching shapes
     - Array + Scalar: Broadcasting scalar to all elements
     - Scalar + Array: Broadcasting scalar to all elements
-
-    Examples:
-        arr1 + arr2          # Array[4,i32] + Array[4,i32] -> Array[4,i32]
-        arr * 2              # Array[4,i32] * Constant(2) -> Array[4,i32]
-        3.0 + arr            # Constant(3.0) + Array[4,f32] -> Array[4,f32]
     """
 
-    def __init__(self, op: str, left: Value, right: Value):
+    def __init__(self, op: int, left: Value, right: Value):
         super().__init__()
         self.op = op
         self.left = left
@@ -421,6 +416,9 @@ class ArrayBinaryOp(Value):
         # Determine operation mode and result type
         self._infer_broadcast_mode(left_type, right_type)
 
+    def _op_name(self) -> str:
+        return OP_NAMES.get(self.op, str(self.op))
+
     def _infer_broadcast_mode(self, left_type, right_type):
         """Determine broadcasting mode and validate types"""
         left_is_array = isinstance(left_type, ArrayType)
@@ -430,13 +428,13 @@ class ArrayBinaryOp(Value):
             # ARRAY + ARRAY: Shapes AND element types must match exactly
             if left_type.shape != right_type.shape:
                 raise TypeError(
-                    f"Array shapes must match for element-wise {self.op}.\n"
+                    f"Array shapes must match for element-wise {self._op_name()}.\n"
                     f"  Left:  {left_type} (shape {left_type.shape})\n"
                     f"  Right: {right_type} (shape {right_type.shape})"
                 )
             if left_type.element_type != right_type.element_type:
                 raise TypeError(
-                    f"Array element types must match for element-wise {self.op}.\n"
+                    f"Array element types must match for element-wise {self._op_name()}.\n"
                     f"  Left:  {left_type.element_type}\n"
                     f"  Right: {right_type.element_type}\n"
                     f"  Hint: Use cast() for explicit type conversion"
@@ -488,7 +486,7 @@ class ArrayBinaryOp(Value):
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
         pb_node = ast_pb2.ASTNode()
-        pb_node.array.binary_op.op_type = _binary_op_to_proto(self.op)
+        pb_node.array.binary_op.op_type = self.op
 
         # Set result type using TypeSpec
         pb_node.array.binary_op.result_type.CopyFrom(self._result_type.to_proto())

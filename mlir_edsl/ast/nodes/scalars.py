@@ -10,7 +10,7 @@ try:
 except ImportError:
     ast_pb2 = None
 
-from ..serialization import SerializationContext, _binary_op_to_proto, _predicate_to_proto
+from ..serialization import SerializationContext, OP_NAMES, PREDICATE_NAMES
 
 if TYPE_CHECKING:
     from ...types import Type
@@ -56,7 +56,7 @@ class Constant(Value):
 class BinaryOp(Value):
     """Represents a binary operation - STRICT TYPE MATCHING ENFORCED"""
 
-    def __init__(self, op: str, left: Value, right: Value):
+    def __init__(self, op: int, left: Value, right: Value):
         super().__init__()
         self.op = op
         self.left = left
@@ -69,7 +69,7 @@ class BinaryOp(Value):
 
         if left_type != right_type:
             raise TypeError(
-                f"Binary operation '{self.op}' requires matching types.\n"
+                f"Binary operation '{OP_NAMES.get(self.op, self.op)}' requires matching types.\n"
                 f"  Left operand type:  {left_type}\n"
                 f"  Right operand type: {right_type}\n"
                 f"  Hint: Use cast() to convert types explicitly"
@@ -85,7 +85,7 @@ class BinaryOp(Value):
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
         pb_node = ast_pb2.ASTNode()
-        pb_node.scalar.binary_op.op_type = _binary_op_to_proto(self.op)
+        pb_node.scalar.binary_op.op_type = self.op
         pb_node.scalar.binary_op.result_type.CopyFrom(self.infer_type().to_proto())
 
         # Context-aware child serialization
@@ -98,7 +98,7 @@ class BinaryOp(Value):
 class CompareOp(Value):
     """Represents a comparison operation"""
 
-    def __init__(self, predicate: str, left: Value, right: Value):
+    def __init__(self, predicate: int, left: Value, right: Value):
         super().__init__()
         self.predicate = predicate
         self.left = left
@@ -129,7 +129,7 @@ class CompareOp(Value):
             raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
 
         pb_node = ast_pb2.ASTNode()
-        pb_node.scalar.compare_op.predicate = _predicate_to_proto(self.predicate)
+        pb_node.scalar.compare_op.predicate = self.predicate
         pb_node.scalar.compare_op.operand_type.CopyFrom(self._operand_type.to_proto())
 
         # Context-aware child serialization

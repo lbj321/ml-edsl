@@ -48,36 +48,25 @@ class SerializationContext:
         return value.id in self.serialized
 
 
-# ==================== PROTOBUF ENUM MAPPINGS ====================
-# These mappings convert string operations/predicates to protobuf enums
-# Shared across multiple AST node classes during serialization
+# ==================== ENUM NAME LOOKUPS (for error messages) ====================
 
-def _binary_op_to_proto(operation: str):
-    """Convert operation string to protobuf BinaryOpType enum"""
-    op_map = {
-        "add": ast_pb2.ADD,
-        "sub": ast_pb2.SUB,
-        "mul": ast_pb2.MUL,
-        "div": ast_pb2.DIV,
-    }
-    return op_map[operation]
+OP_NAMES = {
+    ast_pb2.ADD: "add",
+    ast_pb2.SUB: "sub",
+    ast_pb2.MUL: "mul",
+    ast_pb2.DIV: "div",
+} if ast_pb2 else {}
 
-
-def _predicate_to_proto(predicate: str):
-    """Convert predicate string to protobuf ComparisonPredicate enum"""
-    pred_map = {
-        "gt": ast_pb2.GT, "lt": ast_pb2.LT,
-        "eq": ast_pb2.EQ, "ne": ast_pb2.NE,
-        "ge": ast_pb2.GE, "le": ast_pb2.LE,
-        "slt": ast_pb2.SLT, "sle": ast_pb2.SLE,
-        "sgt": ast_pb2.SGT, "sge": ast_pb2.SGE,
-        "ult": ast_pb2.ULT, "ule": ast_pb2.ULE,
-        "ugt": ast_pb2.UGT, "uge": ast_pb2.UGE,
-        "olt": ast_pb2.OLT, "ole": ast_pb2.OLE,
-        "ogt": ast_pb2.OGT, "oge": ast_pb2.OGE,
-        "oeq": ast_pb2.OEQ, "one": ast_pb2.ONE,
-        "ueq": ast_pb2.UEQ, "une": ast_pb2.UNE,
-    }
-    if predicate not in pred_map:
-        raise ValueError(f"Unknown predicate: {predicate}")
-    return pred_map[predicate]
+PREDICATE_NAMES = {
+    ast_pb2.GT: "gt", ast_pb2.LT: "lt",
+    ast_pb2.EQ: "eq", ast_pb2.NE: "ne",
+    ast_pb2.GE: "ge", ast_pb2.LE: "le",
+    ast_pb2.SLT: "slt", ast_pb2.SLE: "sle",
+    ast_pb2.SGT: "sgt", ast_pb2.SGE: "sge",
+    ast_pb2.ULT: "ult", ast_pb2.ULE: "ule",
+    ast_pb2.UGT: "ugt", ast_pb2.UGE: "uge",
+    ast_pb2.OLT: "olt", ast_pb2.OLE: "ole",
+    ast_pb2.OGT: "ogt", ast_pb2.OGE: "oge",
+    ast_pb2.OEQ: "oeq", ast_pb2.ONE: "one",
+    ast_pb2.UEQ: "ueq", ast_pb2.UNE: "une",
+} if ast_pb2 else {}

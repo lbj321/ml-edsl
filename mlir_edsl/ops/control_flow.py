@@ -2,6 +2,7 @@
 
 from typing import Union
 from ..ast import IfOp, ForLoopOp, WhileLoopOp, Constant, Value
+from .. import ast_pb2
 
 
 def If(condition: Value, then_value: Union[int, float, Value],

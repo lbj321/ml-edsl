@@ -10,7 +10,7 @@ try:
 except ImportError:
     ast_pb2 = None
 
-from ..serialization import SerializationContext, _binary_op_to_proto, _predicate_to_proto
+from ..serialization import SerializationContext
 
 if TYPE_CHECKING:
     from ...types import Type
@@ -71,11 +71,11 @@ class ForLoopOp(Value):
     Represents: for(i = start; i < end; i += step) { accumulator = accumulator op i }
 
     Examples:
-        - For(start=0, end=10, step=1, init=0, op="add")      # int loop, int accumulator
+        - For(start=0, end=10, step=1, init=0, op=ast_pb2.ADD)
     """
 
     def __init__(self, start: Value, end: Value, step: Value,
-                 init_value: Value, operation: str):
+                 init_value: Value, operation: int):
         super().__init__()
         self.start = start
         self.end = end
@@ -131,7 +131,7 @@ class ForLoopOp(Value):
         pb_node.control_flow.for_loop.step.CopyFrom(self.step._to_proto_impl(context))
         pb_node.control_flow.for_loop.init_value.CopyFrom(self.init_value._to_proto_impl(context))
 
-        pb_node.control_flow.for_loop.operation = _binary_op_to_proto(self.operation)
+        pb_node.control_flow.for_loop.operation = self.operation
         pb_node.control_flow.for_loop.result_type.CopyFrom(self._inferred_type.to_proto())
 
         return pb_node
@@ -147,7 +147,7 @@ class WhileLoopOp(Value):
     """
 
     def __init__(self, init_value: Value, target: Value,
-                 operation: str, predicate: str):
+                 operation: int, predicate: int):
         super().__init__()
         self.init_value = init_value
         self.target = target
@@ -191,8 +191,8 @@ class WhileLoopOp(Value):
         pb_node.control_flow.while_loop.init_value.CopyFrom(self.init_value._to_proto_impl(context))
         pb_node.control_flow.while_loop.target.CopyFrom(self.target._to_proto_impl(context))
 
-        pb_node.control_flow.while_loop.operation = _binary_op_to_proto(self.operation)
-        pb_node.control_flow.while_loop.predicate = _predicate_to_proto(self.predicate)
+        pb_node.control_flow.while_loop.operation = self.operation
+        pb_node.control_flow.while_loop.predicate = self.predicate
         pb_node.control_flow.while_loop.result_type.CopyFrom(self._inferred_type.to_proto())
 
         return pb_node

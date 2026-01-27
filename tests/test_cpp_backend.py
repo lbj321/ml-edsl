@@ -8,7 +8,7 @@ import pytest
 from mlir_edsl.backend import HAS_CPP_BACKEND, get_backend, CppMLIRBackend
 from mlir_edsl.ast import Constant, BinaryOp, CompareOp, IfOp, ForLoopOp, WhileLoopOp, Parameter
 from mlir_edsl.types import i32, f32, i1
-from mlir_edsl import cast
+from mlir_edsl import cast, ADD, SUB, MUL, DIV, SGT, SLT
 
 # Skip all tests if C++ backend is not available
 pytestmark = pytest.mark.skipif(not HAS_CPP_BACKEND, reason="C++ backend not available")
@@ -50,7 +50,7 @@ def test_constant_addition(backend):
     # Create AST: 5 + 3
     left = Constant(5)
     right = Constant(3)
-    result = BinaryOp("add", left, right)
+    result = BinaryOp(ADD, left, right)
 
     # Compile function
     backend.compile_function_from_ast("test_add", [], i32, result)
@@ -71,22 +71,22 @@ def test_constant_addition(backend):
 def test_constant_operations(backend):
     """Test all basic arithmetic operations"""
     # Addition
-    add_result = BinaryOp("add", Constant(10), Constant(5))
+    add_result = BinaryOp(ADD, Constant(10), Constant(5))
     backend.compile_function_from_ast("test_ops_add", [], i32, add_result)
     assert backend.execute_function("test_ops_add") == 15
 
     # Subtraction
-    sub_result = BinaryOp("sub", Constant(10), Constant(3))
+    sub_result = BinaryOp(SUB, Constant(10), Constant(3))
     backend.compile_function_from_ast("test_ops_sub", [], i32, sub_result)
     assert backend.execute_function("test_ops_sub") == 7
 
     # Multiplication
-    mul_result = BinaryOp("mul", Constant(6), Constant(4))
+    mul_result = BinaryOp(MUL, Constant(6), Constant(4))
     backend.compile_function_from_ast("test_ops_mul", [], i32, mul_result)
     assert backend.execute_function("test_ops_mul") == 24
 
     # Division
-    div_result = BinaryOp("div", Constant(20), Constant(4))
+    div_result = BinaryOp(DIV, Constant(20), Constant(4))
     backend.compile_function_from_ast("test_ops_div", [], i32, div_result)
     assert backend.execute_function("test_ops_div") == 5
 
@@ -96,7 +96,7 @@ def test_float_operations(backend):
     # Float addition
     left = Constant(5.5)
     right = Constant(2.5)
-    result = BinaryOp("add", left, right)
+    result = BinaryOp(ADD, left, right)
 
     backend.compile_function_from_ast("test_float_add", [], f32, result)
     mlir_code = backend.get_mlir_string()
@@ -114,7 +114,7 @@ def test_type_promotion(backend):
     """Test mixed type promotion (int + float = float)"""
     int_val = Constant(5)
     float_val = Constant(2.5)
-    result = BinaryOp("add", cast(int_val, f32), float_val)
+    result = BinaryOp(ADD, cast(int_val, f32), float_val)
 
     # Result should be float
     assert result.infer_type() == f32
@@ -130,8 +130,8 @@ def test_complex_expression(backend):
     b = Constant(3)
     c = Constant(2)
 
-    add_result = BinaryOp("add", a, b)
-    final_result = BinaryOp("mul", add_result, c)
+    add_result = BinaryOp(ADD, a, b)
+    final_result = BinaryOp(MUL, add_result, c)
 
     backend.compile_function_from_ast("test_complex", [], i32, final_result)
     mlir_code = backend.get_mlir_string()
@@ -154,7 +154,7 @@ def test_parameterized_function(backend):
     # Create function: add(x, y) = x + y
     param_x = Parameter("x", i32)
     param_y = Parameter("y", i32)
-    result = BinaryOp("add", param_x, param_y)
+    result = BinaryOp(ADD, param_x, param_y)
 
     backend.compile_function_from_ast(
         "test_param_add",
@@ -175,7 +175,7 @@ def test_float_parameters(backend):
     """Test function with float parameters"""
     param_x = Parameter("x", f32)
     param_y = Parameter("y", f32)
-    result = BinaryOp("mul", param_x, param_y)
+    result = BinaryOp(MUL, param_x, param_y)
 
     backend.compile_function_from_ast(
         "test_float_param",
@@ -194,7 +194,7 @@ def test_comparison_compilation(backend):
     """Test comparison operation compilation"""
     left = Constant(5)
     right = Constant(3)
-    comparison = CompareOp("sgt", left, right)
+    comparison = CompareOp(SGT, left, right)
 
     # Comparisons return i1 (bool)
     assert comparison.infer_type() == i1
@@ -215,7 +215,7 @@ def test_comparison_compilation(backend):
 def test_if_else_compilation(backend):
     """Test if-else operation compilation"""
     # if (10 > 5) return 100 else return 200
-    condition = CompareOp("sgt", Constant(10), Constant(5))
+    condition = CompareOp(SGT, Constant(10), Constant(5))
     result = IfOp(condition, Constant(100), Constant(200))
 
     backend.compile_function_from_ast("test_if", [], i32, result)
@@ -261,7 +261,7 @@ def test_while_loop_compilation(backend):
     init_value = Constant(0)
     target = Constant(5)
 
-    result = WhileLoopOp(init_value, target, "add", "slt")
+    result = WhileLoopOp(init_value, target, ADD, SLT)
 
     backend.compile_function_from_ast("test_while", [], i32, result)
     mlir_code = backend.get_mlir_string()
@@ -279,7 +279,7 @@ def test_while_loop_compilation(backend):
 def test_llvm_ir_generation(backend):
     """Test LLVM IR generation from MLIR"""
     # Simple addition
-    result = BinaryOp("add", Constant(4), Constant(6))
+    result = BinaryOp(ADD, Constant(4), Constant(6))
     backend.compile_function_from_ast("add_fn", [], i32, result)
 
     llvm_ir = backend.get_llvm_ir_string()
@@ -297,7 +297,7 @@ def test_llvm_ir_generation(backend):
 
 def test_llvm_ir_float(backend):
     """Test LLVM IR generation with float operations"""
-    result = BinaryOp("mul", Constant(2.5), Constant(4.0))
+    result = BinaryOp(MUL, Constant(2.5), Constant(4.0))
     backend.compile_function_from_ast("mul_fn", [], f32, result)
 
     llvm_ir = backend.get_llvm_ir_string()
@@ -315,7 +315,7 @@ def test_has_function(backend):
     """Test has_function method"""
     assert not backend.has_function("test_func")
 
-    result = BinaryOp("add", Constant(1), Constant(2))
+    result = BinaryOp(ADD, Constant(1), Constant(2))
     backend.compile_function_from_ast("test_func", [], i32, result)
 
     assert backend.has_function("test_func")
@@ -324,10 +324,10 @@ def test_has_function(backend):
 def test_list_functions(backend):
     """Test list_functions method"""
     # Compile multiple functions
-    result1 = BinaryOp("add", Constant(1), Constant(2))
+    result1 = BinaryOp(ADD, Constant(1), Constant(2))
     backend.compile_function_from_ast("func1", [], i32, result1)
 
-    result2 = BinaryOp("mul", Constant(3), Constant(4))
+    result2 = BinaryOp(MUL, Constant(3), Constant(4))
     backend.compile_function_from_ast("func2", [], i32, result2)
 
     functions = backend.list_functions()
@@ -338,7 +338,7 @@ def test_list_functions(backend):
 def test_clear_module(backend):
     """Test clear_module method"""
     # Compile a function
-    result = BinaryOp("add", Constant(1), Constant(2))
+    result = BinaryOp(ADD, Constant(1), Constant(2))
     backend.compile_function_from_ast("test_func", [], i32, result)
     assert backend.has_function("test_func")
 
