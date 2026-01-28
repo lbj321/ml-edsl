@@ -1,6 +1,5 @@
 """Array AST nodes: ArrayLiteral, ArrayAccess, ArrayStore, ArrayBinaryOp"""
 
-from typing import TYPE_CHECKING
 from ..base import Value
 from ...types import Type, ScalarType, ArrayType, i32, f32, i1
 
@@ -12,8 +11,42 @@ except ImportError:
 
 from ..serialization import SerializationContext, OP_NAMES
 
-if TYPE_CHECKING:
-    from ...types import Type
+
+def _normalize_indices(index):
+    """Convert single index or tuple to list of AST nodes"""
+    from .scalars import Constant
+
+    if not isinstance(index, tuple):
+        indices = (index,)
+    else:
+        indices = index
+
+    result = []
+    for idx in indices:
+        if isinstance(idx, int):
+            result.append(Constant(idx, i32))
+        elif isinstance(idx, Value):
+            result.append(idx)
+        else:
+            raise TypeError(f"Array index must be int or Value, got {type(idx)}")
+    return result
+
+
+def _to_scalar_node(value):
+    """Convert Python literal to Constant node if needed"""
+    if isinstance(value, Value):
+        return value
+
+    from .scalars import Constant
+
+    if isinstance(value, bool):
+        return Constant(value, i1)
+    elif isinstance(value, int):
+        return Constant(value, i32)
+    elif isinstance(value, float):
+        return Constant(value, f32)
+    else:
+        raise TypeError(f"Invalid value: {value}")
 
 
 class ArrayLiteral(Value):
@@ -99,7 +132,7 @@ class ArrayLiteral(Value):
 
         for i, elem in enumerate(self.elements):
             # Convert Python literals to AST nodes if needed
-            elem_node = self._ensure_ast_node(elem)
+            elem_node = _to_scalar_node(elem)
             self.elements[i] = elem_node  # Update with AST node
 
             # Infer element type
@@ -119,25 +152,6 @@ class ArrayLiteral(Value):
                     f"got {elem_type}. "
                     f"Use cast() for explicit type conversion."
                 )
-
-    def _ensure_ast_node(self, elem):
-        """Convert Python literal to AST node if needed"""
-        if isinstance(elem, Value):
-            return elem
-
-        # Import here to avoid circular dependency
-        from .scalars import Constant
-
-        # Convert Python literals
-        if isinstance(elem, bool):
-            # Must check bool before int (bool is subclass of int)
-            return Constant(elem, i1)
-        elif isinstance(elem, int):
-            return Constant(elem, i32)
-        elif isinstance(elem, float):
-            return Constant(elem, f32)
-        else:
-            raise TypeError(f"Invalid array element: {elem}")
 
     def infer_type(self) -> Type:
         """ArrayLiteral returns its full ArrayType"""
@@ -168,34 +182,10 @@ class ArrayAccess(Value):
     def __init__(self, array: Value, index):
         super().__init__()
         self.array = array
-
-        # Normalize index to list of AST nodes
-        self.indices = self._normalize_indices(index)
+        self.indices = _normalize_indices(index)
 
         # COMPILE-TIME TYPE CHECKING
         self._validate_types()
-
-    def _normalize_indices(self, index):
-        """Convert single index or tuple to list of AST nodes"""
-        from .scalars import Constant
-
-        # Python passes arr[i, j] as tuple (i, j) automatically
-        if not isinstance(index, tuple):
-            indices = (index,)  # Single index: arr[5]
-        else:
-            indices = index     # Multiple indices: arr[1, 2]
-
-        # Convert each index to AST node
-        result = []
-        for idx in indices:
-            if isinstance(idx, int):
-                result.append(Constant(idx, i32))
-            elif isinstance(idx, Value):
-                result.append(idx)
-            else:
-                raise TypeError(f"Array index must be int or Value, got {type(idx)}")
-
-        return result
 
     def _validate_types(self):
         """Validate array access is type-safe"""
@@ -257,48 +247,11 @@ class ArrayStore(Value):
     def __init__(self, array: Value, index, value):
         super().__init__()
         self.array = array
-
-        # Normalize index to list of AST nodes (same as ArrayAccess)
-        self.indices = self._normalize_indices(index)
-
-        # Convert value to AST node if needed
-        from .scalars import Constant
-        if isinstance(value, bool):
-            # Must check bool before int (bool is subclass of int)
-            self.value = Constant(value, i1)
-        elif isinstance(value, int):
-            self.value = Constant(value, i32)
-        elif isinstance(value, float):
-            self.value = Constant(value, f32)
-        elif isinstance(value, Value):
-            self.value = value
-        else:
-            raise TypeError(f"Array value must be int/float/bool or Value")
+        self.indices = _normalize_indices(index)
+        self.value = _to_scalar_node(value)
 
         # COMPILE-TIME TYPE CHECKING
         self._validate_types()
-
-    def _normalize_indices(self, index):
-        """Convert single index or tuple to list of AST nodes"""
-        from .scalars import Constant
-
-        # Python passes arr.at[i, j] as tuple (i, j) automatically
-        if not isinstance(index, tuple):
-            indices = (index,)  # Single index: arr.at[5]
-        else:
-            indices = index     # Multiple indices: arr.at[1, 2]
-
-        # Convert each index to AST node
-        result = []
-        for idx in indices:
-            if isinstance(idx, int):
-                result.append(Constant(idx, i32))
-            elif isinstance(idx, Value):
-                result.append(idx)
-            else:
-                raise TypeError(f"Array index must be int or Value, got {type(idx)}")
-
-        return result
 
     def _validate_types(self):
         """Validate array store is type-safe"""
