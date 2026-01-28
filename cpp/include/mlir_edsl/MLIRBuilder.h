@@ -8,6 +8,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/Value.h"
 #include <pybind11/pybind11.h>
 #include <unordered_set>
@@ -58,7 +59,7 @@ public:
 private:
   std::unique_ptr<mlir::MLIRContext> context;
   std::unique_ptr<mlir::OpBuilder> builder;
-  mlir::ModuleOp module;
+  mlir::OwningOpRef<mlir::ModuleOp> module;
   mlir::func::FuncOp currentFunction;
 
   // Helper methods

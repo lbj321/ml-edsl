@@ -38,20 +38,11 @@ MLIRBuilder::MLIRBuilder() {
   memrefBuilder = std::make_unique<mlir_edsl::MemRefBuilder>(*builder, context.get(), this, arithBuilder.get(), scfBuilder.get());
 }
 
-MLIRBuilder::~MLIRBuilder() {
-  if (currentFunction) {
-    currentFunction = nullptr;
-  }
-  if (module) {
-    module = nullptr;
-  }
-  builder.reset();
-  context.reset();
-}
+MLIRBuilder::~MLIRBuilder() = default;
 
 void MLIRBuilder::initializeModule() {
   module = mlir::ModuleOp::create(builder->getUnknownLoc());
-  builder->setInsertionPointToEnd(module.getBody());
+  builder->setInsertionPointToEnd(module->getBody());
 }
 
 mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
@@ -263,13 +254,13 @@ std::string MLIRBuilder::getMLIRString() {
   mlir::OpPrintingFlags flags;
   flags.enableDebugInfo(false);
   flags.printGenericOpForm(false);
-  module.print(stream, flags);
+  module->print(stream, flags);
   return result;
 }
 
 std::string MLIRBuilder::getLLVMIRString() {
   MLIRLowering lowering(context.get());
-  return lowering.lowerToLLVMIR(module);
+  return lowering.lowerToLLVMIR(*module);
 }
 
 void MLIRBuilder::reset() {
@@ -279,7 +270,7 @@ void MLIRBuilder::reset() {
   valueCache.clear();  // Clear SSA value cache between functions
 
   // Move insertion point back to module level
-  builder->setInsertionPointToEnd(module.getBody());
+  builder->setInsertionPointToEnd(module->getBody());
 }
 
 bool MLIRBuilder::isIntegerType(mlir::Type type) const {
@@ -463,7 +454,7 @@ void MLIRBuilder::finalizeFunction(const std::string &name,
     std::error_code EC;
     llvm::raw_fd_ostream outFile(filename, EC);
     if (!EC) {
-      module.print(outFile);
+      module->print(outFile);
     }
   }
 }
@@ -486,7 +477,7 @@ bool MLIRBuilder::hasFunction(const std::string &name) const {
 
 void MLIRBuilder::clearModule() {
   module = mlir::ModuleOp::create(builder->getUnknownLoc());
-  builder->setInsertionPointToEnd(module.getBody());
+  builder->setInsertionPointToEnd(module->getBody());
 
   compiledFunctions.clear();
   parameterMap.clear();
