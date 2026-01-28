@@ -3,7 +3,6 @@
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Value.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "ast.pb.h"
 #include <functional>
 
