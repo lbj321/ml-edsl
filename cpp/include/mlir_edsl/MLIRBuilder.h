@@ -66,9 +66,13 @@ private:
   bool isIntegerType(mlir::Type type) const;
   bool isFloatType(mlir::Type type) const;
 
-  // NEW: Type conversion helpers (algebraic type system)
+  // Type conversion helpers (algebraic type system)
   mlir::Type convertScalarType(const mlir_edsl::ScalarTypeSpec &scalarSpec) const;
   mlir::Type convertMemRefType(const mlir_edsl::MemRefTypeSpec &memrefSpec) const;
+
+  // Type validation helpers
+  bool isValidParameterType(const mlir_edsl::TypeSpec &type) const;
+  bool isValidReturnType(const mlir_edsl::TypeSpec &type) const;
 
   // Internal function building (not exposed to Python)
   void createFunction(

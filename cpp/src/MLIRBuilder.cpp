@@ -392,15 +392,33 @@ mlir::Value MLIRBuilder::getParameter(const std::string &name) {
   throw std::runtime_error("Parameter not found: " + name);
 }
 
+// ==================== Type Validation ====================
+
+bool MLIRBuilder::isValidParameterType(const mlir_edsl::TypeSpec &type) const {
+  return type.has_scalar();
+}
+
+bool MLIRBuilder::isValidReturnType(const mlir_edsl::TypeSpec &type) const {
+  return type.has_scalar() || type.has_memref();
+}
+
 void MLIRBuilder::compileFunctionFromDef(const mlir_edsl::FunctionDef &func_def) {
-  // Extract parameters using new TypeSpec-based system
+  // Validate and extract parameters
   std::vector<std::pair<std::string, mlir_edsl::TypeSpec>> params;
   for (const auto &param : func_def.params()) {
+    if (!isValidParameterType(param.type())) {
+      throw std::runtime_error("Parameter '" + param.name() + "': unsupported type");
+    }
     params.push_back({param.name(), param.type()});
   }
 
-  // Get return type using unified TypeSpec
-  mlir::Type returnType = convertType(func_def.return_type());
+  // Validate return type
+  const auto &retType = func_def.return_type();
+  if (!isValidReturnType(retType)) {
+    throw std::runtime_error("Unsupported return type");
+  }
+
+  mlir::Type returnType = convertType(retType);
 
   // Compile function
   createFunction(func_def.name(), params, returnType);
