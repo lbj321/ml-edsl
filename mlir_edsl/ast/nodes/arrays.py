@@ -409,7 +409,7 @@ class ArrayBinaryOp(Value):
                     f"  Hint: Use cast() for explicit type conversion"
                 )
             self._result_type = left_type
-            self._broadcast_mode = "NONE"
+            self._broadcast_mode = ast_pb2.NONE
 
         elif left_is_array and not right_is_array:
             # ARRAY + SCALAR: Validate scalar type matches array element type
@@ -421,7 +421,7 @@ class ArrayBinaryOp(Value):
                     f"  Use cast() for explicit conversion"
                 )
             self._result_type = left_type
-            self._broadcast_mode = "SCALAR_RIGHT"
+            self._broadcast_mode = ast_pb2.SCALAR_RIGHT
 
         elif not left_is_array and right_is_array:
             # SCALAR + ARRAY: Validate scalar type matches array element type
@@ -433,7 +433,7 @@ class ArrayBinaryOp(Value):
                     f"  Use cast() for explicit conversion"
                 )
             self._result_type = right_type
-            self._broadcast_mode = "SCALAR_LEFT"
+            self._broadcast_mode = ast_pb2.SCALAR_LEFT
 
         else:
             # SCALAR + SCALAR: This should use BinaryOp, not ArrayBinaryOp
@@ -453,12 +453,7 @@ class ArrayBinaryOp(Value):
         pb_node = ast_pb2.ASTNode()
         pb_node.array.binary_op.op_type = self.op
         pb_node.array.binary_op.result_type.CopyFrom(self._result_type.to_proto())
-        broadcast_map = {
-            "NONE": ast_pb2.NONE,
-            "SCALAR_LEFT": ast_pb2.SCALAR_LEFT,
-            "SCALAR_RIGHT": ast_pb2.SCALAR_RIGHT,
-        }
-        pb_node.array.binary_op.broadcast = broadcast_map[self._broadcast_mode]
+        pb_node.array.binary_op.broadcast = self._broadcast_mode
         pb_node.array.binary_op.left.CopyFrom(self.left.to_proto(context))
         pb_node.array.binary_op.right.CopyFrom(self.right.to_proto(context))
         return pb_node
