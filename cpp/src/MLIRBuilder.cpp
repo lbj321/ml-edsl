@@ -161,8 +161,7 @@ mlir::Value MLIRBuilder::handleConstant(const mlir_edsl::Constant &constant) {
   case mlir_edsl::ScalarTypeSpec::F32:
     return arithBuilder->buildConstant(constant.float_value());
   case mlir_edsl::ScalarTypeSpec::I1:
-    // Boolean constants - use i32 constant with 0 or 1
-    return arithBuilder->buildConstant(constant.bool_value() ? 1 : 0);
+    return arithBuilder->buildConstant(constant.bool_value());
   default:
     throw std::runtime_error("Unsupported constant type");
   }

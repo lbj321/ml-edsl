@@ -25,6 +25,14 @@ mlir::Value ArithBuilder::buildConstant(float value) {
   return builder.create<mlir::arith::ConstantOp>(loc, type, attr);
 }
 
+mlir::Value ArithBuilder::buildConstant(bool value) {
+  auto loc = builder.getUnknownLoc();
+  auto type = builder.getI1Type();
+  auto attr = builder.getBoolAttr(value);
+
+  return builder.create<mlir::arith::ConstantOp>(loc, type, attr);
+}
+
 // Template helper for binary operations - assumes operands already same type
 template <typename IntOp, typename FloatOp>
 mlir::Value ArithBuilder::buildBinaryOp(mlir::Value lhs, mlir::Value rhs) {

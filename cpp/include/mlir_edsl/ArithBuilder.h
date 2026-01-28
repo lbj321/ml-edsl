@@ -22,6 +22,9 @@ public:
   /// Build float constant
   mlir::Value buildConstant(float value);
 
+  /// Build boolean constant (i1)
+  mlir::Value buildConstant(bool value);
+
   /// Arithmetic operations (operands must be same type)
   mlir::Value buildAdd(mlir::Value lhs, mlir::Value rhs);
   mlir::Value buildSub(mlir::Value lhs, mlir::Value rhs);
