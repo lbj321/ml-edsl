@@ -19,32 +19,10 @@ class SCFBuilder;
 class MemRefBuilder;
 }
 
-namespace mlir_edsl {
+// Forward declarations for protobuf classes
+#include "mlir_edsl/proto_fwd.h"
 
-// Forward declarations for protobuf types
-enum ComparisonPredicate : int;
-enum BinaryOpType : int;
-class ASTNode;
-class ScalarNode;
-class ArrayNode;
-class ControlFlowNode;
-class FunctionNode;
-class BindingNode;
-class FunctionDef;
-class TypeSpec;
-class ScalarTypeSpec;
-class MemRefTypeSpec;
-class Constant;
-class BinaryOp;
-class CompareOp;
-class CastOp;
-class IfOp;
-class ForLoopOp;
-class WhileLoopOp;
-class Parameter;
-class CallOp;
-class LetBinding;
-class ValueReference;
+namespace mlir_edsl {
 
 class MLIRBuilder {
 public:
