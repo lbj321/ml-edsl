@@ -464,8 +464,3 @@ class TypeSystem:
             )
 
 
-def type_to_proto(t: Type) -> ast_pb2.TypeSpec: # pyright: ignore[reportInvalidTypeForm]
-    """Convert Type to TypeSpec protobuf message."""
-    return t.to_proto()
-
-

@@ -1,7 +1,7 @@
 """C++ MLIR backend integration"""
 import ctypes
 from typing import Union
-from .types import Type, ScalarType, type_to_proto
+from .types import Type, ScalarType
 
 
 try:
@@ -54,9 +54,9 @@ class CppMLIRBackend:
         for param_name, param_type in params:
             param = func_def.params.add()
             param.name = param_name
-            param.type.CopyFrom(type_to_proto(param_type))
+            param.type.CopyFrom(param_type.to_proto())
 
-        func_def.return_type.CopyFrom(type_to_proto(return_type))
+        func_def.return_type.CopyFrom(return_type.to_proto())
         func_def.body.CopyFrom(ast_node.to_proto_with_reuse())
 
         return func_def.SerializeToString()
@@ -68,9 +68,9 @@ class CppMLIRBackend:
         sig.name = name
 
         for _, param_type in params:
-            sig.param_types.append(type_to_proto(param_type))
+            sig.param_types.append(param_type.to_proto())
 
-        sig.return_type.CopyFrom(type_to_proto(return_type))
+        sig.return_type.CopyFrom(return_type.to_proto())
 
         return sig.SerializeToString()
 
