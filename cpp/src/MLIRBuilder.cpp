@@ -485,11 +485,7 @@ void MLIRBuilder::clearModule() {
 }
 
 std::vector<std::string> MLIRBuilder::listFunctions() const {
-  std::vector<std::string> result;
-  for (const auto &name : compiledFunctions) {
-    result.push_back(name);
-  }
-  return result;
+  return {compiledFunctions.begin(), compiledFunctions.end()};
 }
 
 } // namespace mlir_edsl
