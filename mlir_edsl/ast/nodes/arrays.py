@@ -147,20 +147,11 @@ class ArrayLiteral(Value):
         """Return element nodes for serialization traversal"""
         return self.elements
 
-    def to_proto(self, context: 'SerializationContext' = None):
-        """Serialize ArrayLiteral to protobuf"""
-        if ast_pb2 is None:
-            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
-
+    def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
-
-        # Set array type using TypeSpec
         pb_node.array.literal.type.CopyFrom(self.array_type.to_proto())
-
-        # Serialize each element (with context-aware serialization)
         for elem in self.elements:
-            pb_node.array.literal.elements.append(elem._to_proto_impl(context))
-
+            pb_node.array.literal.elements.append(elem.to_proto(context))
         return pb_node
 
 
@@ -244,23 +235,12 @@ class ArrayAccess(Value):
         """Return child nodes"""
         return [self.array] + self.indices
 
-    def to_proto(self, context: 'SerializationContext' = None):
-        """Serialize ArrayAccess to protobuf"""
-        if ast_pb2 is None:
-            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
-
+    def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
-
-        # Serialize array (context-aware)
-        pb_node.array.access.array.CopyFrom(self.array._to_proto_impl(context))
-
-        # Serialize all indices using repeated field
+        pb_node.array.access.array.CopyFrom(self.array.to_proto(context))
         for idx in self.indices:
-            pb_node.array.access.indices.append(idx._to_proto_impl(context))
-
-        # Set result type (element type of the array)
+            pb_node.array.access.indices.append(idx.to_proto(context))
         pb_node.array.access.result_type.CopyFrom(self._array_type.element_type.to_proto())
-
         return pb_node
 
 
@@ -373,24 +353,13 @@ class ArrayStore(Value):
         """Return child nodes"""
         return [self.array] + self.indices + [self.value]
 
-    def to_proto(self, context: 'SerializationContext' = None):
-        """Serialize ArrayStore to protobuf"""
-        if ast_pb2 is None:
-            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
-
+    def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
-
-        # Serialize array and value (context-aware)
-        pb_node.array.store.array.CopyFrom(self.array._to_proto_impl(context))
-        pb_node.array.store.value.CopyFrom(self.value._to_proto_impl(context))
-
-        # Serialize all indices using repeated field
+        pb_node.array.store.array.CopyFrom(self.array.to_proto(context))
+        pb_node.array.store.value.CopyFrom(self.value.to_proto(context))
         for idx in self.indices:
-            pb_node.array.store.indices.append(idx._to_proto_impl(context))
-
-        # Set result type (array type)
+            pb_node.array.store.indices.append(idx.to_proto(context))
         pb_node.array.store.result_type.CopyFrom(self._array_type.to_proto())
-
         return pb_node
 
 
@@ -480,27 +449,16 @@ class ArrayBinaryOp(Value):
     def get_children(self) -> list['Value']:
         return [self.left, self.right]
 
-    def to_proto(self, context: 'SerializationContext' = None):
-        """Serialize to protobuf"""
-        if ast_pb2 is None:
-            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
-
+    def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
         pb_node.array.binary_op.op_type = self.op
-
-        # Set result type using TypeSpec
         pb_node.array.binary_op.result_type.CopyFrom(self._result_type.to_proto())
-
-        # Set broadcast mode
         broadcast_map = {
             "NONE": ast_pb2.NONE,
             "SCALAR_LEFT": ast_pb2.SCALAR_LEFT,
             "SCALAR_RIGHT": ast_pb2.SCALAR_RIGHT,
         }
         pb_node.array.binary_op.broadcast = broadcast_map[self._broadcast_mode]
-
-        # Context-aware child serialization
-        pb_node.array.binary_op.left.CopyFrom(self.left._to_proto_impl(context))
-        pb_node.array.binary_op.right.CopyFrom(self.right._to_proto_impl(context))
-
+        pb_node.array.binary_op.left.CopyFrom(self.left.to_proto(context))
+        pb_node.array.binary_op.right.CopyFrom(self.right.to_proto(context))
         return pb_node

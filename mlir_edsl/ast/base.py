@@ -34,17 +34,39 @@ class Value(ABC, OperatorMixin):
         """
         raise NotImplementedError(f"{self.__class__.__name__} must implement infer_type()")
 
-    @abstractmethod
     def to_proto(self, context: 'SerializationContext' = None):
-        """Convert this AST node to protobuf Value message
+        """Convert this AST node to protobuf ASTNode message.
+
+        Handles SSA value reuse automatically when context is provided.
 
         Args:
             context: Optional serialization context for SSA value reuse
-
-        Raises:
-            NotImplementedError: If subclass doesn't implement serialization
         """
-        raise NotImplementedError(f"{self.__class__.__name__} must implement to_proto()")
+        if ast_pb2 is None:
+            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
+
+        if context is not None:
+            # If already serialized, emit a reference
+            if context.is_serialized(self):
+                pb_node = ast_pb2.ASTNode()
+                pb_node.binding.ref.node_id = self.id
+                return pb_node
+
+            # If will be reused, wrap in let binding
+            if context.is_reused(self):
+                context.mark_serialized(self)
+                pb_node = ast_pb2.ASTNode()
+                pb_node.binding.let.node_id = self.id
+                pb_node.binding.let.value.CopyFrom(self._serialize_node(context))
+                return pb_node
+
+        # Regular serialization
+        return self._serialize_node(context)
+
+    @abstractmethod
+    def _serialize_node(self, context: 'SerializationContext'):
+        """Serialize this specific node type. Subclasses must implement."""
+        raise NotImplementedError(f"{self.__class__.__name__} must implement _serialize_node()")
 
     def get_children(self) -> list['Value']:
         """Return list of child Value nodes. Override in subclasses with children."""
@@ -52,32 +74,10 @@ class Value(ABC, OperatorMixin):
 
     def to_proto_with_reuse(self):
         """Serialize with SSA value reuse detection (two-pass approach)"""
-        if ast_pb2 is None:
-            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
-
         # Pass 1: Count how many times each Value is referenced
         from .serialization import SerializationContext
         context = SerializationContext()
         context.count_uses(self)
 
         # Pass 2: Serialize with let bindings for reused values
-        return self._to_proto_impl(context)
-
-    def _to_proto_impl(self, context: 'SerializationContext'):
-        """Serialize this value, emitting let bindings or references as needed"""
-        # If this value was already serialized, emit a reference
-        if context.is_serialized(self):
-            pb_node = ast_pb2.ASTNode()
-            pb_node.binding.ref.node_id = self.id
-            return pb_node
-
-        # If this value will be reused, wrap it in a let binding
-        if context.is_reused(self):
-            context.mark_serialized(self)
-            pb_node = ast_pb2.ASTNode()
-            pb_node.binding.let.node_id = self.id
-            pb_node.binding.let.value.CopyFrom(self.to_proto(context))
-            return pb_node
-
-        # Otherwise, inline it normally
         return self.to_proto(context)

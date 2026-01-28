@@ -38,10 +38,7 @@ class Constant(Value):
         """Constants know their own type"""
         return self.value_type
 
-    def to_proto(self, context: 'SerializationContext' = None):
-        if ast_pb2 is None:
-            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
-
+    def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
         pb_node.scalar.constant.type.CopyFrom(self.value_type.to_proto())
         if self.value_type.is_integer():
@@ -80,18 +77,12 @@ class BinaryOp(Value):
     def get_children(self) -> list['Value']:
         return [self.left, self.right]
 
-    def to_proto(self, context: 'SerializationContext' = None):
-        if ast_pb2 is None:
-            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
-
+    def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
         pb_node.scalar.binary_op.op_type = self.op
         pb_node.scalar.binary_op.result_type.CopyFrom(self.infer_type().to_proto())
-
-        # Context-aware child serialization
-        pb_node.scalar.binary_op.left.CopyFrom(self.left._to_proto_impl(context))
-        pb_node.scalar.binary_op.right.CopyFrom(self.right._to_proto_impl(context))
-
+        pb_node.scalar.binary_op.left.CopyFrom(self.left.to_proto(context))
+        pb_node.scalar.binary_op.right.CopyFrom(self.right.to_proto(context))
         return pb_node
 
 
@@ -124,18 +115,12 @@ class CompareOp(Value):
     def get_children(self) -> list['Value']:
         return [self.left, self.right]
 
-    def to_proto(self, context: 'SerializationContext' = None):
-        if ast_pb2 is None:
-            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
-
+    def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
         pb_node.scalar.compare_op.predicate = self.predicate
         pb_node.scalar.compare_op.operand_type.CopyFrom(self._operand_type.to_proto())
-
-        # Context-aware child serialization
-        pb_node.scalar.compare_op.left.CopyFrom(self.left._to_proto_impl(context))
-        pb_node.scalar.compare_op.right.CopyFrom(self.right._to_proto_impl(context))
-
+        pb_node.scalar.compare_op.left.CopyFrom(self.left.to_proto(context))
+        pb_node.scalar.compare_op.right.CopyFrom(self.right.to_proto(context))
         return pb_node
 
 
@@ -160,16 +145,9 @@ class CastOp(Value):
     def get_children(self) -> list['Value']:
         return [self.value]
 
-    def to_proto(self, context: 'SerializationContext' = None):
-        if ast_pb2 is None:
-            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
-
+    def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
-
-        # Context-aware child serialization
-        pb_node.scalar.cast_op.value.CopyFrom(self.value._to_proto_impl(context))
-
-        # Schema requires both source and target types
+        pb_node.scalar.cast_op.value.CopyFrom(self.value.to_proto(context))
         pb_node.scalar.cast_op.source_type.CopyFrom(self.value.infer_type().to_proto())
         pb_node.scalar.cast_op.target_type.CopyFrom(self.target_type.to_proto())
         return pb_node

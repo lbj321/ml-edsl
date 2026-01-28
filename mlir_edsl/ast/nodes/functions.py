@@ -28,10 +28,7 @@ class Parameter(Value):
         """Parameters have declared types"""
         return self.value_type
 
-    def to_proto(self, context: 'SerializationContext' = None):
-        if ast_pb2 is None:
-            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
-
+    def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
         pb_node.function.parameter.name = self.name
         pb_node.function.parameter.type.CopyFrom(self.value_type.to_proto())
@@ -54,18 +51,10 @@ class CallOp(Value):
     def get_children(self) -> list['Value']:
         return self.args
 
-    def to_proto(self, context: 'SerializationContext' = None):
-        if ast_pb2 is None:
-            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
-
+    def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
         pb_node.function.call.func_name = self.func_name
-
-        # Set return type using TypeSpec
         pb_node.function.call.return_type.CopyFrom(self.return_type.to_proto())
-
-        # Context-aware child serialization
         for arg in self.args:
-            pb_node.function.call.args.append(arg._to_proto_impl(context))
-
+            pb_node.function.call.args.append(arg.to_proto(context))
         return pb_node

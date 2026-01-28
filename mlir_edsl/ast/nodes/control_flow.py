@@ -47,17 +47,11 @@ class IfOp(Value):
     def get_children(self) -> list['Value']:
         return [self.condition, self.then_value, self.else_value]
 
-    def to_proto(self, context: 'SerializationContext' = None):
-        if ast_pb2 is None:
-            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
-
+    def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
-
-        # Context-aware child serialization
-        pb_node.control_flow.if_op.condition.CopyFrom(self.condition._to_proto_impl(context))
-        pb_node.control_flow.if_op.then_value.CopyFrom(self.then_value._to_proto_impl(context))
-        pb_node.control_flow.if_op.else_value.CopyFrom(self.else_value._to_proto_impl(context))
-
+        pb_node.control_flow.if_op.condition.CopyFrom(self.condition.to_proto(context))
+        pb_node.control_flow.if_op.then_value.CopyFrom(self.then_value.to_proto(context))
+        pb_node.control_flow.if_op.else_value.CopyFrom(self.else_value.to_proto(context))
         pb_node.control_flow.if_op.result_type.CopyFrom(self._inferred_type.to_proto())
         return pb_node
 
@@ -119,21 +113,14 @@ class ForLoopOp(Value):
     def get_children(self) -> list['Value']:
         return [self.start, self.end, self.step, self.init_value]
 
-    def to_proto(self, context: 'SerializationContext' = None):
-        if ast_pb2 is None:
-            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
-
+    def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
-
-        # Context-aware child serialization
-        pb_node.control_flow.for_loop.start.CopyFrom(self.start._to_proto_impl(context))
-        pb_node.control_flow.for_loop.end.CopyFrom(self.end._to_proto_impl(context))
-        pb_node.control_flow.for_loop.step.CopyFrom(self.step._to_proto_impl(context))
-        pb_node.control_flow.for_loop.init_value.CopyFrom(self.init_value._to_proto_impl(context))
-
+        pb_node.control_flow.for_loop.start.CopyFrom(self.start.to_proto(context))
+        pb_node.control_flow.for_loop.end.CopyFrom(self.end.to_proto(context))
+        pb_node.control_flow.for_loop.step.CopyFrom(self.step.to_proto(context))
+        pb_node.control_flow.for_loop.init_value.CopyFrom(self.init_value.to_proto(context))
         pb_node.control_flow.for_loop.operation = self.operation
         pb_node.control_flow.for_loop.result_type.CopyFrom(self._inferred_type.to_proto())
-
         return pb_node
 
 
@@ -181,18 +168,11 @@ class WhileLoopOp(Value):
     def get_children(self) -> list['Value']:
         return [self.init_value, self.target]
 
-    def to_proto(self, context: 'SerializationContext' = None):
-        if ast_pb2 is None:
-            raise RuntimeError("Protobuf code not generated. Run ./build.sh first.")
-
+    def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
-
-        # Context-aware child serialization
-        pb_node.control_flow.while_loop.init_value.CopyFrom(self.init_value._to_proto_impl(context))
-        pb_node.control_flow.while_loop.target.CopyFrom(self.target._to_proto_impl(context))
-
+        pb_node.control_flow.while_loop.init_value.CopyFrom(self.init_value.to_proto(context))
+        pb_node.control_flow.while_loop.target.CopyFrom(self.target.to_proto(context))
         pb_node.control_flow.while_loop.operation = self.operation
         pb_node.control_flow.while_loop.predicate = self.predicate
         pb_node.control_flow.while_loop.result_type.CopyFrom(self._inferred_type.to_proto())
-
         return pb_node
