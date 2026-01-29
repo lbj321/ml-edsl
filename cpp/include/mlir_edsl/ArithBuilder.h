@@ -8,13 +8,10 @@
 
 namespace mlir_edsl {
 
-// Forward declaration to avoid circular dependency
-class MLIRBuilder;
-
 /// Builder for arith dialect operations
 class ArithBuilder {
 public:
-  ArithBuilder(mlir::OpBuilder& builder, mlir::MLIRContext* context, MLIRBuilder* parent);
+  ArithBuilder(mlir::OpBuilder& builder);
 
   /// Build integer constant
   mlir::Value buildConstant(int32_t value);
@@ -35,14 +32,11 @@ public:
   mlir::Value buildCompare(mlir_edsl::ComparisonPredicate predicate,
                            mlir::Value lhs, mlir::Value rhs);
 
-  /// Type conversion operations
-  mlir::Value convertIntToFloat(mlir::Value intValue);
+  /// Cast between i32 and f32
   mlir::Value buildCast(mlir::Value sourceValue, mlir::Type targetType);
 
 private:
   mlir::OpBuilder& builder;
-  mlir::MLIRContext* context;
-  MLIRBuilder* parent;
 
   /// Template helper for binary operations (assumes operands already same type)
   template <typename IntOp, typename FloatOp>

@@ -87,7 +87,7 @@ private:
 
   // Type promotion helper (explicit target type from Python)
   std::pair<mlir::Value, mlir::Value>
-  promoteToType(mlir::Value lhs, mlir::Value rhs, mlir::Type targetType);
+  promoteToMatchDataType(mlir::Value lhs, mlir::Value rhs, mlir::Type targetType);
 
   // AST node category dispatchers (two-tier dispatch for scalability)
   mlir::Value buildFromScalarNode(const mlir_edsl::ScalarNode &node);

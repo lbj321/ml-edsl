@@ -33,7 +33,7 @@ MLIRBuilder::MLIRBuilder() {
   builder = std::make_unique<mlir::OpBuilder>(context.get());
 
   // Initialize dialect builders
-  arithBuilder = std::make_unique<mlir_edsl::ArithBuilder>(*builder, context.get(), this);
+  arithBuilder = std::make_unique<mlir_edsl::ArithBuilder>(*builder);
   scfBuilder = std::make_unique<mlir_edsl::SCFBuilder>(*builder, context.get(), this, arithBuilder.get());
   memrefBuilder = std::make_unique<mlir_edsl::MemRefBuilder>(*builder, context.get(), this, arithBuilder.get(), scfBuilder.get());
 }
@@ -172,7 +172,7 @@ mlir::Value MLIRBuilder::handleBinaryOp(const mlir_edsl::BinaryOp &binop) {
   mlir::Value right = buildFromProtobufNode(binop.right());
 
   mlir::Type targetType = convertType(binop.result_type());
-  auto [promotedLeft, promotedRight] = promoteToType(left, right, targetType);
+  auto [promotedLeft, promotedRight] = promoteToMatchDataType(left, right, targetType);
 
   switch (binop.op_type()) {
   case mlir_edsl::BinaryOpType::ADD:
@@ -193,7 +193,7 @@ mlir::Value MLIRBuilder::handleCompareOp(const mlir_edsl::CompareOp &cmp) {
   mlir::Value right = buildFromProtobufNode(cmp.right());
 
   mlir::Type targetType = convertType(cmp.operand_type());
-  auto [promotedLhs, promotedRhs] = promoteToType(left, right, targetType);
+  auto [promotedLhs, promotedRhs] = promoteToMatchDataType(left, right, targetType);
 
   return arithBuilder->buildCompare(cmp.predicate(), promotedLhs, promotedRhs);
 }
@@ -282,7 +282,7 @@ bool MLIRBuilder::isFloatType(mlir::Type type) const {
 
 // Explicit type promotion - Python provides the target type
 std::pair<mlir::Value, mlir::Value>
-MLIRBuilder::promoteToType(mlir::Value lhs, mlir::Value rhs,
+MLIRBuilder::promoteToMatchDataType(mlir::Value lhs, mlir::Value rhs,
                            mlir::Type targetType) {
   mlir::Type lhsType = lhs.getType();
   mlir::Type rhsType = rhs.getType();
@@ -290,13 +290,13 @@ MLIRBuilder::promoteToType(mlir::Value lhs, mlir::Value rhs,
   // Promote left operand if needed
   if (lhsType != targetType && isIntegerType(lhsType) &&
       isFloatType(targetType)) {
-    lhs = arithBuilder->convertIntToFloat(lhs);
+    lhs = arithBuilder->buildCast(lhs, targetType);
   }
 
   // Promote right operand if needed
   if (rhsType != targetType && isIntegerType(rhsType) &&
       isFloatType(targetType)) {
-    rhs = arithBuilder->convertIntToFloat(rhs);
+    rhs = arithBuilder->buildCast(rhs, targetType);
   }
 
   return {lhs, rhs};

@@ -1,13 +1,12 @@
 // cpp/src/builders/ArithBuilder.cpp
 #include "mlir_edsl/ArithBuilder.h"
-#include "mlir_edsl/MLIRBuilder.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypes.h"
 
 namespace mlir_edsl {
 
-ArithBuilder::ArithBuilder(mlir::OpBuilder& builder, mlir::MLIRContext* context, MLIRBuilder* parent)
-  : builder(builder), context(context), parent(parent) {}
+ArithBuilder::ArithBuilder(mlir::OpBuilder& builder)
+  : builder(builder) {}
 
 mlir::Value ArithBuilder::buildConstant(int32_t value) {
   auto loc = builder.getUnknownLoc();
@@ -61,41 +60,22 @@ mlir::Value ArithBuilder::buildDiv(mlir::Value lhs, mlir::Value rhs) {
   return buildBinaryOp<mlir::arith::DivSIOp, mlir::arith::DivFOp>(lhs, rhs);
 }
 
-mlir::Value ArithBuilder::convertIntToFloat(mlir::Value intValue) {
-  auto loc = builder.getUnknownLoc();
-  auto floatType = builder.getF32Type();
-  return builder.create<mlir::arith::SIToFPOp>(loc, floatType, intValue);
-}
-
 mlir::Value ArithBuilder::buildCast(mlir::Value sourceValue,
                                     mlir::Type targetType) {
   auto loc = builder.getUnknownLoc();
   mlir::Type sourceType = sourceValue.getType();
 
-  // Float to integer
+  if (sourceType == targetType) {
+    return sourceValue;
+  }
+
+  // f32 -> i32
   if (mlir::isa<mlir::FloatType>(sourceType) && mlir::isa<mlir::IntegerType>(targetType)) {
     return builder.create<mlir::arith::FPToSIOp>(loc, targetType, sourceValue);
   }
-  // Integer to float
-  else if (mlir::isa<mlir::IntegerType>(sourceType) && mlir::isa<mlir::FloatType>(targetType)) {
+  // i32 -> f32
+  if (mlir::isa<mlir::IntegerType>(sourceType) && mlir::isa<mlir::FloatType>(targetType)) {
     return builder.create<mlir::arith::SIToFPOp>(loc, targetType, sourceValue);
-  }
-  // Integer to integer (different widths)
-  else if (mlir::isa<mlir::IntegerType>(sourceType) && mlir::isa<mlir::IntegerType>(targetType)) {
-    unsigned sourceBits = sourceType.getIntOrFloatBitWidth();
-    unsigned targetBits = targetType.getIntOrFloatBitWidth();
-
-    if (sourceBits < targetBits) {
-      return builder.create<mlir::arith::ExtSIOp>(loc, targetType, sourceValue);
-    } else if (sourceBits > targetBits) {
-      return builder.create<mlir::arith::TruncIOp>(loc, targetType, sourceValue);
-    } else {
-      return sourceValue; // Same width, no cast needed
-    }
-  }
-  // Float to float (same type, no cast needed)
-  else if (mlir::isa<mlir::FloatType>(sourceType) && mlir::isa<mlir::FloatType>(targetType)) {
-    return sourceValue;
   }
 
   throw std::runtime_error("Invalid cast: unsupported type combination");
