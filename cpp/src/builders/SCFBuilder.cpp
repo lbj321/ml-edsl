@@ -47,7 +47,7 @@ void SCFBuilder::buildForEach(
   auto forOp = builder.create<mlir::scf::ForOp>(
       loc, start, end, step, mlir::ValueRange{},
       [&](mlir::OpBuilder &loopBuilder, mlir::Location loc, mlir::Value iv,
-          mlir::ValueRange iterArgs) {
+          mlir::ValueRange /*iterArgs*/) {
         // Execute user's body function
         body_fn(loopBuilder, loc, iv);
 
