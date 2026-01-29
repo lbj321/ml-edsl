@@ -2,7 +2,7 @@
 
 from .arithmetic import add, sub, mul, div
 from .comparison import lt, le, gt, ge, eq, ne
-from .control_flow import If, For, While
+from .control_flow import If, For
 from .conversion import cast, call
 
 __all__ = [
@@ -11,7 +11,7 @@ __all__ = [
     # Comparison
     'lt', 'le', 'gt', 'ge', 'eq', 'ne',
     # Control flow
-    'If', 'For', 'While',
+    'If', 'For',
     # Utilities
     'cast', 'call',
 ]

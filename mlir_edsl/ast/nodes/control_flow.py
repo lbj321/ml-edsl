@@ -1,4 +1,4 @@
-"""Control flow AST nodes: IfOp, ForLoopOp, WhileLoopOp"""
+"""Control flow AST nodes: IfOp, ForLoopOp"""
 
 from typing import TYPE_CHECKING
 from ..base import Value
@@ -121,58 +121,4 @@ class ForLoopOp(Value):
         pb_node.control_flow.for_loop.init_value.CopyFrom(self.init_value.to_proto(context))
         pb_node.control_flow.for_loop.operation = self.operation
         pb_node.control_flow.for_loop.result_type.CopyFrom(self._inferred_type.to_proto())
-        return pb_node
-
-
-class WhileLoopOp(Value):
-    """Represents a while loop operation (scf.while) - STRICT TYPE ENFORCEMENT
-
-    init_value and target must be the same type.
-    Supports i32 or f32 (not i1).
-
-    Represents: while(current predicate target) { current = current op constant }
-    """
-
-    def __init__(self, init_value: Value, target: Value,
-                 operation: int, predicate: int):
-        super().__init__()
-        self.init_value = init_value
-        self.target = target
-        self.operation = operation
-        self.predicate = predicate
-
-        # Get types
-        init_type = init_value.infer_type()
-        target_type = target.infer_type()
-
-        # STRICT: Both must be the same type
-        if init_type != target_type:
-            raise TypeError(
-                f"WhileLoopOp requires init_value and target to have the same type. "
-                f"Got: init_value={init_type}, target={target_type}"
-            )
-
-        # Only allow numeric types (i32 or f32)
-        if not init_type.is_numeric():
-            raise TypeError(
-                f"WhileLoopOp only supports numeric types (i32, f32), got {init_type}"
-            )
-
-        # Result type is trivial - same as inputs
-        self._inferred_type = init_type
-
-    def infer_type(self) -> Type:
-        """Return the loop result type (same as inputs)"""
-        return self._inferred_type
-
-    def get_children(self) -> list['Value']:
-        return [self.init_value, self.target]
-
-    def _serialize_node(self, context: 'SerializationContext'):
-        pb_node = ast_pb2.ASTNode()
-        pb_node.control_flow.while_loop.init_value.CopyFrom(self.init_value.to_proto(context))
-        pb_node.control_flow.while_loop.target.CopyFrom(self.target.to_proto(context))
-        pb_node.control_flow.while_loop.operation = self.operation
-        pb_node.control_flow.while_loop.predicate = self.predicate
-        pb_node.control_flow.while_loop.result_type.CopyFrom(self._inferred_type.to_proto())
         return pb_node

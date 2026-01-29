@@ -2,20 +2,16 @@
 
 Comprehensive test suite for control flow operations including:
 - Conditional expressions (If) with all comparison operators
-- While loops with various operations and predicates
 - Complex conditions and nested logic
 - Integer and float operations
 - Parameterized control flow
 
 Test Organization:
 1. Conditionals (If) - Basic, expressions, floats, comparisons
-2. While Loops - Basic operations and various predicates
-3. (Future) For Loops - Will be added when buildForEach is integrated
 """
 
 import pytest
-from mlir_edsl import ml_function, If, While, cast, f32
-from mlir_edsl import ADD, SUB, MUL, DIV, SLT, SGT, NE
+from mlir_edsl import ml_function, If, cast, f32
 from mlir_edsl.backend import HAS_CPP_BACKEND
 from tests.test_base import MLIRTestBase
 
@@ -210,71 +206,6 @@ class TestParameterizedConditionals(MLIRTestBase):
         assert clamp(-5, 0, 10) == 0   # Below min
         assert clamp(15, 0, 10) == 10  # Above max
 
-
-# ==================== WHILE LOOPS ====================
-
-class TestWhileLoop(MLIRTestBase):
-    """Test while loop implementations with various operations"""
-
-    def test_while_loop_basic(self):
-        """Test basic while loop counting up"""
-        @ml_function
-        def count_up() -> int:
-            # while(current < 5) { current = current + 1 } starting from 0
-            # Computes: 0 -> 1 -> 2 -> 3 -> 4 -> 5 (stop)
-            return While(init=0, target=5, operation=ADD, predicate=SLT)
-
-        result = count_up()
-        assert result == 5, f"Expected 5, got {result}"
-
-    def test_while_loop_multiplication(self):
-        """Test while loop with multiplication (doubling)"""
-        @ml_function
-        def double_until() -> int:
-            # while(current < 8) { current = current * 2 } starting from 1
-            # Computes: 1 -> 2 -> 4 -> 8 (stop)
-            return While(init=1, target=8, operation=MUL, predicate=SLT)
-
-        result = double_until()
-        assert result == 8, f"Expected 8, got {result}"
-
-    def test_while_loop_subtraction(self):
-        """Test while loop with subtraction (counting down)"""
-        @ml_function
-        def count_down() -> int:
-            # while(current > 0) { current = current - 1 } starting from 5
-            # Computes: 5 -> 4 -> 3 -> 2 -> 1 -> 0 (stop)
-            return While(init=5, target=0, operation=SUB, predicate=SGT)
-
-        result = count_down()
-        assert result == 0, f"Expected 0, got {result}"
-
-    def test_while_loop_division(self):
-        """Test while loop with division (halving)"""
-        @ml_function
-        def halve_until() -> int:
-            # while(current > 1) { current = current / 2 } starting from 16
-            # Computes: 16 -> 8 -> 4 -> 2 -> 1 (stop)
-            return While(init=16, target=1, operation=DIV, predicate=SGT)
-
-        result = halve_until()
-        assert result == 1, f"Expected 1, got {result}"
-
-    def test_while_loop_equality_condition(self):
-        """Test while loop with != condition"""
-        @ml_function
-        def until_equal() -> int:
-            # while(current != 3) { current = current + 1 } starting from 0
-            # Computes: 0 -> 1 -> 2 -> 3 (stop)
-            return While(init=0, target=3, operation=ADD, predicate=NE)
-
-        result = until_equal()
-        assert result == 3, f"Expected 3, got {result}"
-
-
-# ==================== FOR LOOPS (FUTURE) ====================
-# Note: For loop tests will be added once buildForEach() is integrated with Python frontend
-# See ROADMAP.md Phase 7 for array iteration implementation
 
 
 if __name__ == "__main__":

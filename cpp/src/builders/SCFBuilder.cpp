@@ -1,15 +1,11 @@
 // cpp/src/builders/SCFBuilder.cpp
 #include "mlir_edsl/SCFBuilder.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir_edsl/ArithBuilder.h"
-#include "mlir_edsl/MLIRBuilder.h"
 
 namespace mlir_edsl {
 
-SCFBuilder::SCFBuilder(mlir::OpBuilder &builder, mlir::MLIRContext *context,
-                       MLIRBuilder *parent, ArithBuilder *arithBuilder)
-    : builder(builder), context(context), parent(parent),
-      arithBuilder(arithBuilder) {}
+SCFBuilder::SCFBuilder(mlir::OpBuilder &builder)
+    : builder(builder) {}
 
 mlir::Value SCFBuilder::buildIf(mlir::Value condition,
                                 std::function<mlir::Value()> buildThen,
@@ -61,70 +57,6 @@ void SCFBuilder::buildForEach(
 
   // Restore insertion point after loop
   builder.setInsertionPointAfter(forOp);
-}
-
-mlir::Value
-SCFBuilder::buildWhileWithOp(mlir::Value init, mlir::Value target,
-                             mlir_edsl::BinaryOpType operation,
-                             mlir_edsl::ComparisonPredicate condition) {
-
-  auto condition_fn = [this, condition,
-                       target](mlir::Value current) -> mlir::Value {
-    return arithBuilder->buildCompare(condition, current, target);
-  };
-
-  auto body_fn = [this, operation](mlir::Value current) -> mlir::Value {
-    // Call arithBuilder directly (temporary coupling - should be in AST)
-    switch (operation) {
-    case mlir_edsl::BinaryOpType::ADD:
-      return arithBuilder->buildAdd(current, arithBuilder->buildConstant(1));
-    case mlir_edsl::BinaryOpType::MUL:
-      return arithBuilder->buildMul(current, arithBuilder->buildConstant(2));
-    case mlir_edsl::BinaryOpType::SUB:
-      return arithBuilder->buildSub(current, arithBuilder->buildConstant(1));
-    case mlir_edsl::BinaryOpType::DIV:
-      return arithBuilder->buildDiv(current, arithBuilder->buildConstant(2));
-    default:
-      throw std::runtime_error("Unsupported binary operation");
-    }
-  };
-
-  return buildWhile(init, condition_fn, body_fn);
-}
-
-mlir::Value
-SCFBuilder::buildWhile(mlir::Value init,
-                       std::function<mlir::Value(mlir::Value)> condition_fn,
-                       std::function<mlir::Value(mlir::Value)> body_fn) {
-
-  auto loc = builder.getUnknownLoc();
-  auto resultType = init.getType();
-
-  auto whileOp = builder.create<mlir::scf::WhileOp>(
-      loc, mlir::TypeRange{resultType}, init);
-
-  auto &beforeRegion = whileOp.getBefore();
-  auto *beforeBlock = builder.createBlock(&beforeRegion, beforeRegion.end(),
-                                          {resultType}, {loc});
-  builder.setInsertionPointToStart(beforeBlock);
-
-  auto current = beforeBlock->getArgument(0);
-  auto condition = condition_fn(current);
-
-  builder.create<mlir::scf::ConditionOp>(loc, condition, current);
-
-  auto &afterRegion = whileOp.getAfter();
-  auto *afterBlock =
-      builder.createBlock(&afterRegion, afterRegion.end(), {resultType}, {loc});
-  builder.setInsertionPointToStart(afterBlock);
-
-  auto loopVar = afterBlock->getArgument(0);
-  auto newValue = body_fn(loopVar);
-
-  builder.create<mlir::scf::YieldOp>(loc, newValue);
-
-  builder.setInsertionPointAfter(whileOp);
-  return whileOp.getResult(0);
 }
 
 } // namespace mlir_edsl

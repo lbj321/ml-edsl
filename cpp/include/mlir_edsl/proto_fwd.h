@@ -29,7 +29,6 @@ class CastOp;
 // Control flow operations
 class IfOp;
 class ForLoopOp;
-class WhileLoopOp;
 
 // Function operations
 class Parameter;

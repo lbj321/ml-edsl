@@ -34,7 +34,7 @@ MLIRBuilder::MLIRBuilder() {
 
   // Initialize dialect builders
   arithBuilder = std::make_unique<mlir_edsl::ArithBuilder>(*builder);
-  scfBuilder = std::make_unique<mlir_edsl::SCFBuilder>(*builder, context.get(), this, arithBuilder.get());
+  scfBuilder = std::make_unique<mlir_edsl::SCFBuilder>(*builder);
   memrefBuilder = std::make_unique<mlir_edsl::MemRefBuilder>(*builder, context.get(), this, arithBuilder.get(), scfBuilder.get());
 }
 
@@ -99,8 +99,6 @@ mlir::Value MLIRBuilder::buildFromControlFlowNode(const mlir_edsl::ControlFlowNo
       return handleIfOp(node.if_op());
     // case mlir_edsl::ControlFlowNode::kForLoop:
     //   return handleForLoopOp(node.for_loop());
-    case mlir_edsl::ControlFlowNode::kWhileLoop:
-      return handleWhileLoopOp(node.while_loop());
     default:
       throw std::runtime_error("Unknown control flow node type");
   }
@@ -226,13 +224,6 @@ mlir::Value MLIRBuilder::handleIfOp(const mlir_edsl::IfOp &ifop) {
 //   mlir::Value init_value = buildFromProtobufNode(forloop.init_value());
 //   return scfBuilder->buildForWithOp(start, end, step, init_value, forloop.operation());
 // }
-
-mlir::Value MLIRBuilder::handleWhileLoopOp(const mlir_edsl::WhileLoopOp &whileloop) {
-  mlir::Value init_value = buildFromProtobufNode(whileloop.init_value());
-  mlir::Value target = buildFromProtobufNode(whileloop.target());
-  return scfBuilder->buildWhileWithOp(init_value, target, whileloop.operation(),
-                                      whileloop.predicate());
-}
 
 // Function handlers
 mlir::Value MLIRBuilder::handleParameter(const mlir_edsl::Parameter &param) {

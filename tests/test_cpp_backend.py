@@ -6,9 +6,9 @@ It uses AST nodes directly rather than @ml_function to isolate backend testing.
 
 import pytest
 from mlir_edsl.backend import HAS_CPP_BACKEND, get_backend, CppMLIRBackend
-from mlir_edsl.ast import Constant, BinaryOp, CompareOp, IfOp, ForLoopOp, WhileLoopOp, Parameter
+from mlir_edsl.ast import Constant, BinaryOp, CompareOp, IfOp, ForLoopOp, Parameter
 from mlir_edsl.types import i32, f32, i1
-from mlir_edsl import cast, ADD, SUB, MUL, DIV, SGT, SLT
+from mlir_edsl import cast, ADD, SUB, MUL, DIV, SGT
 
 # Skip all tests if C++ backend is not available
 pytestmark = pytest.mark.skipif(not HAS_CPP_BACKEND, reason="C++ backend not available")
@@ -253,25 +253,6 @@ def test_if_else_compilation(backend):
 #     executed_result = backend.execute_function("test_for")
 #     assert executed_result == 20
 
-
-def test_while_loop_compilation(backend):
-    """Test while loop compilation"""
-    # while(current < 5) current = current + 1, starting from 0
-    # Result: 0 -> 1 -> 2 -> 3 -> 4 -> 5
-    init_value = Constant(0)
-    target = Constant(5)
-
-    result = WhileLoopOp(init_value, target, ADD, SLT)
-
-    backend.compile_function_from_ast("test_while", [], i32, result)
-    mlir_code = backend.get_mlir_string()
-
-    assert "scf.while" in mlir_code
-    assert "scf.condition" in mlir_code
-    assert "scf.yield" in mlir_code
-
-    executed_result = backend.execute_function("test_while")
-    assert executed_result == 5
 
 
 # ==================== LLVM IR GENERATION ====================

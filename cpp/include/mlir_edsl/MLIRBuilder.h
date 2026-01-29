@@ -104,8 +104,6 @@ private:
 
   // Control flow node handlers
   mlir::Value handleIfOp(const mlir_edsl::IfOp &op);
-  // mlir::Value handleForLoopOp(const mlir_edsl::ForLoopOp &op);
-  mlir::Value handleWhileLoopOp(const mlir_edsl::WhileLoopOp &op);
 
   // Function node handlers
   mlir::Value handleParameter(const mlir_edsl::Parameter &param);

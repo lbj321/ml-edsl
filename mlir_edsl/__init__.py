@@ -9,7 +9,7 @@ Phase 3: C++ MLIR Backend
 """
 
 from .types import i32, f32, i1, Array
-from .ops import add, sub, mul, div, lt, le, gt, ge, eq, ne, If, For, While, cast, call
+from .ops import add, sub, mul, div, lt, le, gt, ge, eq, ne, If, For, cast, call
 from .functions import ml_function
 from .ast import Value, Constant, BinaryOp, CastOp, ArrayLiteral, ArrayAccess, ArrayStore
 from . import ast_pb2
@@ -61,15 +61,15 @@ __all__ = [
     "lt", "le", "gt", "ge", "eq", "ne",
 
     # Control flow
-    "If", "For", "While",
+    "If", "For",
 
     # Function calls (for recursion)
     "call",
 
-    # Operation constants (for For/While loops)
+    # Operation constants (for For loops)
     "ADD", "SUB", "MUL", "DIV",
 
-    # Predicate constants (for While loops)
+    # Predicate constants (for comparisons)
     "SLT", "SLE", "SGT", "SGE",  # Signed integer
     "EQ", "NE",                   # Equality
     "OLT", "OLE", "OGT", "OGE", "OEQ", "ONE",  # Ordered float

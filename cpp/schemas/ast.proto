@@ -140,7 +140,6 @@ message ControlFlowNode {
   oneof value {
     IfOp if_op = 1;
     ForLoopOp for_loop = 2;
-    WhileLoopOp while_loop = 3;
   }
 }
 
@@ -223,15 +222,6 @@ message ForLoopOp {
   ASTNode init_value = 4;     // Initial accumulator value
   BinaryOpType operation = 5; // Loop body operation
   TypeSpec result_type = 6;   // Result type (validated by Python)
-}
-
-// While loop operation (scf.while)
-message WhileLoopOp {
-  ASTNode init_value = 1;          // Initial loop value
-  ASTNode target = 2;              // Comparison target value
-  BinaryOpType operation = 3;      // Loop body operation
-  ComparisonPredicate predicate = 4; // Comparison predicate
-  TypeSpec result_type = 5;        // Result type (validated by Python)
 }
 
 // ============================================================================

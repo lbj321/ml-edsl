@@ -12,7 +12,7 @@ from .nodes import (
     # Arrays
     ArrayLiteral, ArrayAccess, ArrayStore, ArrayBinaryOp,
     # Control flow
-    IfOp, ForLoopOp, WhileLoopOp,
+    IfOp, ForLoopOp,
     # Functions
     Parameter, CallOp,
 )
@@ -21,6 +21,6 @@ __all__ = [
     'Value', 'SerializationContext', 'to_value',
     'Constant', 'BinaryOp', 'CompareOp', 'CastOp',
     'ArrayLiteral', 'ArrayAccess', 'ArrayStore', 'ArrayBinaryOp',
-    'IfOp', 'ForLoopOp', 'WhileLoopOp',
+    'IfOp', 'ForLoopOp',
     'Parameter', 'CallOp',
 ]
