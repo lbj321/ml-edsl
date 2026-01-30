@@ -5,6 +5,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "ast.pb.h"
+#include <functional>
 
 namespace mlir_edsl {
 
@@ -50,6 +51,20 @@ private:
       BroadcastMode broadcastMode,
       mlir_edsl::BinaryOpType opType,
       mlir::Value resultArray);
+
+  /// Convert flat index to multi-dimensional indices (row-major order)
+  llvm::SmallVector<int64_t, 4> flatToMultiIndex(
+      int64_t flatIndex,
+      llvm::ArrayRef<int64_t> shape);
+
+  /// Build N nested scf.for loops over shape[dim..end], accumulating induction
+  /// variables in indices. Calls bodyFn at the innermost level.
+  void buildNestedForLoops(
+      llvm::ArrayRef<int64_t> shape,
+      int dim,
+      llvm::SmallVectorImpl<mlir::Value>& indices,
+      std::function<void(mlir::OpBuilder&, mlir::Location,
+                         llvm::ArrayRef<mlir::Value>)> bodyFn);
 };
 
 } // namespace mlir_edsl
