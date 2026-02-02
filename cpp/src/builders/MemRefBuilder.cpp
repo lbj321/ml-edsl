@@ -4,6 +4,7 @@
 #include "mlir_edsl/ArithBuilder.h"
 #include "mlir_edsl/MLIRBuilder.h"
 #include "mlir_edsl/SCFBuilder.h"
+#include <algorithm>
 
 namespace mlir_edsl {
 
@@ -49,9 +50,17 @@ mlir::Value MemRefBuilder::buildArrayLiteral(const ArrayLiteral &arrayLit) {
   auto allocOp = builder.create<mlir::memref::AllocaOp>(loc, memrefType);
   mlir::Value memref = allocOp.getResult();
 
-  // 3. Get shape and initialize elements (flat iteration, row-major order)
+  // 3. Get shape and pre-build index constants (one per unique value)
   llvm::ArrayRef<int64_t> shape = memrefType.getShape();
+  int64_t maxDim = *std::max_element(shape.begin(), shape.end());
 
+  llvm::SmallVector<mlir::Value, 4> indexCache;
+  indexCache.reserve(maxDim);
+  for (int64_t i = 0; i < maxDim; ++i) {
+    indexCache.push_back(parent->buildIndexConstant(i));
+  }
+
+  // 4. Initialize elements (flat iteration, row-major order)
   for (int flatIdx = 0; flatIdx < arrayLit.elements_size(); ++flatIdx) {
     mlir::Value element =
         parent->buildFromProtobufNode(arrayLit.elements(flatIdx));
@@ -59,7 +68,7 @@ mlir::Value MemRefBuilder::buildArrayLiteral(const ArrayLiteral &arrayLit) {
     llvm::SmallVector<int64_t, 4> multiIdx = flatToMultiIndex(flatIdx, shape);
     llvm::SmallVector<mlir::Value, 4> indices;
     for (int64_t idx : multiIdx) {
-      indices.push_back(parent->buildIndexConstant(idx));
+      indices.push_back(indexCache[idx]);
     }
 
     builder.create<mlir::memref::StoreOp>(loc, element, memref, indices);
