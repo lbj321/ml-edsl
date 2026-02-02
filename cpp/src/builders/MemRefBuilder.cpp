@@ -149,7 +149,7 @@ MemRefBuilder::flatToMultiIndex(int64_t flatIndex,
   int ndim = shape.size();
   llvm::SmallVector<int64_t, 4> indices(ndim);
   int64_t remaining = flatIndex;
-  for (int d = ndim - 1; d >= 0; --d) {
+  for (int64_t d = ndim - 1; d >= 0; --d) {
     indices[d] = remaining % shape[d];
     remaining /= shape[d];
   }

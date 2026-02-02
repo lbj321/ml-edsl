@@ -321,11 +321,12 @@ class TestArray3DMLIRGeneration(MLIRTestBase):
     def test_3d_array_literal_generates_memref(self):
         """Test that 3D array literal compiles and generates memref type"""
         @ml_function
-        def create_3d_array() -> Array[2, 2, 2, i32]:
-            return Array[2, 2, 2, i32]([
+        def create_3d_array() -> i32:
+            arr = Array[2, 2, 2, i32]([
                 [[1, 2], [3, 4]],
                 [[5, 6], [7, 8]]
             ])
+            return arr[1, 1, 1]
 
         # Should compile without errors - IR contains memref<2x2x2xi32>
         assert create_3d_array is not None
@@ -366,7 +367,7 @@ class TestArray3DExecution(MLIRTestBase):
     def test_3d_array_add_execution(self):
         """Test executing 3D array addition"""
         @ml_function
-        def add_arrays() -> Array[2, 2, 2, i32]:
+        def add_arrays() -> i32:
             arr1 = Array[2, 2, 2, i32]([
                 [[1, 2], [3, 4]],
                 [[5, 6], [7, 8]]
@@ -375,33 +376,23 @@ class TestArray3DExecution(MLIRTestBase):
                 [[10, 20], [30, 40]],
                 [[50, 60], [70, 80]]
             ])
-            return arr1 + arr2
-
-        # Verify by accessing specific element (array stays in MLIR, return scalar)
-        @ml_function
-        def verify() -> i32:
-            res = add_arrays()
+            res = arr1 + arr2
             return res[1, 1, 1]  # Should be 8 + 80 = 88
 
-        assert verify() == 88
+        assert add_arrays() == 88
 
     def test_3d_array_scalar_broadcast_execution(self):
         """Test executing 3D array + scalar broadcasting"""
         @ml_function
-        def add_scalar() -> Array[2, 2, 2, i32]:
+        def add_scalar() -> i32:
             arr = Array[2, 2, 2, i32]([
                 [[1, 2], [3, 4]],
                 [[5, 6], [7, 8]]
             ])
-            return arr + 100
-
-        # Verify by accessing element (array stays in MLIR, return scalar)
-        @ml_function
-        def verify() -> i32:
-            res = add_scalar()
+            res = arr + 100
             return res[0, 0, 0]  # Should be 1 + 100 = 101
 
-        assert verify() == 101
+        assert add_scalar() == 101
 
 
 if __name__ == "__main__":

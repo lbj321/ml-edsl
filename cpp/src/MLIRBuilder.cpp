@@ -390,7 +390,7 @@ bool MLIRBuilder::isValidParameterType(const mlir_edsl::TypeSpec &type) const {
 }
 
 bool MLIRBuilder::isValidReturnType(const mlir_edsl::TypeSpec &type) const {
-  return type.has_scalar() || type.has_memref();
+  return type.has_scalar();
 }
 
 void MLIRBuilder::compileFunctionFromDef(const mlir_edsl::FunctionDef &func_def) {

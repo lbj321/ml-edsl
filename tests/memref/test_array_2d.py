@@ -316,11 +316,12 @@ class TestArray2DMLIRGeneration(MLIRTestBase):
     def test_2d_array_literal_generates_memref(self):
         """Test that 2D array literal compiles and generates memref type"""
         @ml_function
-        def create_2d_array() -> Array[2, 3, i32]:
-            return Array[2, 3, i32]([
+        def create_2d_array() -> i32:
+            arr = Array[2, 3, i32]([
                 [1, 2, 3],
                 [4, 5, 6]
             ])
+            return arr[1, 2]
 
         # Should compile without errors - IR contains memref<2x3xi32>
         assert create_2d_array is not None
@@ -338,9 +339,10 @@ class TestArray2DMLIRGeneration(MLIRTestBase):
     def test_2d_array_store_generates_nested_loops(self):
         """Test that 2D array store compiles correctly"""
         @ml_function
-        def store_2d_element() -> Array[2, 2, i32]:
+        def store_2d_element() -> i32:
             arr = Array[2, 2, i32]([[1, 2], [3, 4]])
-            return arr.at[0, 1].set(99)
+            arr = arr.at[0, 1].set(99)
+            return arr[0, 1]
 
         # Should compile without errors - IR contains memref.store
         assert store_2d_element is not None
@@ -368,35 +370,25 @@ class TestArray2DExecution(MLIRTestBase):
     def test_2d_array_add_execution(self):
         """Test executing 2D array addition"""
         @ml_function
-        def add_arrays() -> Array[2, 2, i32]:
+        def add_arrays() -> i32:
             arr1 = Array[2, 2, i32]([[1, 2], [3, 4]])
             arr2 = Array[2, 2, i32]([[10, 20], [30, 40]])
-            return arr1 + arr2
-
-        # Result should be [[11, 22], [33, 44]]
-        # Verify by accessing elements (array stays in MLIR, return scalar)
-        @ml_function
-        def verify() -> i32:
-            res = add_arrays()
+            res = arr1 + arr2
             return res[0, 0] + res[0, 1] + res[1, 0] + res[1, 1]
 
-        total = verify()
+        # Result should be [[11, 22], [33, 44]], sum = 110
+        total = add_arrays()
         assert total == 11 + 22 + 33 + 44  # 110
 
     def test_2d_array_scalar_broadcast_execution(self):
         """Test executing 2D array + scalar broadcasting"""
         @ml_function
-        def add_scalar() -> Array[2, 2, i32]:
+        def add_scalar() -> i32:
             arr = Array[2, 2, i32]([[1, 2], [3, 4]])
-            return arr + 10
-
-        # Verify by accessing elements (array stays in MLIR, return scalar)
-        @ml_function
-        def verify() -> i32:
-            res = add_scalar()
+            res = arr + 10
             return res[1, 1]  # Should be 4 + 10 = 14
 
-        assert verify() == 14
+        assert add_scalar() == 14
 
 
 if __name__ == "__main__":

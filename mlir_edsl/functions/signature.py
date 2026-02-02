@@ -43,6 +43,12 @@ class FunctionSignature:
 
         return_type = TypeSystem.parse_type_hint(hints['return'], "return type")
 
+        if return_type.is_aggregate():
+            raise TypeError(
+                f"@ml_function '{func.__name__}': array return types not supported. "
+                f"Return a scalar and use internal function calls for array operations."
+            )
+
         return cls(
             name=func.__name__,
             param_names=param_names,

@@ -121,15 +121,7 @@ class CppMLIRBackend:
         if type_spec.HasField('scalar'):
             return TYPE_TO_CTYPES[type_spec.scalar.kind]
         elif type_spec.HasField('memref'):
-            if "return" in context:
-                raise RuntimeError(
-                    f"Cannot execute function from Python: it returns an array type.\n"
-                    f"Array-returning functions can only be called from within other "
-                    f"@ml_function decorated functions.\n"
-                    f"Hint: Create a wrapper function that extracts scalar values from the array."
-                )
-            else:
-                raise RuntimeError("Array parameters not yet supported for JIT execution")
+            raise RuntimeError(f"Array types not supported for {context} in JIT execution")
         else:
             raise RuntimeError(f"Unknown type specification for {context}")
 
