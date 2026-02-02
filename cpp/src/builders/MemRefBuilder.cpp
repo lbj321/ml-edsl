@@ -147,7 +147,7 @@ mlir::Value MemRefBuilder::buildArrayBinaryOp(const ArrayBinaryOp &op) {
                               broadcastMode, opType, resultArray);
   };
 
-  buildNestedForLoops(shape, /*dim=*/0, indices, bodyFn);
+  buildNestedForLoops(shape, indices, bodyFn);
 
   return resultArray;
 }
@@ -166,15 +166,30 @@ MemRefBuilder::flatToMultiIndex(int64_t flatIndex,
 }
 
 void MemRefBuilder::buildNestedForLoops(
-    llvm::ArrayRef<int64_t> shape, int dim,
+    llvm::ArrayRef<int64_t> shape,
     llvm::SmallVectorImpl<mlir::Value> &indices,
     std::function<void(mlir::OpBuilder &, mlir::Location,
                        llvm::ArrayRef<mlir::Value>)>
         bodyFn) {
+  // Pre-build all loop bound constants at the current (outer) scope
   mlir::Value c0 = parent->buildIndexConstant(0);
-  mlir::Value cDimSize = parent->buildIndexConstant(shape[dim]);
   mlir::Value c1 = parent->buildIndexConstant(1);
+  llvm::SmallVector<mlir::Value, 4> dimSizes;
+  for (int64_t s : shape) {
+    dimSizes.push_back(parent->buildIndexConstant(s));
+  }
 
+  emitNestedForLoops(shape, /*dim=*/0, indices, bodyFn, c0, c1, dimSizes);
+}
+
+void MemRefBuilder::emitNestedForLoops(
+    llvm::ArrayRef<int64_t> shape, int dim,
+    llvm::SmallVectorImpl<mlir::Value> &indices,
+    std::function<void(mlir::OpBuilder &, mlir::Location,
+                       llvm::ArrayRef<mlir::Value>)>
+        bodyFn,
+    mlir::Value c0, mlir::Value c1,
+    llvm::ArrayRef<mlir::Value> dimSizes) {
   bool isInnermost = (dim == static_cast<int>(shape.size()) - 1);
 
   auto loopBody = [&](mlir::OpBuilder &loopBuilder, mlir::Location loc,
@@ -183,12 +198,12 @@ void MemRefBuilder::buildNestedForLoops(
     if (isInnermost) {
       bodyFn(loopBuilder, loc, indices);
     } else {
-      buildNestedForLoops(shape, dim + 1, indices, bodyFn);
+      emitNestedForLoops(shape, dim + 1, indices, bodyFn, c0, c1, dimSizes);
     }
     indices.pop_back();
   };
 
-  scfBuilder->buildForEach(c0, cDimSize, c1, loopBody);
+  scfBuilder->buildForEach(c0, dimSizes[dim], c1, loopBody);
 }
 
 // Helper function: handles single iteration of array binary op

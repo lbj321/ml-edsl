@@ -56,13 +56,23 @@ private:
   llvm::SmallVector<int64_t, 4> flatToMultiIndex(int64_t flatIndex,
                                                  llvm::ArrayRef<int64_t> shape);
 
-  /// Build N nested scf.for loops over shape[dim..end], accumulating induction
-  /// variables in indices. Calls bodyFn at the innermost level.
-  void buildNestedForLoops(llvm::ArrayRef<int64_t> shape, int dim,
+  /// Build N nested scf.for loops over shape, pre-building loop bound
+  /// constants at the current scope before entering any loops.
+  void buildNestedForLoops(llvm::ArrayRef<int64_t> shape,
                            llvm::SmallVectorImpl<mlir::Value> &indices,
                            std::function<void(mlir::OpBuilder &, mlir::Location,
                                               llvm::ArrayRef<mlir::Value>)>
                                bodyFn);
+
+  /// Recursive emitter: emits scf.for at dimension `dim` using pre-built
+  /// loop bound constants, then recurses for inner dimensions.
+  void emitNestedForLoops(llvm::ArrayRef<int64_t> shape, int dim,
+                          llvm::SmallVectorImpl<mlir::Value> &indices,
+                          std::function<void(mlir::OpBuilder &, mlir::Location,
+                                             llvm::ArrayRef<mlir::Value>)>
+                              bodyFn,
+                          mlir::Value c0, mlir::Value c1,
+                          llvm::ArrayRef<mlir::Value> dimSizes);
 };
 
 } // namespace mlir_edsl
