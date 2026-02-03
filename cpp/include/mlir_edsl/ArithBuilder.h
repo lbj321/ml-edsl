@@ -22,6 +22,9 @@ public:
   /// Build boolean constant (i1)
   mlir::Value buildConstant(bool value);
 
+  /// Build index constant (for array indexing)
+  mlir::Value buildIndexConstant(int64_t value);
+
   /// Arithmetic operations (operands must be same type)
   mlir::Value buildAdd(mlir::Value lhs, mlir::Value rhs);
   mlir::Value buildSub(mlir::Value lhs, mlir::Value rhs);

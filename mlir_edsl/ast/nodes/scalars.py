@@ -50,6 +50,23 @@ class Constant(Value):
         return pb_node
 
 
+class IndexConstant(Constant):
+    """Internal node for index-typed constants (array indices).
+
+    Inherits from Constant but serializes with INDEX type kind,
+    causing the C++ backend to emit arith.constant ... : index
+    instead of arith.constant ... : i32.
+    """
+
+    def __init__(self, value: int):
+        super().__init__(value, i32)
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = super()._serialize_node(context)
+        pb_node.scalar.constant.type.scalar.kind = ast_pb2.ScalarTypeSpec.INDEX
+        return pb_node
+
+
 class BinaryOp(Value):
     """Represents a binary operation - STRICT TYPE MATCHING ENFORCED"""
 

@@ -14,7 +14,7 @@ from ..serialization import SerializationContext, OP_NAMES
 
 def _normalize_indices(index):
     """Convert single index or tuple to list of AST nodes"""
-    from .scalars import Constant
+    from .scalars import IndexConstant
 
     if not isinstance(index, tuple):
         indices = (index,)
@@ -24,7 +24,7 @@ def _normalize_indices(index):
     result = []
     for idx in indices:
         if isinstance(idx, int):
-            result.append(Constant(idx, i32))
+            result.append(IndexConstant(idx))
         elif isinstance(idx, Value):
             result.append(idx)
         else:

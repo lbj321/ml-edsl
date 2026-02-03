@@ -160,6 +160,8 @@ mlir::Value MLIRBuilder::handleConstant(const mlir_edsl::Constant &constant) {
     return arithBuilder->buildConstant(constant.float_value());
   case mlir_edsl::ScalarTypeSpec::I1:
     return arithBuilder->buildConstant(constant.bool_value());
+  case mlir_edsl::ScalarTypeSpec::INDEX:
+    return arithBuilder->buildIndexConstant(constant.int_value());
   default:
     throw std::runtime_error("Unsupported constant type");
   }

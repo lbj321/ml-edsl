@@ -27,11 +27,12 @@ message ScalarTypeSpec {
     I32 = 0;  // 32-bit signed integer
     F32 = 1;  // 32-bit float
     I1 = 2;   // Boolean (1-bit integer)
+    INDEX = 3; // MLIR index type (for array indexing)
     // Future extensions:
-    // I64 = 3;
-    // F64 = 4;
-    // I8 = 5;
-    // I16 = 6;
+    // I64 = 4;
+    // F64 = 5;
+    // I8 = 6;
+    // I16 = 7;
   }
   Kind kind = 1;
 }
