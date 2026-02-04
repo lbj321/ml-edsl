@@ -46,10 +46,9 @@ bool MLIRExecutor::initialize() {
   return true;
 }
 
-void *MLIRExecutor::compileFunction(const std::string &llvmIR,
-                                    const std::string &funcName) {
+bool MLIRExecutor::compileModule(const std::string &llvmIR) {
   if (!initialize()) {
-    return nullptr;
+    return false;
   }
 
   llvm::SMDiagnostic error;
@@ -58,13 +57,13 @@ void *MLIRExecutor::compileFunction(const std::string &llvmIR,
 
   if (!module) {
     lastError = "Failed to parse LLVM IR";
-    return nullptr;
+    return false;
   }
 
   // Save unoptimized LLVM IR if SAVE_IR environment variable is set
   const bool saveIR = std::getenv("SAVE_IR") != nullptr;
   if (saveIR) {
-    std::string filename = "ir_output/" + funcName + "_unopt.ll";
+    std::string filename = "ir_output/module_unopt.ll";
     std::error_code EC;
     llvm::raw_fd_ostream outFile(filename, EC);
     if (!EC) {
@@ -76,7 +75,7 @@ void *MLIRExecutor::compileFunction(const std::string &llvmIR,
 
   // Save optimized LLVM IR if SAVE_IR environment variable is set
   if (saveIR) {
-    std::string filename = "ir_output/" + funcName + "_opt.ll";
+    std::string filename = "ir_output/module_opt.ll";
     std::error_code EC;
     llvm::raw_fd_ostream outFile(filename, EC);
     if (!EC) {
@@ -90,49 +89,31 @@ void *MLIRExecutor::compileFunction(const std::string &llvmIR,
   auto err = jit->addIRModule(std::move(tsm));
   if (err) {
     lastError = "Failed to add module to JIT";
-    return nullptr;
+    return false;
   }
 
-  auto symbolOrError = jit->lookup(funcName);
-  if (!symbolOrError) {
-    lastError = "Failed to lookup function";
-    return nullptr;
+  // Lookup and cache function pointers for all registered signatures
+  for (const auto& [name, sig] : signatures) {
+    auto symbolOrError = jit->lookup(name);
+    if (symbolOrError) {
+      functionPointers[name] = (void*)symbolOrError->getValue();
+    }
   }
 
-  void* funcPtr = (void *)symbolOrError->getValue();
-
-  // Store the function pointer
-  functionPointers[funcName] = funcPtr;
-
-  return funcPtr;
+  return true;
 }
 
-void MLIRExecutor::registerFunctionSignature(const std::string &signature_bytes) {
-  mlir_edsl::FunctionSignature sig;
-
-  if (!sig.ParseFromString(signature_bytes)) {
-    throw std::runtime_error("Failed to parse FunctionSignature protobuf");
-  }
-
+void MLIRExecutor::registerFunctionSignature(const mlir_edsl::FunctionSignature &signature) {
   // Store signature by function name
-  signatures[sig.name()] = sig;
+  signatures[signature.name()] = signature;
 }
 
 uintptr_t MLIRExecutor::getFunctionPointer(const std::string &name) {
-  // Check if function signature is registered
-  if (signatures.find(name) == signatures.end()) {
-    lastError = "Function signature not registered: " + name;
-    throw std::runtime_error(lastError);
-  }
-
-  // Check if function pointer is available
   auto it = functionPointers.find(name);
   if (it == functionPointers.end()) {
     lastError = "Function not compiled: " + name;
     throw std::runtime_error(lastError);
   }
-
-  // Return as uintptr_t for Python
   return reinterpret_cast<uintptr_t>(it->second);
 }
 
@@ -150,7 +131,7 @@ void MLIRExecutor::setOptimizationLevel(OptLevel level) {
   optimizationLevel = level;
 }
 
-void MLIRExecutor::clear() {
+void MLIRExecutor::clearJit() {
   if (initialized) {
     // Create a fresh JIT instance
     auto jitOrError = llvm::orc::LLJITBuilder().create();
@@ -160,10 +141,13 @@ void MLIRExecutor::clear() {
       lastError = "Failed to recreate LLJIT";
     }
   }
-
-  // Clear signatures and function pointers
-  signatures.clear();
   functionPointers.clear();
+  // Note: signatures NOT cleared - they persist across JIT recompilations
+}
+
+void MLIRExecutor::clearAll() {
+  clearJit();
+  signatures.clear();
 }
 
 void MLIRExecutor::optimizeModule(llvm::Module *module) {

@@ -1,38 +1,79 @@
 # C++ System Dependencies for ML-EDSL
-# Install these system packages before building the C++ backend
+# See BUILD.md for complete build instructions
 
-# System Dependencies (install via package manager):
+# ============================================================
+# System Packages (Ubuntu 22.04 / 24.04)
+# ============================================================
 
-# Ubuntu/Debian:
-# sudo apt update
-# sudo apt install cmake build-essential
-# sudo apt install llvm-18-dev mlir-18-tools libmlir-18-dev
-# sudo apt install protobuf-compiler libprotobuf-dev
-# OR for latest: sudo apt install llvm-dev mlir-tools libmlir-dev
+# Required:
+# sudo apt install -y \
+#     build-essential \
+#     clang \
+#     cmake \
+#     git \
+#     ninja-build \
+#     python3 \
+#     python3-pip \
+#     python3-venv \
+#     libz-dev \
+#     libxml2-dev
 
-# macOS:
-# brew install cmake llvm@18 protobuf
-# OR for latest: brew install cmake llvm protobuf
+# Optional (Ubuntu 24.04+ for faster builds):
+# sudo apt install libprotobuf-dev protobuf-compiler
 
-# Fedora/CentOS/RHEL:
-# sudo dnf install cmake gcc-c++
-# sudo dnf install llvm-devel mlir-devel
-# sudo dnf install protobuf-devel protobuf-compiler
+# ============================================================
+# LLVM/MLIR (Must be built from source)
+# ============================================================
 
-# Minimum Required Versions:
-# - CMake >= 3.20
-# - LLVM/MLIR >= 18 (Phase 4 tested with LLVM 18)
-# - Protocol Buffers >= 3.0 (for AST serialization)
-# - C++17 compatible compiler (GCC 9+, Clang 10+, MSVC 2019+)
+# Location: ~/dev/llvm-project/
+# Version: >= 18.0 (21.0+ recommended)
+# Build time: ~30-90 minutes
+# Disk space: ~20-30 GB
 
-# Build Process:
-# 1. Install system dependencies above
-# 2. Install Python dependencies: pip install -e .
-# 3. cd cpp && mkdir -p build && cd build
-# 4. cmake .. && make -j$(nproc)
-# 5. cd ../.. && python -m pytest tests/ -v
+# Build commands:
+# git clone https://github.com/llvm/llvm-project.git ~/dev/llvm-project
+# cd ~/dev/llvm-project && mkdir build && cd build
+# cmake -G Ninja ../llvm \
+#     -DLLVM_ENABLE_PROJECTS="mlir" \
+#     -DLLVM_TARGETS_TO_BUILD="X86;NVPTX;AMDGPU" \
+#     -DLLVM_ENABLE_ASSERTIONS=ON \
+#     -DCMAKE_BUILD_TYPE=Release \
+#     -DCMAKE_C_COMPILER=clang \
+#     -DCMAKE_CXX_COMPILER=clang++
+# ninja -j$(nproc)
 
-# Troubleshooting:
-# - If LLVM not found: export LLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
-# - If Protobuf not found: sudo apt install protobuf-compiler libprotobuf-dev
-# - Clean rebuild: rm -rf cpp/build && repeat steps 3-4
+# ============================================================
+# Dependencies Managed by CMake FetchContent
+# ============================================================
+
+# The following are automatically downloaded and built:
+# - Protocol Buffers 29.2.0 (if not using system protobuf)
+# - pybind11_protobuf (main branch)
+# - pybind11 (via pybind11_protobuf)
+# - abseil (via pybind11_protobuf)
+
+# ============================================================
+# Version Requirements
+# ============================================================
+
+# CMake: >= 3.20
+# LLVM/MLIR: >= 18.0
+# Python: >= 3.8
+# Clang: >= 14
+# Protobuf: >= 3.20 (or auto-fetched 29.2.0)
+# C++ Standard: C++17
+
+# ============================================================
+# Build Process
+# ============================================================
+
+# 1. Install system packages (above)
+# 2. Build LLVM/MLIR (above)
+# 3. python3 -m venv venv && source venv/bin/activate
+# 4. pip install -e ".[dev]"
+# 5. ./build.sh
+
+# First build: 2-15 minutes (depends on protobuf)
+# Incremental builds: 15-30 seconds
+
+# See BUILD.md for complete documentation

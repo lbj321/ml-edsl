@@ -1,0 +1,170 @@
+"""Scalar AST nodes: Constant, BinaryOp, CompareOp, CastOp"""
+
+from typing import Union, TYPE_CHECKING
+from ..base import Value
+from ...types import Type, ScalarType, i32, f32, i1
+
+# Import generated protobuf code
+try:
+    from ... import ast_pb2
+except ImportError:
+    ast_pb2 = None
+
+from ..serialization import SerializationContext, OP_NAMES, PREDICATE_NAMES
+
+if TYPE_CHECKING:
+    from ...types import Type
+
+
+class Constant(Value):
+    """Represents a constant integer or float value"""
+
+    def __init__(self, value: Union[int, float, bool], value_type: Type = None):
+        super().__init__()
+        self.value = value
+        # Allow explicit type or infer from value
+        if value_type is not None:
+            self.value_type = value_type
+        elif isinstance(value, bool):
+            self.value_type = i1
+        elif isinstance(value, int):
+            self.value_type = i32
+        elif isinstance(value, float):
+            self.value_type = f32
+        else:
+            raise TypeError(f"Cannot infer type for value: {value!r}")
+
+    def infer_type(self) -> Type:
+        """Constants know their own type"""
+        return self.value_type
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.scalar.constant.type.CopyFrom(self.value_type.to_proto())
+        if self.value_type.is_integer():
+            pb_node.scalar.constant.int_value = int(self.value)
+        elif self.value_type.is_float():
+            pb_node.scalar.constant.float_value = float(self.value)
+        elif self.value_type.is_boolean():
+            pb_node.scalar.constant.bool_value = bool(self.value)
+        return pb_node
+
+
+class IndexConstant(Constant):
+    """Internal node for index-typed constants (array indices).
+
+    Inherits from Constant but serializes with INDEX type kind,
+    causing the C++ backend to emit arith.constant ... : index
+    instead of arith.constant ... : i32.
+    """
+
+    def __init__(self, value: int):
+        super().__init__(value, i32)
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = super()._serialize_node(context)
+        pb_node.scalar.constant.type.scalar.kind = ast_pb2.ScalarTypeSpec.INDEX
+        return pb_node
+
+
+class BinaryOp(Value):
+    """Represents a binary operation - STRICT TYPE MATCHING ENFORCED"""
+
+    def __init__(self, op: int, left: Value, right: Value):
+        super().__init__()
+        self.op = op
+        self.left = left
+        self.right = right
+
+    def infer_type(self) -> Type:
+        """STRICT: Both operands must have the same type"""
+        left_type = self.left.infer_type()
+        right_type = self.right.infer_type()
+
+        if left_type != right_type:
+            raise TypeError(
+                f"Binary operation '{OP_NAMES.get(self.op, self.op)}' requires matching types.\n"
+                f"  Left operand type:  {left_type}\n"
+                f"  Right operand type: {right_type}\n"
+                f"  Hint: Use cast() to convert types explicitly"
+            )
+
+        return left_type
+
+    def get_children(self) -> list['Value']:
+        return [self.left, self.right]
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.scalar.binary_op.op_type = self.op
+        pb_node.scalar.binary_op.result_type.CopyFrom(self.infer_type().to_proto())
+        pb_node.scalar.binary_op.left.CopyFrom(self.left.to_proto(context))
+        pb_node.scalar.binary_op.right.CopyFrom(self.right.to_proto(context))
+        return pb_node
+
+
+class CompareOp(Value):
+    """Represents a comparison operation"""
+
+    def __init__(self, predicate: int, left: Value, right: Value):
+        super().__init__()
+        self.predicate = predicate
+        self.left = left
+        self.right = right
+
+        # Validate and infer operand types
+        left_type = left.infer_type()
+        right_type = right.infer_type()
+        if left_type.is_boolean() or right_type.is_boolean():
+            raise TypeError("Cannot compare boolean values")
+
+        # Compute promoted operand type (same rule as BinaryOp)
+        # F32 + anything = F32, otherwise I32
+        if left_type.is_float() or right_type.is_float():
+            self._operand_type = f32
+        else:
+            self._operand_type = i32
+
+    def infer_type(self) -> Type:
+        """Comparisons always return bool"""
+        return i1
+
+    def get_children(self) -> list['Value']:
+        return [self.left, self.right]
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.scalar.compare_op.predicate = self.predicate
+        pb_node.scalar.compare_op.operand_type.CopyFrom(self._operand_type.to_proto())
+        pb_node.scalar.compare_op.left.CopyFrom(self.left.to_proto(context))
+        pb_node.scalar.compare_op.right.CopyFrom(self.right.to_proto(context))
+        return pb_node
+
+
+class CastOp(Value):
+    """Explicit type cast operation"""
+
+    def __init__(self, value: Value, target_type: Type):
+        """Create a cast operation
+
+        Args:
+            value: Value to cast
+            target_type: Target type (i32, f32, i1)
+        """
+        super().__init__()
+        self.value = value
+        self.target_type = target_type
+
+    def infer_type(self) -> Type:
+        """Cast always produces the target type"""
+        return self.target_type
+
+    def get_children(self) -> list['Value']:
+        return [self.value]
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.scalar.cast_op.value.CopyFrom(self.value.to_proto(context))
+        pb_node.scalar.cast_op.source_type.CopyFrom(self.value.infer_type().to_proto())
+        pb_node.scalar.cast_op.target_type.CopyFrom(self.target_type.to_proto())
+        return pb_node

@@ -1,17 +1,17 @@
-"""Tests for conditional operations using high-level API
+"""Tests for control flow constructs (Phase 5)
 
-This test suite validates:
-- If() conditional expressions with comparison operators
-- Integer and float conditional operations
-- Complex conditions and branch expressions
-- All comparison operators (>, <, >=, <=, ==, !=)
-- Parameterized conditionals
-- Chained conditional logic
+Comprehensive test suite for control flow operations including:
+- Conditional expressions (If) with all comparison operators
+- Complex conditions and nested logic
+- Integer and float operations
+- Parameterized control flow
+
+Test Organization:
+1. Conditionals (If) - Basic, expressions, floats, comparisons
 """
 
 import pytest
-from mlir_edsl import ml_function, If, cast
-from mlir_edsl import f32
+from mlir_edsl import ml_function, If, cast, f32
 from mlir_edsl.backend import HAS_CPP_BACKEND
 from tests.test_base import MLIRTestBase
 
@@ -19,7 +19,7 @@ from tests.test_base import MLIRTestBase
 pytestmark = pytest.mark.skipif(not HAS_CPP_BACKEND, reason="C++ backend not available")
 
 
-# ==================== BASIC CONDITIONAL TESTS ====================
+# ==================== CONDITIONALS (IF) ====================
 
 class TestBasicConditionals(MLIRTestBase):
     """Test basic conditional operations"""
@@ -63,8 +63,6 @@ class TestBasicConditionals(MLIRTestBase):
         assert check_not_equal(5, 5) == 0
 
 
-# ==================== CONDITIONAL WITH EXPRESSIONS ====================
-
 class TestConditionalExpressions(MLIRTestBase):
     """Test conditionals with complex expressions"""
 
@@ -100,8 +98,6 @@ class TestConditionalExpressions(MLIRTestBase):
         assert nested_arithmetic(10, 0) == 6   # (10+5)=15 > 12, return 2*3=6
         assert nested_arithmetic(5, 0) == 15   # (5+5)=10 < 12, return 20-5=15
 
-
-# ==================== FLOAT CONDITIONALS ====================
 
 class TestFloatConditionals(MLIRTestBase):
     """Test conditional operations with floats"""
@@ -143,8 +139,6 @@ class TestFloatConditionals(MLIRTestBase):
         assert abs(result - 10.0) < 0.001
 
 
-# ==================== COMPARISON OPERATORS ====================
-
 class TestComparisonOperators(MLIRTestBase):
     """Test all comparison operators"""
 
@@ -185,8 +179,6 @@ class TestComparisonOperators(MLIRTestBase):
         assert test_le(10, 5) == 0
 
 
-# ==================== PARAMETERIZED CONDITIONALS ====================
-
 class TestParameterizedConditionals(MLIRTestBase):
     """Test conditionals with function parameters"""
 
@@ -213,3 +205,8 @@ class TestParameterizedConditionals(MLIRTestBase):
         assert clamp(5, 0, 10) == 5    # Within range
         assert clamp(-5, 0, 10) == 0   # Below min
         assert clamp(15, 0, 10) == 10  # Above max
+
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

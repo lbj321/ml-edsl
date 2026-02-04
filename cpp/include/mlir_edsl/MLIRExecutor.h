@@ -20,12 +20,11 @@ class MLIRExecutor {
     // Initialize the JIT execution engine
     bool initialize();
 
-    // Compile LLVM IR string to executable function
-    void *compileFunction(const std::string &llvmIR,
-                          const std::string &funcName);
+    // Compile entire LLVM IR module (all functions at once)
+    bool compileModule(const std::string &llvmIR);
 
-    // Register function signature from protobuf (serialized FunctionSignature)
-    void registerFunctionSignature(const std::string &signature_bytes);
+    // Register function signature from protobuf object
+    void registerFunctionSignature(const mlir_edsl::FunctionSignature &signature);
 
     // Get function pointer as integer (for Python ctypes)
     uintptr_t getFunctionPointer(const std::string &name);
@@ -33,10 +32,14 @@ class MLIRExecutor {
     // Get function signature as protobuf (returns serialized FunctionSignature)
     std::string getFunctionSignature(const std::string &name) const;
 
+    // JIT state management
+    bool isJitEmpty() const { return functionPointers.empty(); }
+    void clearJit();   // Clear JIT only, keep signatures
+    void clearAll();   // Clear JIT and signatures
+
     // Utility methods
     bool isInitialized() const { return initialized; }
     std::string getLastError() const { return lastError; }
-    void clear(); // Clear the JIT engine
 
     enum class OptLevel { O0, O2, O3 };
     void setOptimizationLevel(OptLevel level);

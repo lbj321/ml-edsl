@@ -6,12 +6,14 @@
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
@@ -42,6 +44,7 @@ void MLIRLowering::registerRequiredDialects() {
 void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   context->getOrLoadDialect<mlir::arith::ArithDialect>();
   context->getOrLoadDialect<mlir::func::FuncDialect>();
+  context->getOrLoadDialect<mlir::memref::MemRefDialect>();
   context->getOrLoadDialect<mlir::scf::SCFDialect>();
   context->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
   context->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
@@ -62,8 +65,10 @@ void MLIRLowering::addConversionPasses() {
 
   // Then lower everything to LLVM
   passManager.addPass(mlir::createArithToLLVMConversionPass());
+  passManager.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
   passManager.addPass(mlir::createConvertControlFlowToLLVMPass());
   passManager.addPass(mlir::createConvertFuncToLLVMPass());
+
   passManager.addPass(mlir::createReconcileUnrealizedCastsPass());
 }
 

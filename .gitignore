@@ -89,6 +89,9 @@ ir_output/
 ir_html/
 ir_html/
 
+# AST output
+ast_output
+
 # Documentation builds
 docs/_build/
 docs/build/

@@ -11,7 +11,7 @@ setup(
     install_requires=[
         "pybind11>=2.10.0",
         "numpy>=1.20.0",
-        "protobuf>=3.20.0,<4.0.0",  # Pin to 3.x for compatibility with system protoc
+        "protobuf>=4.21.0",  # Must match CMake-built protobuf version
     ],
     extras_require={
         "dev": [

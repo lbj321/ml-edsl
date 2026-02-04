@@ -1,8 +1,12 @@
 #include "mlir_edsl/MLIRBuilder.h"
+#include "mlir_edsl/ArithBuilder.h"
+#include "mlir_edsl/SCFBuilder.h"
+#include "mlir_edsl/MemRefBuilder.h"
 
 #include "ast.pb.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -24,433 +28,216 @@ MLIRBuilder::MLIRBuilder() {
   context->getOrLoadDialect<mlir::arith::ArithDialect>();
   context->getOrLoadDialect<mlir::func::FuncDialect>();
   context->getOrLoadDialect<mlir::scf::SCFDialect>();
+  context->getOrLoadDialect<mlir::memref::MemRefDialect>();
 
   builder = std::make_unique<mlir::OpBuilder>(context.get());
+
+  // Initialize dialect builders
+  arithBuilder = std::make_unique<mlir_edsl::ArithBuilder>(*builder);
+  scfBuilder = std::make_unique<mlir_edsl::SCFBuilder>(*builder);
+  memrefBuilder = std::make_unique<mlir_edsl::MemRefBuilder>(*builder, context.get(), this, arithBuilder.get(), scfBuilder.get());
 }
 
-MLIRBuilder::~MLIRBuilder() {
-  if (currentFunction) {
-    currentFunction = nullptr;
-  }
-  if (module) {
-    module = nullptr;
-  }
-  builder.reset();
-  context.reset();
-}
+MLIRBuilder::~MLIRBuilder() = default;
 
 void MLIRBuilder::initializeModule() {
   module = mlir::ModuleOp::create(builder->getUnknownLoc());
-  builder->setInsertionPointToEnd(module.getBody());
+  builder->setInsertionPointToEnd(module->getBody());
 }
 
 mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
-  // ==================== Handle Let Bindings (SSA Value Reuse) ====================
-  if (node.has_let_binding()) {
-    int64_t nodeId = node.let_binding().node_id();
-
-    // Generate the MLIR value once
-    mlir::Value result = buildFromProtobufNode(node.let_binding().value());
-
-    // Cache it for future references
-    valueCache[nodeId] = result;
-
-    return result;
-  }
-
-  // ==================== Handle Value References (SSA Value Reuse) ====================
-  if (node.has_value_ref()) {
-    int64_t nodeId = node.value_ref().node_id();
-
-    // Look up the previously cached value
-    auto it = valueCache.find(nodeId);
-    if (it != valueCache.end()) {
-      return it->second;  // Return the cached SSA value - no new operation!
-    }
-
-    throw std::runtime_error("Reference to unbound value ID: " +
-                             std::to_string(nodeId));
-  }
-
-  // ==================== Handle All Other Node Types ====================
-  if (node.has_constant()) {
-    const auto &constant = node.constant();
-    switch (constant.value_type()) {
-    case mlir_edsl::ValueType::I32:
-      return buildConstant(constant.int_value());
-    case mlir_edsl::ValueType::F32:
-      return buildConstant(constant.float_value());
+  // Two-tier dispatch for scalability (switch on category, then specific type)
+  switch (node.node_case()) {
+    case mlir_edsl::ASTNode::kScalar:
+      return buildFromScalarNode(node.scalar());
+    case mlir_edsl::ASTNode::kArray:
+      return buildFromArrayNode(node.array());
+    case mlir_edsl::ASTNode::kControlFlow:
+      return buildFromControlFlowNode(node.control_flow());
+    case mlir_edsl::ASTNode::kFunction:
+      return buildFromFunctionNode(node.function());
+    case mlir_edsl::ASTNode::kBinding:
+      return buildFromBindingNode(node.binding());
     default:
-      throw std::runtime_error("Unsupported constant type");
-    }
-
-  } else if (node.has_parameter()) {
-    const auto &param = node.parameter();
-    return getParameter(param.name());
-
-  } else if (node.has_binary_op()) {
-    const auto &binop = node.binary_op();
-    mlir::Value left = buildFromProtobufNode(binop.left());
-    mlir::Value right = buildFromProtobufNode(binop.right());
-
-    // Python already computed the result type - use it for promotion
-    mlir::Type targetType = protoTypeToMLIRType(binop.result_type());
-    auto [promotedLeft, promotedRight] = promoteToType(left, right, targetType);
-
-    switch (binop.op_type()) {
-    case mlir_edsl::BinaryOpType::ADD:
-      return buildAdd(promotedLeft, promotedRight);
-    case mlir_edsl::BinaryOpType::SUB:
-      return buildSub(promotedLeft, promotedRight);
-    case mlir_edsl::BinaryOpType::MUL:
-      return buildMul(promotedLeft, promotedRight);
-    case mlir_edsl::BinaryOpType::DIV:
-      return buildDiv(promotedLeft, promotedRight);
-    default:
-      throw std::runtime_error("Unsupported binary operation");
-    }
-
-  } else if (node.has_compare_op()) {
-    const auto &cmp = node.compare_op();
-    mlir::Value left = buildFromProtobufNode(cmp.left());
-    mlir::Value right = buildFromProtobufNode(cmp.right());
-
-    // Python already computed the operand type - use it for promotion
-    mlir::Type targetType = protoTypeToMLIRType(cmp.operand_type());
-    auto [promotedLhs, promotedRhs] = promoteToType(left, right, targetType);
-
-    return buildCompare(cmp.predicate(), promotedLhs, promotedRhs);
-
-  } else if (node.has_if_op()) {
-    const auto &ifop = node.if_op();
-    mlir::Value cond = buildFromProtobufNode(ifop.condition());
-    mlir::Type resultType = protoTypeToMLIRType(ifop.result_type());
-
-    // Create callbacks that capture the protobuf nodes
-    auto buildThen = [this, &ifop]() {
-      return buildFromProtobufNode(ifop.then_value());
-    };
-    auto buildElse = [this, &ifop]() {
-      return buildFromProtobufNode(ifop.else_value());
-    };
-
-    return buildIf(cond, buildThen, buildElse, resultType);
-
-  } else if (node.has_call_op()) {
-    const auto &call = node.call_op();
-    std::vector<mlir::Value> args;
-    for (const auto &arg : call.args()) {
-      args.push_back(buildFromProtobufNode(arg));
-    }
-    return callFunction(call.func_name(), args);
-
-  } else if (node.has_for_loop_op()) {
-    const auto &forloop = node.for_loop_op();
-    mlir::Value start = buildFromProtobufNode(forloop.start());
-    mlir::Value end = buildFromProtobufNode(forloop.end());
-    mlir::Value step = buildFromProtobufNode(forloop.step());
-    mlir::Value init_value = buildFromProtobufNode(forloop.init_value());
-    return buildForWithOp(start, end, step, init_value, forloop.operation());
-
-  } else if (node.has_while_loop_op()) {
-    const auto &whileloop = node.while_loop_op();
-    mlir::Value init_value = buildFromProtobufNode(whileloop.init_value());
-    mlir::Value target = buildFromProtobufNode(whileloop.target());
-    return buildWhileWithOp(init_value, target, whileloop.operation(),
-                            whileloop.predicate());
-
-  } else if (node.has_cast_op()) {
-    const auto &cast = node.cast_op();
-    mlir::Value sourceValue = buildFromProtobufNode(cast.value());
-    return buildCast(sourceValue, cast.target_type());
+      throw std::runtime_error("Unknown AST node category");
   }
-
-  throw std::runtime_error("Unknown protobuf node type");
 }
 
-mlir::arith::CmpIPredicate
-MLIRBuilder::protobufToIntPredicate(mlir_edsl::ComparisonPredicate pred) const {
-  switch (pred) {
-  case mlir_edsl::ComparisonPredicate::SGT:
-    return mlir::arith::CmpIPredicate::sgt;
-  case mlir_edsl::ComparisonPredicate::SLT:
-    return mlir::arith::CmpIPredicate::slt;
-  case mlir_edsl::ComparisonPredicate::EQ:
-    return mlir::arith::CmpIPredicate::eq;
-  case mlir_edsl::ComparisonPredicate::NE:
-    return mlir::arith::CmpIPredicate::ne;
-  case mlir_edsl::ComparisonPredicate::SGE:
-    return mlir::arith::CmpIPredicate::sge;
-  case mlir_edsl::ComparisonPredicate::SLE:
-    return mlir::arith::CmpIPredicate::sle;
+mlir::Value MLIRBuilder::buildFromScalarNode(const mlir_edsl::ScalarNode &node) {
+  switch (node.value_case()) {
+    case mlir_edsl::ScalarNode::kConstant:
+      return handleConstant(node.constant());
+    case mlir_edsl::ScalarNode::kBinaryOp:
+      return handleBinaryOp(node.binary_op());
+    case mlir_edsl::ScalarNode::kCompareOp:
+      return handleCompareOp(node.compare_op());
+    case mlir_edsl::ScalarNode::kCastOp:
+      return handleCastOp(node.cast_op());
+    default:
+      throw std::runtime_error("Unknown scalar node type");
+  }
+}
+
+mlir::Value MLIRBuilder::buildFromArrayNode(const mlir_edsl::ArrayNode &node) {
+  switch (node.value_case()) {
+    case mlir_edsl::ArrayNode::kLiteral:
+      return memrefBuilder->buildArrayLiteral(node.literal());
+    case mlir_edsl::ArrayNode::kAccess:
+      return memrefBuilder->buildArrayAccess(node.access());
+    case mlir_edsl::ArrayNode::kStore:
+      return memrefBuilder->buildArrayStore(node.store());
+    case mlir_edsl::ArrayNode::kBinaryOp:
+      return memrefBuilder->buildArrayBinaryOp(node.binary_op());
+    default:
+      throw std::runtime_error("Unknown array node type");
+  }
+}
+
+mlir::Value MLIRBuilder::buildFromControlFlowNode(const mlir_edsl::ControlFlowNode &node) {
+  switch (node.value_case()) {
+    case mlir_edsl::ControlFlowNode::kIfOp:
+      return handleIfOp(node.if_op());
+    // case mlir_edsl::ControlFlowNode::kForLoop:
+    //   return handleForLoopOp(node.for_loop());
+    default:
+      throw std::runtime_error("Unknown control flow node type");
+  }
+}
+
+mlir::Value MLIRBuilder::buildFromFunctionNode(const mlir_edsl::FunctionNode &node) {
+  switch (node.value_case()) {
+    case mlir_edsl::FunctionNode::kParameter:
+      return handleParameter(node.parameter());
+    case mlir_edsl::FunctionNode::kCall:
+      return handleCallOp(node.call());
+    default:
+      throw std::runtime_error("Unknown function node type");
+  }
+}
+
+mlir::Value MLIRBuilder::buildFromBindingNode(const mlir_edsl::BindingNode &node) {
+  switch (node.value_case()) {
+    case mlir_edsl::BindingNode::kLet:
+      return handleLetBinding(node.let());
+    case mlir_edsl::BindingNode::kRef:
+      return handleValueRef(node.ref());
+    default:
+      throw std::runtime_error("Unknown binding node type");
+  }
+}
+
+// ==================== AST Node Handlers ====================
+
+// Binding handlers
+mlir::Value MLIRBuilder::handleLetBinding(const mlir_edsl::LetBinding &binding) {
+  int64_t nodeId = binding.node_id();
+  mlir::Value result = buildFromProtobufNode(binding.value());
+  valueCache[nodeId] = result;
+  return result;
+}
+
+mlir::Value MLIRBuilder::handleValueRef(const mlir_edsl::ValueReference &ref) {
+  int64_t nodeId = ref.node_id();
+  auto it = valueCache.find(nodeId);
+  if (it != valueCache.end()) {
+    return it->second;
+  }
+  throw std::runtime_error("Reference to unbound value ID: " + std::to_string(nodeId));
+}
+
+// Scalar handlers
+mlir::Value MLIRBuilder::handleConstant(const mlir_edsl::Constant &constant) {
+  const auto &typeSpec = constant.type();
+
+  if (!typeSpec.has_scalar()) {
+    throw std::runtime_error("Constant must have scalar type");
+  }
+
+  switch (typeSpec.scalar().kind()) {
+  case mlir_edsl::ScalarTypeSpec::I32:
+    return arithBuilder->buildConstant(constant.int_value());
+  case mlir_edsl::ScalarTypeSpec::F32:
+    return arithBuilder->buildConstant(constant.float_value());
+  case mlir_edsl::ScalarTypeSpec::I1:
+    return arithBuilder->buildConstant(constant.bool_value());
+  case mlir_edsl::ScalarTypeSpec::INDEX:
+    return arithBuilder->buildIndexConstant(constant.int_value());
   default:
-    throw std::runtime_error(
-        "Invalid or unsupported integer comparison predicate");
+    throw std::runtime_error("Unsupported constant type");
   }
 }
 
-mlir::arith::CmpFPredicate MLIRBuilder::protobufToFloatPredicate(
-    mlir_edsl::ComparisonPredicate pred) const {
-  switch (pred) {
-  case mlir_edsl::ComparisonPredicate::OGT:
-    return mlir::arith::CmpFPredicate::OGT;
-  case mlir_edsl::ComparisonPredicate::OLT:
-    return mlir::arith::CmpFPredicate::OLT;
-  case mlir_edsl::ComparisonPredicate::OEQ:
-    return mlir::arith::CmpFPredicate::OEQ;
-  case mlir_edsl::ComparisonPredicate::ONE:
-    return mlir::arith::CmpFPredicate::ONE;
-  case mlir_edsl::ComparisonPredicate::OGE:
-    return mlir::arith::CmpFPredicate::OGE;
-  case mlir_edsl::ComparisonPredicate::OLE:
-    return mlir::arith::CmpFPredicate::OLE;
+mlir::Value MLIRBuilder::handleBinaryOp(const mlir_edsl::BinaryOp &binop) {
+  mlir::Value left = buildFromProtobufNode(binop.left());
+  mlir::Value right = buildFromProtobufNode(binop.right());
+
+  mlir::Type targetType = convertType(binop.result_type());
+  auto [promotedLeft, promotedRight] = promoteToMatchDataType(left, right, targetType);
+
+  switch (binop.op_type()) {
+  case mlir_edsl::BinaryOpType::ADD:
+    return arithBuilder->buildAdd(promotedLeft, promotedRight);
+  case mlir_edsl::BinaryOpType::SUB:
+    return arithBuilder->buildSub(promotedLeft, promotedRight);
+  case mlir_edsl::BinaryOpType::MUL:
+    return arithBuilder->buildMul(promotedLeft, promotedRight);
+  case mlir_edsl::BinaryOpType::DIV:
+    return arithBuilder->buildDiv(promotedLeft, promotedRight);
   default:
-    throw std::runtime_error(
-        "Invalid or unsupported float comparison predicate");
+    throw std::runtime_error("Unsupported binary operation");
   }
 }
 
-mlir::Value MLIRBuilder::buildConstant(int32_t value) {
-  auto loc = builder->getUnknownLoc();
-  auto type = getIntegerType();
-  auto attr = builder->getI32IntegerAttr(value);
+mlir::Value MLIRBuilder::handleCompareOp(const mlir_edsl::CompareOp &cmp) {
+  mlir::Value left = buildFromProtobufNode(cmp.left());
+  mlir::Value right = buildFromProtobufNode(cmp.right());
 
-  return builder->create<mlir::arith::ConstantOp>(loc, type, attr);
+  mlir::Type targetType = convertType(cmp.operand_type());
+  auto [promotedLhs, promotedRhs] = promoteToMatchDataType(left, right, targetType);
+
+  return arithBuilder->buildCompare(cmp.predicate(), promotedLhs, promotedRhs);
 }
 
-mlir::Value MLIRBuilder::buildConstant(float value) {
-  auto loc = builder->getUnknownLoc();
-  auto type = getFloatType();
-  auto attr = builder->getF32FloatAttr(value);
-
-  return builder->create<mlir::arith::ConstantOp>(loc, type, attr);
+mlir::Value MLIRBuilder::handleCastOp(const mlir_edsl::CastOp &cast) {
+  mlir::Value sourceValue = buildFromProtobufNode(cast.value());
+  mlir::Type targetType = convertType(cast.target_type());
+  return arithBuilder->buildCast(sourceValue, targetType);
 }
 
-// Template helper for binary operations - assumes operands already same type
-template <typename IntOp, typename FloatOp>
-mlir::Value MLIRBuilder::buildBinaryOp(mlir::Value lhs, mlir::Value rhs) {
-  auto loc = builder->getUnknownLoc();
+// Control flow handlers
+mlir::Value MLIRBuilder::handleIfOp(const mlir_edsl::IfOp &ifop) {
+  mlir::Value cond = buildFromProtobufNode(ifop.condition());
+  mlir::Type resultType = convertType(ifop.result_type());
 
-  if (isIntegerType(lhs.getType())) {
-    return builder->create<IntOp>(loc, lhs, rhs);
-  }
-  return builder->create<FloatOp>(loc, lhs, rhs);
-}
-
-// Public interface - uses template helper
-mlir::Value MLIRBuilder::buildAdd(mlir::Value lhs, mlir::Value rhs) {
-  return buildBinaryOp<mlir::arith::AddIOp, mlir::arith::AddFOp>(lhs, rhs);
-}
-
-mlir::Value MLIRBuilder::buildSub(mlir::Value lhs, mlir::Value rhs) {
-  return buildBinaryOp<mlir::arith::SubIOp, mlir::arith::SubFOp>(lhs, rhs);
-}
-
-mlir::Value MLIRBuilder::buildMul(mlir::Value lhs, mlir::Value rhs) {
-  return buildBinaryOp<mlir::arith::MulIOp, mlir::arith::MulFOp>(lhs, rhs);
-}
-
-mlir::Value MLIRBuilder::buildDiv(mlir::Value lhs, mlir::Value rhs) {
-  return buildBinaryOp<mlir::arith::DivSIOp, mlir::arith::DivFOp>(lhs, rhs);
-}
-
-mlir::Value MLIRBuilder::convertIntToFloat(mlir::Value intValue) {
-  auto loc = builder->getUnknownLoc();
-  auto floatType = getFloatType();
-  return builder->create<mlir::arith::SIToFPOp>(loc, floatType, intValue);
-}
-
-mlir::Value MLIRBuilder::buildCast(mlir::Value sourceValue,
-                                   mlir_edsl::ValueType targetType) {
-  auto loc = builder->getUnknownLoc();
-  mlir::Type sourceType = sourceValue.getType();
-  mlir::Type targetMLIRType = protoTypeToMLIRType(targetType);
-
-  // Float to integer
-  if (isFloatType(sourceType) && isIntegerType(targetMLIRType)) {
-    return builder->create<mlir::arith::FPToSIOp>(loc, targetMLIRType,
-                                                  sourceValue);
-  }
-  // Integer to float
-  else if (isIntegerType(sourceType) && isFloatType(targetMLIRType)) {
-    return builder->create<mlir::arith::SIToFPOp>(loc, targetMLIRType,
-                                                  sourceValue);
-  }
-  // Integer to integer (different widths)
-  else if (isIntegerType(sourceType) && isIntegerType(targetMLIRType)) {
-    unsigned sourceBits = sourceType.getIntOrFloatBitWidth();
-    unsigned targetBits = targetMLIRType.getIntOrFloatBitWidth();
-
-    if (sourceBits < targetBits) {
-      return builder->create<mlir::arith::ExtSIOp>(loc, targetMLIRType,
-                                                   sourceValue);
-    } else if (sourceBits > targetBits) {
-      return builder->create<mlir::arith::TruncIOp>(loc, targetMLIRType,
-                                                    sourceValue);
-    } else {
-      return sourceValue; // Same width, no cast needed
-    }
-  }
-  // Float to float (same type, no cast needed)
-  else if (isFloatType(sourceType) && isFloatType(targetMLIRType)) {
-    return sourceValue;
-  }
-
-  throw std::runtime_error("Invalid cast: unsupported type combination");
-}
-
-mlir::Value MLIRBuilder::buildCompare(mlir_edsl::ComparisonPredicate predicate,
-                                      mlir::Value lhs, mlir::Value rhs) {
-  auto loc = builder->getUnknownLoc();
-
-  if (isIntegerType(lhs.getType())) {
-    auto pred = protobufToIntPredicate(predicate);
-    return builder->create<mlir::arith::CmpIOp>(loc, pred, lhs, rhs);
-  }
-
-  auto pred = protobufToFloatPredicate(predicate);
-  return builder->create<mlir::arith::CmpFOp>(loc, pred, lhs, rhs);
-}
-
-mlir::Value MLIRBuilder::buildIf(mlir::Value condition,
-                                 std::function<mlir::Value()> buildThen,
-                                 std::function<mlir::Value()> buildElse,
-                                 mlir::Type resultType) {
-  auto loc = builder->getUnknownLoc();
-
-  auto ifOp = builder->create<mlir::scf::IfOp>(loc, resultType, condition,
-                                               /*withElseRegion=*/true);
-
-  // Build THEN region
-  {
-    mlir::OpBuilder::InsertionGuard guard(*builder);
-    builder->setInsertionPointToStart(&ifOp.getThenRegion().front());
-    mlir::Value thenVal = buildThen();  // Callback executes here
-    builder->create<mlir::scf::YieldOp>(loc, thenVal);
-  }
-
-  // Build ELSE region
-  {
-    mlir::OpBuilder::InsertionGuard guard(*builder);
-    builder->setInsertionPointToStart(&ifOp.getElseRegion().front());
-    mlir::Value elseVal = buildElse();  // Callback executes here
-    builder->create<mlir::scf::YieldOp>(loc, elseVal);
-  }
-
-  builder->setInsertionPointAfter(ifOp);
-  return ifOp.getResult(0);
-}
-
-mlir::Value MLIRBuilder::buildForWithOp(mlir::Value start, mlir::Value end,
-                                        mlir::Value step,
-                                        mlir::Value init_value,
-                                        mlir_edsl::BinaryOpType operation) {
-
-  auto body_fn = [this, operation](mlir::Value iv,
-                                   mlir::Value iter_arg) -> mlir::Value {
-
-    switch (operation) {
-    case mlir_edsl::BinaryOpType::ADD:
-      return buildAdd(iter_arg, iv);
-    case mlir_edsl::BinaryOpType::MUL:
-      return buildMul(iter_arg, iv);
-    case mlir_edsl::BinaryOpType::SUB:
-      return buildSub(iter_arg, iv);
-    case mlir_edsl::BinaryOpType::DIV:
-      return buildDiv(iter_arg, iv);
-    default:
-      throw std::runtime_error("Unsupported binary operation in for loop");
-    }
+  auto buildThen = [this, &ifop]() {
+    return buildFromProtobufNode(ifop.then_value());
+  };
+  auto buildElse = [this, &ifop]() {
+    return buildFromProtobufNode(ifop.else_value());
   };
 
-  return buildFor(start, end, step, init_value, body_fn);
+  return scfBuilder->buildIf(cond, buildThen, buildElse, resultType);
 }
 
-mlir::Value MLIRBuilder::buildFor(
-    mlir::Value start, mlir::Value end, mlir::Value step,
-    mlir::Value init_value,
-    std::function<mlir::Value(mlir::Value iv, mlir::Value iter_arg)> body_fn) {
+// mlir::Value MLIRBuilder::handleForLoopOp(const mlir_edsl::ForLoopOp &forloop) {
+//   mlir::Value start = buildFromProtobufNode(forloop.start());
+//   mlir::Value end = buildFromProtobufNode(forloop.end());
+//   mlir::Value step = buildFromProtobufNode(forloop.step());
+//   mlir::Value init_value = buildFromProtobufNode(forloop.init_value());
+//   return scfBuilder->buildForWithOp(start, end, step, init_value, forloop.operation());
+// }
 
-  auto loc = builder->getUnknownLoc();
-  auto forOp =
-      builder->create<mlir::scf::ForOp>(loc, start, end, step, init_value);
-
-  mlir::Block *body = forOp.getBody();
-  builder->setInsertionPointToStart(body);
-
-  mlir::Value inductionVar = body->getArgument(0);
-  mlir::Value iterArg = body->getArgument(1);
-
-  mlir::Value newIterArg = body_fn(inductionVar, iterArg);
-
-  builder->create<mlir::scf::YieldOp>(loc, newIterArg);
-
-  builder->setInsertionPointAfter(forOp);
-
-  return forOp.getResult(0);
+// Function handlers
+mlir::Value MLIRBuilder::handleParameter(const mlir_edsl::Parameter &param) {
+  return getParameter(param.name());
 }
 
-mlir::Value
-MLIRBuilder::buildWhileWithOp(mlir::Value init, mlir::Value target,
-                              mlir_edsl::BinaryOpType operation,
-                              mlir_edsl::ComparisonPredicate condition) {
-
-  auto condition_fn = [this, condition,
-                       target](mlir::Value current) -> mlir::Value {
-    return buildCompare(condition, current, target); // Now uses enum!
-  };
-
-  auto body_fn = [this, operation](mlir::Value current) -> mlir::Value {
-    switch (operation) {
-    case mlir_edsl::BinaryOpType::ADD:
-      return buildAdd(current, buildConstant(1));
-    case mlir_edsl::BinaryOpType::MUL:
-      return buildMul(current, buildConstant(2));
-    case mlir_edsl::BinaryOpType::SUB:
-      return buildSub(current, buildConstant(1));
-    case mlir_edsl::BinaryOpType::DIV:
-      return buildDiv(current, buildConstant(2));
-    default:
-      throw std::runtime_error("Unsupported binary operation");
-    }
-  };
-
-  return buildWhile(init, condition_fn, body_fn);
-}
-
-mlir::Value
-MLIRBuilder::buildWhile(mlir::Value init,
-                        std::function<mlir::Value(mlir::Value)> condition_fn,
-                        std::function<mlir::Value(mlir::Value)> body_fn) {
-
-  auto loc = builder->getUnknownLoc();
-  auto resultType = init.getType();
-
-  auto whileOp = builder->create<mlir::scf::WhileOp>(
-      loc, mlir::TypeRange{resultType}, init);
-
-  auto &beforeRegion = whileOp.getBefore();
-  auto *beforeBlock = builder->createBlock(&beforeRegion, beforeRegion.end(),
-                                           {resultType}, {loc});
-  builder->setInsertionPointToStart(beforeBlock);
-
-  auto current = beforeBlock->getArgument(0);
-  auto condition = condition_fn(current);
-
-  builder->create<mlir::scf::ConditionOp>(loc, condition, current);
-
-  auto &afterRegion = whileOp.getAfter();
-  auto *afterBlock = builder->createBlock(&afterRegion, afterRegion.end(),
-                                          {resultType}, {loc});
-  builder->setInsertionPointToStart(afterBlock);
-
-  auto loopVar = afterBlock->getArgument(0);
-  auto newValue = body_fn(loopVar);
-
-  builder->create<mlir::scf::YieldOp>(loc, newValue);
-
-  builder->setInsertionPointAfter(whileOp);
-  return whileOp.getResult(0);
+mlir::Value MLIRBuilder::handleCallOp(const mlir_edsl::CallOp &call) {
+  std::vector<mlir::Value> args;
+  for (const auto &arg : call.args()) {
+    args.push_back(buildFromProtobufNode(arg));
+  }
+  return callFunction(call.func_name(), args);
 }
 
 std::string MLIRBuilder::getMLIRString() {
@@ -459,13 +246,13 @@ std::string MLIRBuilder::getMLIRString() {
   mlir::OpPrintingFlags flags;
   flags.enableDebugInfo(false);
   flags.printGenericOpForm(false);
-  module.print(stream, flags);
+  module->print(stream, flags);
   return result;
 }
 
 std::string MLIRBuilder::getLLVMIRString() {
   MLIRLowering lowering(context.get());
-  return lowering.lowerToLLVMIR(module);
+  return lowering.lowerToLLVMIR(*module);
 }
 
 void MLIRBuilder::reset() {
@@ -475,14 +262,8 @@ void MLIRBuilder::reset() {
   valueCache.clear();  // Clear SSA value cache between functions
 
   // Move insertion point back to module level
-  builder->setInsertionPointToEnd(module.getBody());
+  builder->setInsertionPointToEnd(module->getBody());
 }
-
-mlir::Type MLIRBuilder::getIntegerType() const { return builder->getI32Type(); }
-
-mlir::Type MLIRBuilder::getFloatType() const { return builder->getF32Type(); }
-
-mlir::Type MLIRBuilder::getBoolType() const { return builder->getI1Type(); }
 
 bool MLIRBuilder::isIntegerType(mlir::Type type) const {
   return mlir::isa<mlir::IntegerType>(type);
@@ -494,7 +275,7 @@ bool MLIRBuilder::isFloatType(mlir::Type type) const {
 
 // Explicit type promotion - Python provides the target type
 std::pair<mlir::Value, mlir::Value>
-MLIRBuilder::promoteToType(mlir::Value lhs, mlir::Value rhs,
+MLIRBuilder::promoteToMatchDataType(mlir::Value lhs, mlir::Value rhs,
                            mlir::Type targetType) {
   mlir::Type lhsType = lhs.getType();
   mlir::Type rhsType = rhs.getType();
@@ -502,38 +283,98 @@ MLIRBuilder::promoteToType(mlir::Value lhs, mlir::Value rhs,
   // Promote left operand if needed
   if (lhsType != targetType && isIntegerType(lhsType) &&
       isFloatType(targetType)) {
-    lhs = convertIntToFloat(lhs);
+    lhs = arithBuilder->buildCast(lhs, targetType);
   }
 
   // Promote right operand if needed
   if (rhsType != targetType && isIntegerType(rhsType) &&
       isFloatType(targetType)) {
-    rhs = convertIntToFloat(rhs);
+    rhs = arithBuilder->buildCast(rhs, targetType);
   }
 
   return {lhs, rhs};
 }
 
-mlir::Type MLIRBuilder::getPromotedType(mlir::Type lhs, mlir::Type rhs) const {
-  if (isFloatType(lhs) || isFloatType(rhs)) {
-    return getFloatType();
+// ==================== ALGEBRAIC TYPE SYSTEM ====================
+
+mlir::Type MLIRBuilder::convertType(const mlir_edsl::TypeSpec &typeSpec) const {
+  switch (typeSpec.type_kind_case()) {
+    case mlir_edsl::TypeSpec::kScalar:
+      return convertScalarType(typeSpec.scalar());
+
+    case mlir_edsl::TypeSpec::kMemref:
+      return convertMemRefType(typeSpec.memref());
+
+    case mlir_edsl::TypeSpec::TYPE_KIND_NOT_SET:
+      throw std::runtime_error("TypeSpec has no type set");
+
+    default:
+      throw std::runtime_error("Unknown TypeSpec kind: " +
+                               std::to_string(typeSpec.type_kind_case()));
   }
-  return getIntegerType();
 }
 
-mlir::Type
-MLIRBuilder::protoTypeToMLIRType(mlir_edsl::ValueType protoType) const {
-  switch (protoType) {
-  case mlir_edsl::ValueType::I32:
-    return getIntegerType();
-  case mlir_edsl::ValueType::F32:
-    return getFloatType();
-  case mlir_edsl::ValueType::I1:
-    return getBoolType();
-  default:
-    throw std::runtime_error("Unknown protobuf type value: " +
-                             std::to_string(static_cast<int>(protoType)));
+mlir::Type MLIRBuilder::convertScalarType(
+    const mlir_edsl::ScalarTypeSpec &scalarSpec) const {
+  switch (scalarSpec.kind()) {
+    case mlir_edsl::ScalarTypeSpec::I32:
+      return builder->getI32Type();
+
+    case mlir_edsl::ScalarTypeSpec::F32:
+      return builder->getF32Type();
+
+    case mlir_edsl::ScalarTypeSpec::I1:
+      return builder->getI1Type();
+
+    default:
+      throw std::runtime_error("Unknown ScalarTypeSpec kind: " +
+                               std::to_string(static_cast<int>(scalarSpec.kind())));
   }
+}
+
+mlir::Type MLIRBuilder::convertMemRefType(
+    const mlir_edsl::MemRefTypeSpec &memrefSpec) const {
+
+  // Recursively convert element type - THIS IS THE KEY!
+  mlir::Type elementType = convertType(memrefSpec.element_type());
+
+  // Extract shape dimensions
+  llvm::SmallVector<int64_t> shape(
+      memrefSpec.shape().begin(),
+      memrefSpec.shape().end()
+  );
+
+  // Validate dimensions
+  if (shape.empty() || shape.size() > 3) {
+    throw std::runtime_error("Only 1D, 2D, and 3D arrays supported, got " +
+                             std::to_string(shape.size()) + "D");
+  }
+
+  // Create memref type: memref<2x3xi32>
+  return mlir::MemRefType::get(shape, elementType);
+}
+
+// ==================== Infrastructure Utilities ====================
+
+mlir::Value MLIRBuilder::buildIndexConstant(int64_t value) {
+  auto loc = builder->getUnknownLoc();
+  return builder->create<mlir::arith::ConstantIndexOp>(loc, value);
+}
+
+mlir::Value MLIRBuilder::castToIndexType(mlir::Value value) {
+  // If already index type, return as-is
+  if (value.getType().isIndex()) {
+    return value;
+  }
+
+  // Convert integer to index type
+  if (mlir::isa<mlir::IntegerType>(value.getType())) {
+    auto loc = builder->getUnknownLoc();
+    return builder->create<mlir::arith::IndexCastOp>(
+        loc, builder->getIndexType(), value);
+  }
+
+  throw std::runtime_error("Cannot cast to index type: unsupported source type");
 }
 
 mlir::Value MLIRBuilder::getParameter(const std::string &name) {
@@ -544,53 +385,55 @@ mlir::Value MLIRBuilder::getParameter(const std::string &name) {
   throw std::runtime_error("Parameter not found: " + name);
 }
 
-std::string MLIRBuilder::compileFunctionFromDef(const std::string &buffer) {
-  mlir_edsl::FunctionDef func_def;
+// ==================== Type Validation ====================
 
-  if (!func_def.ParseFromString(buffer)) {
-    throw std::runtime_error("Failed to parse FunctionDef protobuf");
-  }
+bool MLIRBuilder::isValidParameterType(const mlir_edsl::TypeSpec &type) const {
+  return type.has_scalar();
+}
 
-  // Extract parameters - already protobuf enums
-  std::vector<std::pair<std::string, mlir_edsl::ValueType>> params;
+bool MLIRBuilder::isValidReturnType(const mlir_edsl::TypeSpec &type) const {
+  return type.has_scalar();
+}
+
+void MLIRBuilder::compileFunctionFromDef(const mlir_edsl::FunctionDef &func_def) {
+  // Validate and extract parameters
+  std::vector<std::pair<std::string, mlir_edsl::TypeSpec>> params;
   for (const auto &param : func_def.params()) {
+    if (!isValidParameterType(param.type())) {
+      throw std::runtime_error("Parameter '" + param.name() + "': unsupported type");
+    }
     params.push_back({param.name(), param.type()});
   }
 
-  // Everything uses enums - no string conversion!
-  createFunction(func_def.name(), params, func_def.return_type());
-  mlir::Value result = buildFromProtobufNode(func_def.body());
-  finalizeFunction(func_def.name(), result);
-
-  // Build FunctionSignature protobuf to return
-  mlir_edsl::FunctionSignature sig;
-  sig.set_name(func_def.name());
-  sig.set_return_type(func_def.return_type());
-
-  for (const auto &param : func_def.params()) {
-    sig.add_param_types(param.type());
+  // Validate return type
+  const auto &retType = func_def.return_type();
+  if (!isValidReturnType(retType)) {
+    throw std::runtime_error("Unsupported return type");
   }
 
-  // Return serialized signature
-  return sig.SerializeAsString();
+  mlir::Type returnType = convertType(retType);
+
+  // Compile function
+  createFunction(func_def.name(), params, returnType);
+  mlir::Value result = buildFromProtobufNode(func_def.body());
+  finalizeFunction(func_def.name(), result);
 }
 
 void MLIRBuilder::createFunction(
     const std::string &name,
-    const std::vector<std::pair<std::string, mlir_edsl::ValueType>> &params,
-    mlir_edsl::ValueType return_type) {
+    const std::vector<std::pair<std::string, mlir_edsl::TypeSpec>> &params,
+    mlir::Type returnType) {
 
   // Reset builder state from previous function
   reset();
 
-  // Direct enum to MLIR type conversion using existing helper
+  // Convert parameter types using new unified type conversion
   std::vector<mlir::Type> paramTypes;
-  for (const auto &[paramName, valueType] : params) {
-    paramTypes.push_back(protoTypeToMLIRType(valueType));
+  for (const auto &[paramName, typeSpec] : params) {
+    paramTypes.push_back(convertType(typeSpec));
   }
 
-  mlir::Type returnType = protoTypeToMLIRType(return_type);
-
+  // returnType is already an mlir::Type - use it directly
   auto funcType = builder->getFunctionType(paramTypes, {returnType});
   currentFunction = builder->create<mlir::func::FuncOp>(
       builder->getUnknownLoc(), name, funcType);
@@ -621,7 +464,7 @@ void MLIRBuilder::finalizeFunction(const std::string &name,
     std::error_code EC;
     llvm::raw_fd_ostream outFile(filename, EC);
     if (!EC) {
-      module.print(outFile);
+      module->print(outFile);
     }
   }
 }
@@ -644,7 +487,7 @@ bool MLIRBuilder::hasFunction(const std::string &name) const {
 
 void MLIRBuilder::clearModule() {
   module = mlir::ModuleOp::create(builder->getUnknownLoc());
-  builder->setInsertionPointToEnd(module.getBody());
+  builder->setInsertionPointToEnd(module->getBody());
 
   compiledFunctions.clear();
   parameterMap.clear();
@@ -653,11 +496,7 @@ void MLIRBuilder::clearModule() {
 }
 
 std::vector<std::string> MLIRBuilder::listFunctions() const {
-  std::vector<std::string> result;
-  for (const auto &name : compiledFunctions) {
-    result.push_back(name);
-  }
-  return result;
+  return {compiledFunctions.begin(), compiledFunctions.end()};
 }
 
 } // namespace mlir_edsl

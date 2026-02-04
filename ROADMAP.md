@@ -1,114 +1,195 @@
 # ML-EDSL Development Roadmap
 
-**Architecture**: Python frontend with C++ MLIR backend  
-**Current Status**: Foundation Complete - Phase 6 (Control Flow) in progress  
+**Architecture**: Python frontend with C++ MLIR backend
+**Current Status**: Phase 7 (Memory & Arrays) - Tensor support in progress
 **Vision**: Comprehensive ML compilation framework supporting modern AI architectures
 
 ---
 
-## Foundation Complete ✅ (Phases 1-5)
+## Foundation Complete ✅ (Phases 1-6)
 
 **Implemented Architecture:**
-- **Python Frontend**: AST with type system, operations (add/sub/mul/div), `@ml_function` decorator
-- **C++ MLIR Backend**: Real MLIR IR generation with `MLIRBuilder` class  
+- **Python Frontend**: AST with strict type system, `@ml_function` decorator
+- **C++ MLIR Backend**: Real MLIR IR generation with `MLIRBuilder` class
 - **LLVM Lowering**: Complete MLIR → LLVM IR transformation pipeline
 - **JIT Execution**: Native-speed execution via `MLIRExecutor` with O0/O2/O3 optimization levels
+- **Strict Typing**: Required type hints, explicit cast() for conversions, no auto-promotion
+- **Control Flow**: If/For/While constructs with comparison operators
+- **Recursion**: Self-referencing functions via call() with symbol resolution
+
+**Current Type System:**
+- **MLIR Types**: `i32`, `f32`, `i1` (boolean)
+- **Python Aliases**: `int` → `i32`, `float` → `f32`, `bool` → `i1`
+- **Strict Enforcement**: No implicit conversions, explicit `cast()` required
 
 **Current Capabilities:**
 ```python
 @ml_function
-def example():
-    a = add(10, 5)      # 15
-    b = mul(2, 3)       # 6  
-    return sub(a, b)    # 9
+def factorial(n: int) -> int:
+    return If(n <= 1, 1, n * factorial(n - 1))
 
-result = example.execute()  # Native speed execution!
+@ml_function
+def sum_range(start: int, end: int) -> int:
+    return For(start=start, end=end, init=0, operation="add")
+
+@ml_function
+def mixed_types(x: int, y: float) -> float:
+    return cast(x, f32) + y  # Explicit cast required
+
+result = factorial(5)     # 120 - Native speed!
+result = sum_range(1, 10) # 55 - Native speed!
 ```
 
 ---
 
-## Phase 6: Control Flow and Functions 🚧 CURRENT FOCUS
+## Phase 7: Memory & Arrays 🚧 CURRENT FOCUS
 
-**Goal**: Add control flow constructs and function definitions to enable complex ML algorithms.
+**Goal**: Add array and tensor support to enable ML workloads, bridging from scalar operations to vectorized/tensor computations.
 
 ### Implementation Plan:
 
-#### 1. **Conditional Operations**
+#### 1. **Fixed-Size Array Support (memref dialect)**
 ```python
 @ml_function
-def conditional_example(x):
-    if x > 0:
-        return mul(x, 2)
-    else:
-        return sub(0, x)
+def array_operations() -> i32:
+    # Create a fixed-size array [1, 2, 3, 4]
+    arr = Array[4, i32]([1, 2, 3, 4])
+
+    # Element access (read)
+    value = arr[2]  # Returns 3
+
+    # Element modification (functional style - JAX-like)
+    arr = arr.at[0].set(10)  # Returns new array [10, 2, 3, 4]
+
+    # Array arithmetic (element-wise)
+    doubled = arr * 2  # [20, 4, 6, 8]
+
+    return doubled[0]  # Returns 20
 ```
 
 **Technical Requirements:**
-- `scf.if` dialect integration in MLIR backend
-- Boolean type support and comparison operations (`arith.cmpi`, `arith.cmpf`)
-- Conditional branch lowering to LLVM
+- `memref` dialect for stack-allocated arrays (fixed size)
+- Array type: `memref<NxT>` (e.g., `memref<4xi32>`)
+- Operations: `memref.alloca`, `memref.load`, `memref.store`
+- Functional update semantics: `.at[index].set(value)` (JAX-style)
+- Index operations: `arith.index_cast` for array indexing
+- Element-wise operations with broadcasting support
 
-#### 2. **Loop Constructs**
+#### 2. **Multi-Dimensional Arrays (2D/3D)**
 ```python
 @ml_function
-def loop_example(n):
-    result = 0
-    for i in range(n):
-        result = add(result, i)
+def matrix_operations() -> i32:
+    # 2D matrix [2 rows x 3 cols]
+    matrix = Array[2, 3, i32]([[1, 2, 3],
+                                [4, 5, 6]])
+
+    # Access element at [row, col]
+    value = matrix[1, 2]  # Returns 6
+
+    # Element modification (functional style)
+    matrix = matrix.at[0, 1].set(99)  # Update element at row 0, col 1
+
+    # Element-wise operations
+    doubled = matrix * 2
+
+    return matrix[0, 1]  # Returns 99
+```
+
+**Technical Requirements:**
+- Multi-dimensional `memref` types: `memref<MxNxT>` (e.g., `memref<2x3xi32>`)
+- Multi-index operations: `memref.load %arr[%i, %j]`, `memref.store`
+- Tuple index support in Python frontend: `matrix[i, j]` and `matrix.at[i, j].set(v)`
+- Nested list validation and flattening for initialization
+- Shape inference from nested Python lists
+
+#### 3. **Dynamic-Size Tensors (tensor dialect)**
+```python
+@ml_function
+def dynamic_tensor(size: int) -> Tensor[?, f32]:
+    # Create tensor with runtime-determined size
+    data = Tensor.empty([size], dtype=f32)
+
+    # Functional-style updates (immutable semantics)
+    # NOTE: Tensor update API still under design - tensors are immutable
+    # May use functional operations or bufferization
+    for i in range(size):
+        data = data.at[i].set(cast(i, f32) * 2.0)
+
+    return data
+```
+
+**Technical Requirements:**
+- `tensor` dialect for value-semantic, immutable tensors
+- Dynamic shapes: `tensor<?xf32>`
+- Tensor operations: `tensor.empty`, `tensor.extract`, `tensor.insert`
+- Buffer allocation and deallocation via `bufferization` pass
+- Integration with loops for tensor initialization
+- **Note**: Tensor API design TBD - truly immutable vs. functional updates
+
+#### 4. **NumPy/PyTorch Interoperability**
+```python
+import numpy as np
+
+@ml_function
+def process_numpy(arr: Tensor[?, f32]) -> Tensor[?, f32]:
+    # Process elements: arr[i] * 2 + 1
+    result = arr * 2.0 + 1.0
     return result
+
+# Usage with NumPy
+np_array = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+result = process_numpy(np_array)  # Returns NumPy array
 ```
 
 **Technical Requirements:**
-- `scf.for` and `scf.while` dialect integration
-- Loop induction variable management
-- Loop optimization passes (unrolling, vectorization)
+- Python buffer protocol integration (PEP 3118)
+- Zero-copy data passing between Python and MLIR
+- Type mapping: `numpy.float32` → `f32`, `numpy.int32` → `i32`
+- Shape inference and validation
+- Conversion: NumPy → `memref`/`tensor` → computation → NumPy
 
-#### 3. **Function Definitions with Parameters**
+#### 5. **Array Reduction Operations**
 ```python
 @ml_function
-def math_function(a: int, b: float):
-    c = add(a, 5)
-    d = mul(b, 2.0)
-    return add(c, d)
+def array_sum(arr: Tensor[?, i32]) -> i32:
+    # Sum all elements in array
+    result = 0
+    for i in range(len(arr)):
+        result = result + arr[i]
+    return result
 
-result = math_function.execute(10, 3.5)  # Native execution with args
-```
-
-**Technical Requirements:**
-- Function parameter parsing and type checking
-- Local variable scope management
-- Multi-parameter JIT execution support
-
-#### 4. **Recursion Support**
-```python
 @ml_function
-def factorial(n):
-    if n <= 1:
-        return 1
-    else:
-        return mul(n, factorial(sub(n, 1)))
+def array_max(arr: Tensor[?, i32]) -> i32:
+    # Find maximum element
+    max_val = arr[0]
+    for i in range(1, len(arr)):
+        max_val = If(arr[i] > max_val, arr[i], max_val)
+    return max_val
 ```
 
 **Technical Requirements:**
-- Recursive function call lowering
-- Tail call optimization
-- Stack management for deep recursion
+- Array length/shape queries: `tensor.dim`, `memref.dim`
+- Reduction patterns with loops
+- Future: `linalg.reduce` for optimized reductions
 
 ### Expected Deliverables:
-- Extended AST nodes for control flow and functions
-- MLIR SCF (Structured Control Flow) dialect integration
-- Enhanced Python frontend with control flow syntax
-- Comprehensive test suite for all control flow patterns
-- Performance benchmarks vs equivalent Python code
+- Array/tensor type system with fixed and dynamic sizes
+- `memref` dialect integration for stack-allocated arrays
+- `tensor` dialect integration for value-semantic tensors
+- Element access, slicing, and modification operations
+- NumPy interoperability with zero-copy data passing
+- Comprehensive test suite for array operations
+- Documentation and examples for array usage
+
+### MLIR Dialects to Integrate:
+- **memref**: Stack-allocated, mutable buffers (fixed size)
+- **tensor**: Value-semantic, immutable tensors (dynamic size)
+- **affine**: Affine expressions for loop bounds and indexing
+- **linalg** (future): High-level linear algebra operations
 
 ---
 
 ## Future Development Phases 📋
-
-### Phase 7: Memory & Arrays
-- Array/tensor support with `memref`, `tensor`, `linalg` dialects
-- Dynamic memory management and NumPy/PyTorch integration
-- Multi-dimensional operations (slicing, broadcasting, reshaping)
 
 ### Phase 8: ML Operations  
 - Linear algebra primitives (`matmul`, activation functions)
@@ -130,23 +211,76 @@ def factorial(n):
 
 ## MLIR Syntax Reference
 
-**Current MLIR Output Format:**
+**Scalar Operations:**
 ```mlir
 module {
-  func.func @add_fn() -> i32 {
-    %c4_i32 = arith.constant 4 : i32
-    %c6_i32 = arith.constant 6 : i32
-    %0 = arith.addi %c4_i32, %c6_i32 : i32
+  func.func @add_fn(%arg0: i32, %arg1: i32) -> i32 {
+    %0 = arith.addi %arg0, %arg1 : i32
     return %0 : i32
   }
 }
 ```
 
-**Target LLVM IR Output:**
-```llvm
-define i32 @add_fn() {
-entry:
-  ret i32 10
+**Control Flow (If/Else):**
+```mlir
+module {
+  func.func @conditional(%arg0: i32, %arg1: i32) -> i32 {
+    %c0 = arith.constant 0 : i32
+    %cmp = arith.cmpi sgt, %arg0, %c0 : i32
+    %result = scf.if %cmp -> i32 {
+      %doubled = arith.muli %arg0, %c2_i32 : i32
+      scf.yield %doubled : i32
+    } else {
+      scf.yield %arg1 : i32
+    }
+    return %result : i32
+  }
+}
+```
+
+**Loops (scf.for):**
+```mlir
+module {
+  func.func @sum_range(%arg0: i32) -> i32 {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %result = scf.for %iv = %c0 to %arg0 step %c1 iter_args(%acc = %c0) -> i32 {
+      %next = arith.addi %acc, %iv : i32
+      scf.yield %next : i32
+    }
+    return %result : i32
+  }
+}
+```
+
+**Recursion:**
+```mlir
+module {
+  func.func @factorial(%arg0: i32) -> i32 {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %cmp = arith.cmpi sle, %arg0, %c1 : i32
+    %result = scf.if %cmp -> i32 {
+      scf.yield %c1 : i32
+    } else {
+      %n_minus_1 = arith.subi %arg0, %c1 : i32
+      %rec_result = func.call @factorial(%n_minus_1) : (i32) -> i32
+      %product = arith.muli %arg0, %rec_result : i32
+      scf.yield %product : i32
+    }
+    return %result : i32
+  }
+}
+```
+
+**Type Casting:**
+```mlir
+module {
+  func.func @cast_example(%arg0: i32, %arg1: f32) -> f32 {
+    %arg0_float = arith.sitofp %arg0 : i32 to f32
+    %result = arith.addf %arg0_float, %arg1 : f32
+    return %result : f32
+  }
 }
 ```
 
@@ -156,12 +290,25 @@ entry:
 
 ### Current Stack:
 - **Dependencies**: LLVM/MLIR 18+, CMake 3.20+, pybind11, C++17, Python 3.8+
-- **MLIR Dialects**: `arith`, `func`, `builtin` | **Next**: `scf` (control flow)
+- **MLIR Dialects**: `arith`, `func`, `builtin`, `scf`, `cf` | **Next**: `memref`, `tensor`, `affine`
 - **Testing**: Comprehensive pytest suite with JIT integration tests
+  - `test_strict_typing.py` - Type system validation
+  - `test_parameters.py` - Function parameter tests
+  - `test_conditionals.py` - If/comparison operations
+  - `test_loops.py` - For/While loop tests
+  - `test_recursion.py` - Recursive function tests
+  - `test_cpp_backend.py` - C++ backend integration
 - **Examples**: Working demos in `examples/` directory
+
+### Current Operations:
+- **Arithmetic**: `add`, `sub`, `mul`, `div`, `cast`
+- **Comparison**: `lt`, `le`, `gt`, `ge`, `eq`, `ne`
+- **Control Flow**: `If`, `For`, `While`
+- **Functions**: `call` (recursion), `@ml_function` decorator
 
 ### Architecture Overview:
 ```
 Python Frontend (AST) → C++ MLIR Backend → LLVM Lowering → JIT Execution
      @ml_function           MLIRBuilder        MLIRLowering    MLIRExecutor
+      (strict types)        (arith/scf/cf)      (llvm dialect)  (O0/O2/O3)
 ```

@@ -4,22 +4,26 @@
 #include <string>
 #include <unordered_map>
 
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/Value.h"
 #include <pybind11/pybind11.h>
 #include <unordered_set>
 
+// Forward declarations for dialect builders
 namespace mlir_edsl {
+class ArithBuilder;
+class SCFBuilder;
+class MemRefBuilder;
+}
 
-// Forward declarations for protobuf types
-enum ValueType : int;
-enum ComparisonPredicate : int;
-enum BinaryOpType : int;
-class ASTNode;
+// Forward declarations for protobuf classes
+#include "mlir_edsl/proto_fwd.h"
+
+namespace mlir_edsl {
 
 class MLIRBuilder {
 public:
@@ -30,8 +34,8 @@ public:
   void initializeModule();
 
   // ==================== CORE API (Exposed to Python) ====================
-  // Main compilation entry point - takes FunctionDef, returns FunctionSignature
-  std::string compileFunctionFromDef(const std::string &function_def_bytes);
+  // Main compilation entry point - takes FunctionDef protobuf object
+  void compileFunctionFromDef(const mlir_edsl::FunctionDef &func_def);
 
   // ==================== INSPECTION ====================
   std::string getMLIRString();
@@ -42,81 +46,77 @@ public:
   void clearModule();
   std::vector<std::string> listFunctions() const;
 
-private:
-  std::unique_ptr<mlir::MLIRContext> context;
-  std::unique_ptr<mlir::OpBuilder> builder;
-  mlir::ModuleOp module;
-  mlir::func::FuncOp currentFunction;
-
-  // Helper methods
-  mlir::Type getIntegerType() const;
-  mlir::Type getFloatType() const;
-  mlir::Type getBoolType() const;
-  bool isIntegerType(mlir::Type type) const;
-  bool isFloatType(mlir::Type type) const;
-
-  mlir::arith::CmpIPredicate
-  protobufToIntPredicate(mlir_edsl::ComparisonPredicate pred) const;
-  mlir::arith::CmpFPredicate
-  protobufToFloatPredicate(mlir_edsl::ComparisonPredicate pred) const;
+  // ==================== PUBLIC UTILITIES (for dialect builders) ====================
+  // Unified type conversion (algebraic type system)
+  mlir::Type convertType(const mlir_edsl::TypeSpec &typeSpec) const;
 
   mlir::Value buildFromProtobufNode(const mlir_edsl::ASTNode &node);
 
-  // Template helper for binary operations (assumes operands already promoted)
-  template <typename IntOp, typename FloatOp>
-  mlir::Value buildBinaryOp(mlir::Value lhs, mlir::Value rhs);
+  // Infrastructure utilities (used by multiple dialect builders)
+  mlir::Value buildIndexConstant(int64_t value);
+  mlir::Value castToIndexType(mlir::Value value);
 
-  // Internal MLIR building operations (not exposed to Python)
-  mlir::Value buildConstant(int32_t value);
-  mlir::Value buildConstant(float value);
-  mlir::Value buildAdd(mlir::Value lhs, mlir::Value rhs);
-  mlir::Value buildSub(mlir::Value lhs, mlir::Value rhs);
-  mlir::Value buildMul(mlir::Value lhs, mlir::Value rhs);
-  mlir::Value buildDiv(mlir::Value lhs, mlir::Value rhs);
-  mlir::Value buildCompare(mlir_edsl::ComparisonPredicate predicate,
-                           mlir::Value lhs, mlir::Value rhs);
-  mlir::Value buildIf(mlir::Value condition,
-                      std::function<mlir::Value()> buildThen,
-                      std::function<mlir::Value()> buildElse,
-                      mlir::Type resultType);
-  mlir::Value buildFor(
-      mlir::Value start, mlir::Value end, mlir::Value step,
-      mlir::Value init_value,
-      std::function<mlir::Value(mlir::Value iv, mlir::Value iter_arg)> body_fn);
-  mlir::Value buildForWithOp(mlir::Value start, mlir::Value end,
-                             mlir::Value step, mlir::Value init_value,
-                             mlir_edsl::BinaryOpType operation);
-  mlir::Value buildWhileWithOp(mlir::Value init, mlir::Value target,
-                               mlir_edsl::BinaryOpType operation,
-                               mlir_edsl::ComparisonPredicate condition);
-  mlir::Value buildWhile(mlir::Value init,
-                         std::function<mlir::Value(mlir::Value)> condition_fn,
-                         std::function<mlir::Value(mlir::Value)> body_fn);
+private:
+  std::unique_ptr<mlir::MLIRContext> context;
+  std::unique_ptr<mlir::OpBuilder> builder;
+  mlir::OwningOpRef<mlir::ModuleOp> module;
+  mlir::func::FuncOp currentFunction;
 
-  mlir::Value convertIntToFloat(mlir::Value intValue);
-  mlir::Value buildCast(mlir::Value sourceValue, mlir_edsl::ValueType targetType);
+  // Helper methods
+  bool isIntegerType(mlir::Type type) const;
+  bool isFloatType(mlir::Type type) const;
+
+  // Type conversion helpers (algebraic type system)
+  mlir::Type convertScalarType(const mlir_edsl::ScalarTypeSpec &scalarSpec) const;
+  mlir::Type convertMemRefType(const mlir_edsl::MemRefTypeSpec &memrefSpec) const;
+
+  // Type validation helpers
+  bool isValidParameterType(const mlir_edsl::TypeSpec &type) const;
+  bool isValidReturnType(const mlir_edsl::TypeSpec &type) const;
 
   // Internal function building (not exposed to Python)
   void createFunction(
       const std::string &name,
-      const std::vector<std::pair<std::string, mlir_edsl::ValueType>> &params,
-      mlir_edsl::ValueType return_type);
+      const std::vector<std::pair<std::string, mlir_edsl::TypeSpec>> &params,
+      mlir::Type returnType);
   void finalizeFunction(const std::string &name, mlir::Value result);
   mlir::Value callFunction(const std::string &name,
                            const std::vector<mlir::Value> &args);
   mlir::Value getParameter(const std::string &name);
   void reset();
 
-  std::string mapComparisonPredicate(mlir_edsl::ComparisonPredicate pred);
-
   // Type promotion helper (explicit target type from Python)
   std::pair<mlir::Value, mlir::Value>
-  promoteToType(mlir::Value lhs, mlir::Value rhs, mlir::Type targetType);
-  mlir::Type getPromotedType(mlir::Type lhs, mlir::Type rhs) const;
+  promoteToMatchDataType(mlir::Value lhs, mlir::Value rhs, mlir::Type targetType);
 
-  // Type conversion from protobuf AST
-  mlir::Type protoTypeToMLIRType(mlir_edsl::ValueType protoType) const;
-  mlir_edsl::ValueType mlirTypeToProtoEnum(mlir::Type type) const;
+  // AST node category dispatchers (two-tier dispatch for scalability)
+  mlir::Value buildFromScalarNode(const mlir_edsl::ScalarNode &node);
+  mlir::Value buildFromArrayNode(const mlir_edsl::ArrayNode &node);
+  mlir::Value buildFromControlFlowNode(const mlir_edsl::ControlFlowNode &node);
+  mlir::Value buildFromFunctionNode(const mlir_edsl::FunctionNode &node);
+  mlir::Value buildFromBindingNode(const mlir_edsl::BindingNode &node);
+
+  // Scalar node handlers
+  mlir::Value handleConstant(const mlir_edsl::Constant &constant);
+  mlir::Value handleBinaryOp(const mlir_edsl::BinaryOp &op);
+  mlir::Value handleCompareOp(const mlir_edsl::CompareOp &op);
+  mlir::Value handleCastOp(const mlir_edsl::CastOp &op);
+
+  // Control flow node handlers
+  mlir::Value handleIfOp(const mlir_edsl::IfOp &op);
+
+  // Function node handlers
+  mlir::Value handleParameter(const mlir_edsl::Parameter &param);
+  mlir::Value handleCallOp(const mlir_edsl::CallOp &op);
+
+  // Binding node handlers
+  mlir::Value handleLetBinding(const mlir_edsl::LetBinding &binding);
+  mlir::Value handleValueRef(const mlir_edsl::ValueReference &ref);
+
+  // Dialect builders
+  std::unique_ptr<mlir_edsl::ArithBuilder> arithBuilder;
+  std::unique_ptr<mlir_edsl::SCFBuilder> scfBuilder;
+  std::unique_ptr<mlir_edsl::MemRefBuilder> memrefBuilder;
 
   std::unordered_map<std::string, mlir::Value> parameterMap;
   std::unordered_map<std::string, mlir::func::FuncOp> functionTable;

@@ -1,27 +1,38 @@
 """C++ MLIR backend integration"""
 import ctypes
 from typing import Union
-from .ast import Value
-from .types import TYPE_TO_CTYPES
+from .types import Type, ScalarType
+
 
 try:
     from . import _mlir_backend
-    HAS_CPP_BACKEND = True
 except ImportError:
-    HAS_CPP_BACKEND = False
+    _mlir_backend = None
 
 try:
     from . import ast_pb2
-    HAS_PROTOBUF = True
 except ImportError:
-    HAS_PROTOBUF = False
     ast_pb2 = None
 
-# Global instance to keep the builder alive
+HAS_CPP_BACKEND = _mlir_backend is not None
+HAS_PROTOBUF = ast_pb2 is not None
+
+TYPE_TO_CTYPES = {
+    ScalarType.I32: ctypes.c_int32,
+    ScalarType.F32: ctypes.c_float,
+    ScalarType.I1: ctypes.c_bool,
+}
+
 _global_builder = None
 
+
 class CppMLIRBackend:
-    """Schema-driven Python wrapper for C++ MLIR builder with ctypes execution"""
+    """Schema-driven Python wrapper for C++ MLIR builder with ctypes execution.
+
+    Two-phase compilation model:
+    1. Definition phase: compile functions to MLIR, register signatures
+    2. Execution phase: JIT compile module on first execute, then run from cache
+    """
 
     def __init__(self):
         if not HAS_CPP_BACKEND:
@@ -31,92 +42,114 @@ class CppMLIRBackend:
         self.builder.initialize_module()
         self.executor = _mlir_backend.MLIRExecutor()
         self.executor.initialize()
-
-        # Set default optimization level (O2 = balanced performance)
         self.executor.set_optimization_level(2)
 
-        # Cache for ctypes function wrappers
-        self._function_cache = {}
+    # ==================== COMPILATION HELPERS (PRIVATE) ====================
+    def _build_function_def_proto(self, name: str, params: list,
+                                   return_type: Type, ast_node) -> bytes:
+        """Build and serialize FunctionDef protobuf."""
+        func_def = ast_pb2.FunctionDef()
+        func_def.name = name
 
-    # ==================== CORE COMPILATION ====================
+        for param_name, param_type in params:
+            param = func_def.params.add()
+            param.name = param_name
+            param.type.CopyFrom(param_type.to_proto())
+
+        func_def.return_type.CopyFrom(return_type.to_proto())
+        func_def.body.CopyFrom(ast_node.to_proto_with_reuse())
+
+        return func_def.SerializeToString()
+
+    def _build_signature_proto(self, name: str, params: list,
+                                return_type: Type) -> bytes:
+        """Build and serialize FunctionSignature protobuf."""
+        sig = ast_pb2.FunctionSignature()
+        sig.name = name
+
+        for _, param_type in params:
+            sig.param_types.append(param_type.to_proto())
+
+        sig.return_type.CopyFrom(return_type.to_proto())
+
+        return sig.SerializeToString()
+
+    # ==================== CORE COMPILATION (DEFINITION PHASE) ====================
     def compile_function_from_ast(self, name: str, params: list,
-                                   return_type: int, ast_node: Value) -> None:
-        """Compile complete function from AST - single protobuf entry point
+                                   return_type: Type, ast_node) -> None:
+        """Compile function from AST (definition phase).
 
-        Args:
-            name: Function name
-            params: List of (param_name, ValueType_enum) tuples using ast_pb2 enums
-            return_type: ValueType enum (ast_pb2.I32/F32/I1)
-            ast_node: Root AST node to compile
+        Adds function to MLIR module and registers signature.
+        Invalidates JIT cache if previously finalized.
         """
         if not HAS_PROTOBUF:
             raise RuntimeError("Protobuf not available. Run ./build.sh")
 
-        # Build complete FunctionDef protobuf message
-        func_def = ast_pb2.FunctionDef()
-        func_def.name = name
-        func_def.return_type = return_type  # Direct enum assignment!
+        # Adding a new function invalidates existing JIT
+        if not self.executor.is_jit_empty():
+            self.executor.clear_jit()
 
-        # Add parameters with enum types
-        for param_name, param_type in params:
-            param = func_def.params.add()
-            param.name = param_name
-            param.type = param_type  # Direct enum assignment!
+        # Build and compile function definition
+        func_def_bytes = self._build_function_def_proto(name, params, return_type, ast_node)
+        self.builder.compile_function(func_def_bytes)
 
-        # Add function body (with SSA value reuse detection)
-        func_def.body.CopyFrom(ast_node.to_proto_with_reuse())
-
-        # Serialize and compile (returns FunctionSignature protobuf)
-        func_def_bytes = func_def.SerializeToString()
-        sig_bytes = self.builder.compile_function(func_def_bytes)
-
-        # Register signature with executor
+        # Register signature (persists across JIT clears)
+        sig_bytes = self._build_signature_proto(name, params, return_type)
         self.executor.register_function_signature(sig_bytes)
 
-    def execute_function(self, name: str, *args) -> Union[int, float, bool]:
-        """Execute compiled function via JIT with ctypes
+    # ==================== FINALIZATION ====================
+    def _ensure_finalized(self) -> None:
+        """Ensure JIT compilation is done. Called automatically on first execute."""
+        if not self.executor.is_jit_empty():
+            return  # Already finalized
 
-        Args:
-            name: Function name to execute
-            *args: Arguments in declaration order
+        llvm_ir = self.builder.get_llvm_ir_string()
+        if not self.executor.compile_module(llvm_ir):
+            raise RuntimeError(f"JIT compilation failed: {self.executor.get_last_error()}")
 
-        Returns:
-            Execution result (int, float, or bool)
+    def finalize(self) -> None:
+        """Explicitly JIT compile all functions.
+
+        Optional - happens automatically on first execute.
+        Useful for measuring compile time or warming up before benchmarks.
         """
-        # Build ctypes function wrapper (cached)
-        if name not in self._function_cache:
-            # Get signature BEFORE clearing (it was registered during compile_function_from_ast)
-            sig_bytes = self.executor.get_function_signature(name)
-            sig = ast_pb2.FunctionSignature()
-            sig.ParseFromString(sig_bytes)
+        self._ensure_finalized()
 
-            # Get LLVM IR and JIT compile
-            llvm_ir = self.builder.get_llvm_ir_string()
-            self.executor.clear()
+    # ==================== EXECUTION HELPERS (PRIVATE) ====================
+    def _typespec_to_ctype(self, type_spec, context: str) -> type:
+        """Convert protobuf TypeSpec to ctypes type."""
+        if type_spec.HasField('scalar'):
+            return TYPE_TO_CTYPES[type_spec.scalar.kind]
+        elif type_spec.HasField('memref'):
+            raise RuntimeError(f"Array types not supported for {context} in JIT execution")
+        else:
+            raise RuntimeError(f"Unknown type specification for {context}")
 
-            func_ptr = self.executor.compile_function(llvm_ir, name)
-            if func_ptr is None:
-                raise RuntimeError(f"JIT compilation failed: {self.executor.get_last_error()}")
+    def _build_ctypes_wrapper(self, func_ptr: int, sig) -> ctypes.CFUNCTYPE:
+        """Build ctypes function wrapper from signature."""
+        c_return_type = self._typespec_to_ctype(sig.return_type, "return type")
 
-            # Re-register signature (it was cleared by clear())
-            self.executor.register_function_signature(sig_bytes)
+        c_param_types = []
+        for i, pt in enumerate(sig.param_types):
+            c_param_types.append(self._typespec_to_ctype(pt, f"parameter {i}"))
 
-            # Get function pointer as integer
-            func_ptr_int = self.executor.get_function_pointer(name)
+        func_type = ctypes.CFUNCTYPE(c_return_type, *c_param_types)
+        return func_type(func_ptr)
 
-            # Build ctypes function signature
-            c_return_type = TYPE_TO_CTYPES[sig.return_type]
-            c_param_types = [TYPE_TO_CTYPES[pt] for pt in sig.param_types]
+    # ==================== JIT EXECUTION ====================
+    def execute_function(self, name: str, *args) -> Union[int, float, bool]:
+        """Execute compiled function via JIT with ctypes."""
+        # Auto-finalize on first execute
+        self._ensure_finalized()
 
-            # Create ctypes function wrapper
-            func_type = ctypes.CFUNCTYPE(c_return_type, *c_param_types)
-            ctypes_func = func_type(func_ptr_int)
+        # Get signature and build wrapper
+        sig_bytes = self.executor.get_function_signature(name)
+        sig = ast_pb2.FunctionSignature()
+        sig.ParseFromString(sig_bytes)
 
-            # Cache it
-            self._function_cache[name] = ctypes_func
-
-        # Call the cached function
-        return self._function_cache[name](*args)
+        func_ptr = self.executor.get_function_pointer(name)
+        wrapper = self._build_ctypes_wrapper(func_ptr, sig)
+        return wrapper(*args)
 
     # ==================== INSPECTION ====================
     def get_mlir_string(self) -> str:
@@ -137,24 +170,20 @@ class CppMLIRBackend:
         return self.builder.list_functions()
 
     def clear_module(self):
-        """Clear all functions from module"""
+        """Clear all functions and reset completely."""
         self.builder.clear_module()
-        self._function_cache.clear()
+        self.executor.clear_all()
 
     def set_optimization_level(self, level: int):
-        """Set LLVM optimization level
+        """Set LLVM optimization level.
 
-        Args:
-            level: Optimization level (0=O0/none, 2=O2/default, 3=O3/aggressive)
-
-        Note:
-            Clears the function cache since optimization level affects compilation.
-            Cached functions will be recompiled with new optimization level on next call.
+        Invalidates JIT - will recompile on next execute.
         """
         if level not in [0, 2, 3]:
             raise ValueError(f"Invalid optimization level {level}. Must be 0, 2, or 3.")
         self.executor.set_optimization_level(level)
-        self._function_cache.clear()
+        self.executor.clear_jit()  # Signatures persist, just recompile
+
 
 def get_backend():
     """Get the appropriate backend (C++ if available)"""

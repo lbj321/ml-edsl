@@ -1,16 +1,55 @@
-// Protocol Buffers schema for MLIR EDSL AST
+// Protocol Buffers schema for MLIR EDSL AST - NEW ALGEBRAIC TYPE SYSTEM
 // Serialization between Python frontend and C++ backend
 
 syntax = "proto3";
 
 package mlir_edsl;
 
-// Value types supported in the EDSL
-enum ValueType {
-  I32 = 0;
-  F32 = 1;
-  I1 = 2;
+// ============================================================================
+// NEW ALGEBRAIC TYPE SYSTEM
+// ============================================================================
+
+// Unified type specification - algebraic and compositional
+message TypeSpec {
+  oneof type_kind {
+    ScalarTypeSpec scalar = 1;
+    MemRefTypeSpec memref = 2;
+    // Future extensions:
+    // TensorTypeSpec tensor = 3;
+    // TupleTypeSpec tuple = 4;
+    // ComplexTypeSpec complex = 5;
+  }
 }
+
+// Scalar type specification
+message ScalarTypeSpec {
+  enum Kind {
+    I32 = 0;  // 32-bit signed integer
+    F32 = 1;  // 32-bit float
+    I1 = 2;   // Boolean (1-bit integer)
+    INDEX = 3; // MLIR index type (for array indexing)
+    // Future extensions:
+    // I64 = 4;
+    // F64 = 5;
+    // I8 = 6;
+    // I16 = 7;
+  }
+  Kind kind = 1;
+}
+
+// MemRef type specification (fixed-size arrays)
+message MemRefTypeSpec {
+  repeated int64 shape = 1;        // Shape: [4] for 1D, [2,3] for 2D, [2,3,4] for 3D
+  TypeSpec element_type = 2;       // Element type (RECURSIVE - can be any TypeSpec!)
+
+  // Future extensions for advanced memref features:
+  // MemRefLayout layout = 3;      // Strided layouts, affine maps
+  // MemorySpace memory_space = 4; // GPU global, shared, etc.
+}
+
+// ============================================================================
+// OPERATION ENUMS (Unchanged)
+// ============================================================================
 
 // Binary operations
 enum BinaryOpType {
@@ -18,6 +57,13 @@ enum BinaryOpType {
   SUB = 1;
   MUL = 2;
   DIV = 3;
+}
+
+// Broadcast modes for array-scalar operations
+enum BroadcastMode {
+  NONE = 0;          // Both operands are arrays (same shape)
+  SCALAR_LEFT = 1;   // Left operand is scalar, right is array
+  SCALAR_RIGHT = 2;  // Left operand is array, right is scalar
 }
 
 // Comparison predicates
@@ -55,44 +101,91 @@ enum ComparisonPredicate {
   UNE = 21; // Unordered not equal
 }
 
-// Main AST node container
+// ============================================================================
+// AST NODE DEFINITIONS (Updated to use TypeSpec)
+// ============================================================================
+
+// Main AST node container - hierarchical for scalability
 message ASTNode {
-  oneof value_data {
-    Constant constant = 1;
-    Parameter parameter = 2;
-    BinaryOp binary_op = 3;
-    CompareOp compare_op = 4;
-    IfOp if_op = 5;
-    CallOp call_op = 6;
-    ForLoopOp for_loop_op = 7;
-    WhileLoopOp while_loop_op = 8;
-    CastOp cast_op = 9;
-    LetBinding let_binding = 10;
-    ValueReference value_ref = 11;
+  oneof node {
+    ScalarNode scalar = 1;
+    ArrayNode array = 2;
+    ControlFlowNode control_flow = 3;
+    FunctionNode function = 4;
+    BindingNode binding = 5;
   }
 }
 
-// Constant value (integer or float)
-message Constant {
-  int32 int_value = 1;
-  float float_value = 2;
-  ValueType value_type = 3;
+// Scalar operations (constants, arithmetic, comparisons, casts)
+message ScalarNode {
+  oneof value {
+    Constant constant = 1;
+    BinaryOp binary_op = 2;
+    CompareOp compare_op = 3;
+    CastOp cast_op = 4;
+  }
 }
 
-// Named parameter with value
+// Array/MemRef operations
+message ArrayNode {
+  oneof value {
+    ArrayLiteral literal = 1;
+    ArrayAccess access = 2;
+    ArrayStore store = 3;
+    ArrayBinaryOp binary_op = 4;
+  }
+}
+
+// Control flow operations
+message ControlFlowNode {
+  oneof value {
+    IfOp if_op = 1;
+    ForLoopOp for_loop = 2;
+  }
+}
+
+// Function-related operations
+message FunctionNode {
+  oneof value {
+    Parameter parameter = 1;
+    CallOp call = 2;
+  }
+}
+
+// SSA value binding operations
+message BindingNode {
+  oneof value {
+    LetBinding let = 1;
+    ValueReference ref = 2;
+  }
+}
+
+// ============================================================================
+// SCALAR OPERATIONS
+// ============================================================================
+
+// Constant value (integer, float, or boolean)
+message Constant {
+  oneof value {
+    int32 int_value = 1;
+    float float_value = 2;
+    bool bool_value = 3;
+  }
+  TypeSpec type = 4;  // Type specification (ScalarTypeSpec)
+}
+
+// Function parameter
 message Parameter {
   string name = 1;
-  int32 int_value = 2;
-  float float_value = 3;
-  ValueType value_type = 4;
+  TypeSpec type = 2;  // Parameter type (ScalarTypeSpec for Phase 7A)
 }
 
 // Binary operation (add, sub, mul, div)
 message BinaryOp {
   BinaryOpType op_type = 1;
-  ASTNode left = 2;   // Nested node
-  ASTNode right = 3;  // Nested node
-  ValueType result_type = 4;  // Result type after type promotion (set by Python)
+  ASTNode left = 2;
+  ASTNode right = 3;
+  TypeSpec result_type = 4;  // Result type after type checking
 }
 
 // Comparison operation
@@ -100,7 +193,7 @@ message CompareOp {
   ComparisonPredicate predicate = 1;
   ASTNode left = 2;
   ASTNode right = 3;
-  ValueType operand_type = 4;  // Operand type after promotion (set by Python)
+  TypeSpec operand_type = 4;  // Operand type after type checking
 }
 
 // Conditional operation (if-then-else)
@@ -108,15 +201,19 @@ message IfOp {
   ASTNode condition = 1;
   ASTNode then_value = 2;
   ASTNode else_value = 3;
-  ValueType result_type = 4;  // Result type (set by Python after branch validation)
+  TypeSpec result_type = 4;  // Result type (validated by Python)
 }
 
-// Function call operation
-message CallOp {
-  string func_name = 1;
-  repeated ASTNode args = 2;  // Array of argument nodes
-  ValueType return_type = 3;  // Required: Specifies function return type
+// Cast operation (explicit type conversion)
+message CastOp {
+  ASTNode value = 1;
+  TypeSpec source_type = 2;  // Source type
+  TypeSpec target_type = 3;  // Target type
 }
+
+// ============================================================================
+// CONTROL FLOW
+// ============================================================================
 
 // For loop operation (scf.for)
 message ForLoopOp {
@@ -125,23 +222,57 @@ message ForLoopOp {
   ASTNode step = 3;           // Loop step/increment
   ASTNode init_value = 4;     // Initial accumulator value
   BinaryOpType operation = 5; // Loop body operation
-  ValueType result_type = 6;  // Result type (set by Python, all inputs must match)
+  TypeSpec result_type = 6;   // Result type (validated by Python)
 }
 
-// While loop operation (scf.while)
-message WhileLoopOp {
-  ASTNode init_value = 1;          // Initial loop value
-  ASTNode target = 2;              // Comparison target value
-  BinaryOpType operation = 3;      // Loop body operation
-  ComparisonPredicate predicate = 4; // Comparison predicate enum
-  ValueType result_type = 5;       // Result type (set by Python, init_value and target must match)
+// ============================================================================
+// ARRAYS (MemRef)
+// ============================================================================
+
+// Array literal creation: Array[4, i32]([1, 2, 3, 4])
+message ArrayLiteral {
+  TypeSpec type = 1;              // Array type (MemRefTypeSpec)
+  repeated ASTNode elements = 2;  // Array elements
 }
 
-// Cast operation (explicit type conversion)
-message CastOp {
-  ASTNode value = 1;          // Value to cast
-  ValueType target_type = 2;  // Target type to cast to
+// Array element access: arr[i] or arr[i,j] or arr[i,j,k]
+message ArrayAccess {
+  ASTNode array = 1;              // Array to index into
+  repeated ASTNode indices = 2;   // Index values (must be i32)
+  TypeSpec result_type = 3;       // Element type (ScalarTypeSpec)
 }
+
+// Array element store: arr.at[i].set(v) or arr.at[i,j].set(v)
+message ArrayStore {
+  ASTNode array = 1;              // Array to store into
+  repeated ASTNode indices = 2;   // Index values (must be i32)
+  ASTNode value = 3;              // Value to store
+  TypeSpec result_type = 4;       // Result array type (MemRefTypeSpec)
+}
+
+// Element-wise binary operation on arrays
+message ArrayBinaryOp {
+  BinaryOpType op_type = 1;       // ADD, SUB, MUL, DIV
+  ASTNode left = 2;               // Left operand (array or scalar)
+  ASTNode right = 3;              // Right operand (array or scalar)
+  TypeSpec result_type = 4;       // Result type (MemRefTypeSpec)
+  BroadcastMode broadcast = 5;    // Broadcasting mode
+}
+
+// ============================================================================
+// FUNCTION OPERATIONS
+// ============================================================================
+
+// Function call operation
+message CallOp {
+  string func_name = 1;
+  repeated ASTNode args = 2;  // Function arguments
+  TypeSpec return_type = 3;   // Return type specification
+}
+
+// ============================================================================
+// SSA VALUE REUSE
+// ============================================================================
 
 // Let binding for SSA value reuse (marks first use of a shared value)
 message LetBinding {
@@ -154,6 +285,10 @@ message ValueReference {
   int64 node_id = 1;  // Reference to a let-bound value
 }
 
+// ============================================================================
+// TOP-LEVEL STRUCTURES
+// ============================================================================
+
 // Root message for the entire AST
 message ASTRoot {
   ASTNode root = 1;  // Root node of the expression tree
@@ -162,20 +297,20 @@ message ASTRoot {
 // Function parameter definition
 message FunctionParameter {
   string name = 1;
-  ValueType type = 2;
+  TypeSpec type = 2;  // Parameter type
 }
 
 // Complete function definition (name, signature, body)
 message FunctionDef {
-  string name = 1;                    // Function name
-  repeated FunctionParameter params = 2;  // Function parameters
-  ValueType return_type = 3;          // Return type
-  ASTNode body = 4;                   // Function body AST
+  string name = 1;                       // Function name
+  repeated FunctionParameter params = 2; // Function parameters
+  TypeSpec return_type = 3;              // Return type specification
+  ASTNode body = 4;                      // Function body AST
 }
 
 // Function signature (lightweight version for executor registration)
 message FunctionSignature {
   string name = 1;                    // Function name
-  repeated ValueType param_types = 2; // Parameter types (just enums)
-  ValueType return_type = 3;          // Return type
+  repeated TypeSpec param_types = 2;  // Parameter types
+  TypeSpec return_type = 3;           // Return type
 }
