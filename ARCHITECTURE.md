@@ -159,19 +159,28 @@ The two sides communicate through **protobuf** and **function pointers**:
 ```mermaid
 flowchart LR
     subgraph Python
-        A[AST nodes] -->|"FunctionDef.SerializeToString()"| B[protobuf bytes]
-        E[ctypes wrapper] -->|"call native fn"| F[Python result]
+        A[AST nodes] -->|"SerializeToString()"| B[protobuf bytes]
+        B --> C
+        D -->|"get_llvm_ir_string()"| E[LLVM IR string]
+        E --> F
+        G -->|"get_function_pointer()"| H["uintptr_t"]
+        H --> I[ctypes wrapper]
+        I -->|"call native fn"| J[Python result]
     end
     subgraph C++
-        B -->|"ParseFromString()"| C[MLIRBuilder]
-        C --> D[MLIRExecutor]
-        D -->|"uintptr_t"| E
+        C -->|"ParseFromString()"| D[MLIRBuilder]
+        F -->|"compile_module()"| G[MLIRExecutor]
     end
 ```
 
-- **Python → C++**: Serialized `FunctionDef` protobuf bytes sent via pybind11
-- **C++ → Python**: Function pointers returned as `uintptr_t`, called via `ctypes.CFUNCTYPE`
-- **Schema**: `cpp/schemas/ast.proto` is the single source of truth for the AST node types, operation enums, and type definitions
+Python orchestrates both C++ objects. It does not hand off control — it mediates every step:
+
+1. **Python → MLIRBuilder**: Serialized `FunctionDef` protobuf bytes sent via pybind11
+2. **MLIRBuilder → Python**: LLVM IR returned as a string via `get_llvm_ir_string()`
+3. **Python → MLIRExecutor**: LLVM IR string passed to `compile_module()`
+4. **MLIRExecutor → Python**: Function pointer returned as `uintptr_t`, called via `ctypes.CFUNCTYPE`
+
+The protobuf schema (`cpp/schemas/ast.proto`) is the single source of truth for AST node types, operation enums, and type definitions.
 
 ## Type System
 
