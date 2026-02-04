@@ -154,33 +154,28 @@ module {
 
 ## Python/C++ Boundary
 
-The two sides communicate through **protobuf** and **function pointers**:
+Python orchestrates both C++ objects, mediating every step:
 
 ```mermaid
-flowchart LR
-    subgraph Python
-        A[AST nodes] -->|"SerializeToString()"| B[protobuf bytes]
-        B --> C
-        D -->|"get_llvm_ir_string()"| E[LLVM IR string]
-        E --> F
-        G -->|"get_function_pointer()"| H["uintptr_t"]
-        H --> I[ctypes wrapper]
-        I -->|"call native fn"| J[Python result]
-    end
-    subgraph C++
-        C -->|"ParseFromString()"| D[MLIRBuilder]
-        F -->|"compile_module()"| G[MLIRExecutor]
-    end
+sequenceDiagram
+    participant P as Python (CppMLIRBackend)
+    participant B as C++ MLIRBuilder
+    participant E as C++ MLIRExecutor
+
+    P->>B: compile_function(protobuf bytes)
+    B-->>B: parse protobuf → generate MLIR → lower
+    P->>B: get_llvm_ir_string()
+    B-->>P: LLVM IR string
+    P->>E: compile_module(LLVM IR string)
+    E-->>E: JIT compile to native code
+    P->>E: get_function_pointer("factorial")
+    E-->>P: uintptr_t
+    P-->>P: ctypes.CFUNCTYPE(ptr) → call → result
 ```
 
-Python orchestrates both C++ objects. It does not hand off control — it mediates every step:
-
-1. **Python → MLIRBuilder**: Serialized `FunctionDef` protobuf bytes sent via pybind11
-2. **MLIRBuilder → Python**: LLVM IR returned as a string via `get_llvm_ir_string()`
-3. **Python → MLIRExecutor**: LLVM IR string passed to `compile_module()`
-4. **MLIRExecutor → Python**: Function pointer returned as `uintptr_t`, called via `ctypes.CFUNCTYPE`
-
-The protobuf schema (`cpp/schemas/ast.proto`) is the single source of truth for AST node types, operation enums, and type definitions.
+- **Serialization format**: Protobuf (`FunctionDef.SerializeToString()` / `ParseFromString()`)
+- **Execution format**: Function pointers returned as `uintptr_t`, called via `ctypes.CFUNCTYPE`
+- **Schema**: `cpp/schemas/ast.proto` is the single source of truth for AST node types, operation enums, and type definitions
 
 ## Type System
 
