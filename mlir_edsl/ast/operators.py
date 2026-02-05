@@ -82,7 +82,11 @@ class OperatorMixin:
 
     # Array subscript operators
     def __getitem__(self, index):
-        """Enable arr[i] syntax for array element reads"""
+        """Enable arr[i] / tensor[i] syntax for element reads"""
+        from ..types import TensorType
+        if isinstance(self.infer_type(), TensorType):
+            from .nodes.tensors import TensorExtract
+            return TensorExtract(self, index)
         from .nodes.arrays import ArrayAccess
         return ArrayAccess(self, index)
 

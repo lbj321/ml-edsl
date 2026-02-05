@@ -14,8 +14,8 @@ message TypeSpec {
   oneof type_kind {
     ScalarTypeSpec scalar = 1;
     MemRefTypeSpec memref = 2;
+    TensorTypeSpec tensor = 3;
     // Future extensions:
-    // TensorTypeSpec tensor = 3;
     // TupleTypeSpec tuple = 4;
     // ComplexTypeSpec complex = 5;
   }
@@ -45,6 +45,12 @@ message MemRefTypeSpec {
   // Future extensions for advanced memref features:
   // MemRefLayout layout = 3;      // Strided layouts, affine maps
   // MemorySpace memory_space = 4; // GPU global, shared, etc.
+}
+
+// Tensor type specification (value-semantic, immutable)
+message TensorTypeSpec {
+  repeated int64 shape = 1;        // Shape: [4] for 1D, [2,3] for 2D
+  TypeSpec element_type = 2;       // Element type
 }
 
 // ============================================================================
@@ -113,6 +119,7 @@ message ASTNode {
     ControlFlowNode control_flow = 3;
     FunctionNode function = 4;
     BindingNode binding = 5;
+    TensorNode tensor = 6;
   }
 }
 
@@ -133,6 +140,16 @@ message ArrayNode {
     ArrayAccess access = 2;
     ArrayStore store = 3;
     ArrayBinaryOp binary_op = 4;
+  }
+}
+
+// Tensor operations (value-semantic)
+message TensorNode {
+  oneof value {
+    TensorFromElements from_elements = 1;
+    TensorExtract extract = 2;
+    // Future: TensorInsert insert = 3;
+    // Future: TensorBinaryOp binary_op = 4;
   }
 }
 
@@ -257,6 +274,23 @@ message ArrayBinaryOp {
   ASTNode right = 3;              // Right operand (array or scalar)
   TypeSpec result_type = 4;       // Result type (MemRefTypeSpec)
   BroadcastMode broadcast = 5;    // Broadcasting mode
+}
+
+// ============================================================================
+// TENSORS (Value-semantic)
+// ============================================================================
+
+// Create tensor from scalar elements: tensor.from_elements
+message TensorFromElements {
+  TypeSpec type = 1;                // Tensor type (TensorTypeSpec)
+  repeated ASTNode elements = 2;   // Scalar elements
+}
+
+// Extract scalar from tensor: tensor.extract
+message TensorExtract {
+  ASTNode tensor = 1;              // Tensor to extract from
+  repeated ASTNode indices = 2;    // Index values
+  TypeSpec result_type = 3;        // Element type (ScalarTypeSpec)
 }
 
 // ============================================================================
