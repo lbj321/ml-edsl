@@ -2,12 +2,14 @@
 #include "mlir_edsl/ArithBuilder.h"
 #include "mlir_edsl/SCFBuilder.h"
 #include "mlir_edsl/MemRefBuilder.h"
+#include "mlir_edsl/TensorBuilder.h"
 
 #include "ast.pb.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OperationSupport.h"
@@ -29,6 +31,7 @@ MLIRBuilder::MLIRBuilder() {
   context->getOrLoadDialect<mlir::func::FuncDialect>();
   context->getOrLoadDialect<mlir::scf::SCFDialect>();
   context->getOrLoadDialect<mlir::memref::MemRefDialect>();
+  context->getOrLoadDialect<mlir::tensor::TensorDialect>();
 
   builder = std::make_unique<mlir::OpBuilder>(context.get());
 
@@ -36,6 +39,7 @@ MLIRBuilder::MLIRBuilder() {
   arithBuilder = std::make_unique<mlir_edsl::ArithBuilder>(*builder);
   scfBuilder = std::make_unique<mlir_edsl::SCFBuilder>(*builder);
   memrefBuilder = std::make_unique<mlir_edsl::MemRefBuilder>(*builder, context.get(), this, arithBuilder.get(), scfBuilder.get());
+  tensorBuilder = std::make_unique<mlir_edsl::TensorBuilder>(*builder, context.get(), this);
 }
 
 MLIRBuilder::~MLIRBuilder() = default;
@@ -56,6 +60,8 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
       return buildFromControlFlowNode(node.control_flow());
     case mlir_edsl::ASTNode::kFunction:
       return buildFromFunctionNode(node.function());
+    case mlir_edsl::ASTNode::kTensor:
+      return buildFromTensorNode(node.tensor());
     case mlir_edsl::ASTNode::kBinding:
       return buildFromBindingNode(node.binding());
     default:
@@ -90,6 +96,17 @@ mlir::Value MLIRBuilder::buildFromArrayNode(const mlir_edsl::ArrayNode &node) {
       return memrefBuilder->buildArrayBinaryOp(node.binary_op());
     default:
       throw std::runtime_error("Unknown array node type");
+  }
+}
+
+mlir::Value MLIRBuilder::buildFromTensorNode(const mlir_edsl::TensorNode &node) {
+  switch (node.value_case()) {
+    case mlir_edsl::TensorNode::kFromElements:
+      return tensorBuilder->buildFromElements(node.from_elements());
+    case mlir_edsl::TensorNode::kExtract:
+      return tensorBuilder->buildExtract(node.extract());
+    default:
+      throw std::runtime_error("Unknown tensor node type");
   }
 }
 
@@ -305,6 +322,9 @@ mlir::Type MLIRBuilder::convertType(const mlir_edsl::TypeSpec &typeSpec) const {
     case mlir_edsl::TypeSpec::kMemref:
       return convertMemRefType(typeSpec.memref());
 
+    case mlir_edsl::TypeSpec::kTensor:
+      return convertTensorType(typeSpec.tensor());
+
     case mlir_edsl::TypeSpec::TYPE_KIND_NOT_SET:
       throw std::runtime_error("TypeSpec has no type set");
 
@@ -352,6 +372,28 @@ mlir::Type MLIRBuilder::convertMemRefType(
 
   // Create memref type: memref<2x3xi32>
   return mlir::MemRefType::get(shape, elementType);
+}
+
+mlir::Type MLIRBuilder::convertTensorType(
+    const mlir_edsl::TensorTypeSpec &tensorSpec) const {
+
+  // Recursively convert element type
+  mlir::Type elementType = convertType(tensorSpec.element_type());
+
+  // Extract shape dimensions
+  llvm::SmallVector<int64_t> shape(
+      tensorSpec.shape().begin(),
+      tensorSpec.shape().end()
+  );
+
+  // Validate dimensions
+  if (shape.empty() || shape.size() > 3) {
+    throw std::runtime_error("Only 1D, 2D, and 3D tensors supported, got " +
+                             std::to_string(shape.size()) + "D");
+  }
+
+  // Create ranked tensor type: tensor<4xf32>
+  return mlir::RankedTensorType::get(shape, elementType);
 }
 
 // ==================== Infrastructure Utilities ====================

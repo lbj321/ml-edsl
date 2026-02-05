@@ -18,6 +18,7 @@ namespace mlir_edsl {
 class ArithBuilder;
 class SCFBuilder;
 class MemRefBuilder;
+class TensorBuilder;
 }
 
 // Forward declarations for protobuf classes
@@ -69,6 +70,7 @@ private:
   // Type conversion helpers (algebraic type system)
   mlir::Type convertScalarType(const mlir_edsl::ScalarTypeSpec &scalarSpec) const;
   mlir::Type convertMemRefType(const mlir_edsl::MemRefTypeSpec &memrefSpec) const;
+  mlir::Type convertTensorType(const mlir_edsl::TensorTypeSpec &tensorSpec) const;
 
   // Type validation helpers
   bool isValidParameterType(const mlir_edsl::TypeSpec &type) const;
@@ -94,6 +96,7 @@ private:
   mlir::Value buildFromArrayNode(const mlir_edsl::ArrayNode &node);
   mlir::Value buildFromControlFlowNode(const mlir_edsl::ControlFlowNode &node);
   mlir::Value buildFromFunctionNode(const mlir_edsl::FunctionNode &node);
+  mlir::Value buildFromTensorNode(const mlir_edsl::TensorNode &node);
   mlir::Value buildFromBindingNode(const mlir_edsl::BindingNode &node);
 
   // Scalar node handlers
@@ -117,6 +120,7 @@ private:
   std::unique_ptr<mlir_edsl::ArithBuilder> arithBuilder;
   std::unique_ptr<mlir_edsl::SCFBuilder> scfBuilder;
   std::unique_ptr<mlir_edsl::MemRefBuilder> memrefBuilder;
+  std::unique_ptr<mlir_edsl::TensorBuilder> tensorBuilder;
 
   std::unordered_map<std::string, mlir::Value> parameterMap;
   std::unordered_map<std::string, mlir::func::FuncOp> functionTable;

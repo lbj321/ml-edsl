@@ -13,12 +13,14 @@ class ArrayNode;
 class ControlFlowNode;
 class FunctionNode;
 class BindingNode;
+class TensorNode;
 class FunctionDef;
 
 // Type specifications
 class TypeSpec;
 class ScalarTypeSpec;
 class MemRefTypeSpec;
+class TensorTypeSpec;
 
 // Scalar operations
 class Constant;
@@ -33,6 +35,10 @@ class ForLoopOp;
 // Function operations
 class Parameter;
 class CallOp;
+
+// Tensor operations
+class TensorFromElements;
+class TensorExtract;
 
 // Binding operations
 class LetBinding;

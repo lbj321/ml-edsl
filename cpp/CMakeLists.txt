@@ -10,6 +10,7 @@ add_library(mlir_edsl_core STATIC
     src/builders/ArithBuilder.cpp
     src/builders/SCFBuilder.cpp
     src/builders/MemRefBuilder.cpp
+    src/builders/TensorBuilder.cpp
 )
 
 target_include_directories(mlir_edsl_core PUBLIC
