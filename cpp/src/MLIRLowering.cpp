@@ -15,6 +15,12 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
+#include "mlir/Dialect/Bufferization/Transforms/Passes.h"
+#include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
@@ -47,7 +53,16 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   context->getOrLoadDialect<mlir::memref::MemRefDialect>();
   context->getOrLoadDialect<mlir::scf::SCFDialect>();
   context->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
+  context->getOrLoadDialect<mlir::tensor::TensorDialect>();
+  context->getOrLoadDialect<mlir::bufferization::BufferizationDialect>();
   context->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+
+  // Register bufferizable op interfaces (tells one-shot-bufferize how to convert each op)
+  mlir::DialectRegistry registry;
+  mlir::arith::registerBufferizableOpInterfaceExternalModels(registry);
+  mlir::tensor::registerBufferizableOpInterfaceExternalModels(registry);
+  mlir::bufferization::func_ext::registerBufferizableOpInterfaceExternalModels(registry);
+  context->appendDialectRegistry(registry);
 
   // Register LLVM translation interfaces
   mlir::registerLLVMDialectTranslation(*context);
@@ -60,7 +75,10 @@ void MLIRLowering::setupLoweringPipeline() {
 }
 
 void MLIRLowering::addConversionPasses() {
-  // First lower SCF to ControlFlow dialect
+  // Bufferize tensor ops to memref ops
+  passManager.addPass(mlir::bufferization::createOneShotBufferizePass());
+
+  // Lower SCF to ControlFlow dialect
   passManager.addPass(mlir::createSCFToControlFlowPass());
 
   // Then lower everything to LLVM

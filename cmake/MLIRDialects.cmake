@@ -44,6 +44,9 @@ set(MLIR_MEMORY_LIBS
     MLIRTensorDialect
     MLIRLinalgDialect
     MLIRBufferizationDialect
+    MLIRBufferizationTransforms
+    MLIRTensorTransforms
+    MLIRArithTransforms
 )
 
 # Combine all current libraries

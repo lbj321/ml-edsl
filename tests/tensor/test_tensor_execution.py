@@ -1,0 +1,217 @@
+"""Test tensor execution end-to-end (Phase 7 - Tensor Dialect Steps 1-3)
+
+This test validates that tensor operations compile through the full pipeline:
+  Python AST → Protobuf → C++ MLIRBuilder → tensor dialect IR
+  → bufferization → memref → LLVM IR → JIT execution
+
+Tests cover:
+- tensor.from_elements + tensor.extract with i32 and f32
+- Multi-element tensors with various access patterns
+- Computed indices
+- 2D tensor creation and extraction
+- Tensor element reuse in arithmetic
+"""
+
+import pytest
+from mlir_edsl import ml_function, Tensor, i32, f32
+from mlir_edsl.backend import HAS_CPP_BACKEND
+from tests.test_base import MLIRTestBase
+
+
+# ==================== BASIC TENSOR EXTRACT ====================
+
+class TestTensorExtractExecution(MLIRTestBase):
+    """Test basic tensor.extract execution"""
+
+    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
+    def test_tensor_extract_f32(self):
+        """Test extracting f32 element from tensor"""
+        @ml_function
+        def tensor_extract_f32() -> f32:
+            t = Tensor[4, f32]([1.0, 2.0, 3.0, 4.0])
+            return t[2]
+
+        result = tensor_extract_f32()
+        assert abs(result - 3.0) < 0.001
+
+    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
+    def test_tensor_extract_i32(self):
+        """Test extracting i32 element from tensor"""
+        @ml_function
+        def tensor_extract_i32() -> i32:
+            t = Tensor[4, i32]([10, 20, 30, 40])
+            return t[2]
+
+        result = tensor_extract_i32()
+        assert result == 30
+
+    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
+    def test_tensor_extract_first_element(self):
+        """Test extracting first element (index 0)"""
+        @ml_function
+        def first_element() -> i32:
+            t = Tensor[3, i32]([100, 200, 300])
+            return t[0]
+
+        result = first_element()
+        assert result == 100
+
+    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
+    def test_tensor_extract_last_element(self):
+        """Test extracting last element"""
+        @ml_function
+        def last_element() -> i32:
+            t = Tensor[5, i32]([10, 20, 30, 40, 50])
+            return t[4]
+
+        result = last_element()
+        assert result == 50
+
+
+# ==================== TENSOR WITH ARITHMETIC ====================
+
+class TestTensorArithmeticExecution(MLIRTestBase):
+    """Test tensor extracts used in arithmetic expressions"""
+
+    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
+    def test_tensor_extract_add(self):
+        """Test adding two extracted tensor elements"""
+        @ml_function
+        def tensor_add() -> i32:
+            t = Tensor[4, i32]([10, 20, 30, 40])
+            return t[0] + t[3]
+
+        result = tensor_add()
+        assert result == 50  # 10 + 40
+
+    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
+    def test_tensor_extract_mul(self):
+        """Test multiplying two extracted tensor elements"""
+        @ml_function
+        def tensor_mul() -> i32:
+            t = Tensor[3, i32]([2, 3, 5])
+            return t[0] * t[2]
+
+        result = tensor_mul()
+        assert result == 10  # 2 * 5
+
+    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
+    def test_tensor_extract_float_arithmetic(self):
+        """Test float arithmetic with tensor extracts"""
+        @ml_function
+        def tensor_float_arith() -> f32:
+            t = Tensor[3, f32]([1.5, 2.5, 3.5])
+            return t[0] + t[1]
+
+        result = tensor_float_arith()
+        assert abs(result - 4.0) < 0.001  # 1.5 + 2.5
+
+
+# ==================== COMPUTED INDEX ====================
+
+class TestTensorComputedIndexExecution(MLIRTestBase):
+    """Test tensor access with computed indices"""
+
+    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
+    def test_tensor_computed_index(self):
+        """Test tensor access with index computed from arithmetic"""
+        @ml_function
+        def computed_index() -> i32:
+            t = Tensor[5, i32]([10, 20, 30, 40, 50])
+            idx = 1 + 2
+            return t[idx]
+
+        result = computed_index()
+        assert result == 40  # t[3]
+
+
+# ==================== MULTIPLE TENSORS ====================
+
+class TestMultipleTensorsExecution(MLIRTestBase):
+    """Test operations with multiple tensors"""
+
+    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
+    def test_two_tensors(self):
+        """Test extracting from two different tensors"""
+        @ml_function
+        def two_tensors() -> i32:
+            a = Tensor[3, i32]([10, 20, 30])
+            b = Tensor[3, i32]([1, 2, 3])
+            return a[1] + b[2]
+
+        result = two_tensors()
+        assert result == 23  # 20 + 3
+
+    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
+    def test_two_float_tensors(self):
+        """Test extracting from two f32 tensors"""
+        @ml_function
+        def two_float_tensors() -> f32:
+            a = Tensor[2, f32]([1.0, 2.0])
+            b = Tensor[2, f32]([10.0, 20.0])
+            return a[0] + b[1]
+
+        result = two_float_tensors()
+        assert abs(result - 21.0) < 0.001  # 1.0 + 20.0
+
+
+# ==================== 2D TENSOR ====================
+
+class TestTensor2DExecution(MLIRTestBase):
+    """Test 2D tensor creation and extraction"""
+
+    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
+    def test_2d_tensor_extract(self):
+        """Test extracting element from 2D tensor"""
+        @ml_function
+        def tensor_2d() -> i32:
+            t = Tensor[2, 3, i32]([[1, 2, 3],
+                                    [4, 5, 6]])
+            return t[1, 2]
+
+        result = tensor_2d()
+        assert result == 6
+
+    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
+    def test_2d_tensor_extract_origin(self):
+        """Test extracting element at [0,0] from 2D tensor"""
+        @ml_function
+        def tensor_2d_origin() -> i32:
+            t = Tensor[2, 3, i32]([[10, 20, 30],
+                                    [40, 50, 60]])
+            return t[0, 0]
+
+        result = tensor_2d_origin()
+        assert result == 10
+
+
+# ==================== SINGLE ELEMENT TENSOR ====================
+
+class TestTensorEdgeCasesExecution(MLIRTestBase):
+    """Test edge cases for tensor execution"""
+
+    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
+    def test_single_element_tensor(self):
+        """Test tensor with single element"""
+        @ml_function
+        def single_elem() -> i32:
+            t = Tensor[1, i32]([42])
+            return t[0]
+
+        result = single_elem()
+        assert result == 42
+
+    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
+    def test_tensor_same_element_twice(self):
+        """Test extracting same element twice in arithmetic"""
+        @ml_function
+        def same_twice() -> i32:
+            t = Tensor[3, i32]([5, 10, 15])
+            return t[1] + t[1]
+
+        result = same_twice()
+        assert result == 20  # 10 + 10
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
