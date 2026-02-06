@@ -34,6 +34,7 @@ set(MLIR_LLVM_LIBS
 set(MLIR_SCF_LIBS
     MLIRSCFDialect
     MLIRSCFToControlFlow
+    MLIRSCFTransforms
     MLIRControlFlowDialect
 )
 
