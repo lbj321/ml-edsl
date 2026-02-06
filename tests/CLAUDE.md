@@ -6,7 +6,6 @@ This file provides guidance to Claude Code when writing or updating tests in thi
 
 All tests in this project use a common base class (`MLIRTestBase`) that provides:
 - Automatic backend initialization and cleanup
-- Optional IR printing via `PRINT_IR=1` environment variable
 - Optional IR file output via `SAVE_IR=1` environment variable (saved to `ir_output/`)
 - Proper test isolation with `setup_method()` and `teardown_method()`
 
@@ -226,12 +225,6 @@ except TypeError as e:
 
 ## Environment Variables
 
-### PRINT_IR=1
-Print MLIR and LLVM IR to stdout after each test:
-```bash
-PRINT_IR=1 pytest tests/test_parameters.py -v
-```
-
 ### SAVE_IR=1
 Save MLIR and LLVM IR to files in `ir_output/`:
 ```bash
@@ -242,11 +235,6 @@ Output files:
 - `ir_output/<test_name>.mlir` - MLIR dialect
 - `ir_output/<test_name>.ll` - LLVM IR
 - `ir_output/<test_name>.html` - HTML with collapsible sections
-
-### Combined Usage
-```bash
-PRINT_IR=1 SAVE_IR=1 pytest tests/test_parameters.py -v
-```
 
 ## Test Organization Guidelines
 
@@ -376,5 +364,5 @@ python3 -m pytest tests/test_parameters.py::TestParameterFunctionality::test_bas
 
 ### Run with IR output
 ```bash
-PRINT_IR=1 python3 -m pytest tests/test_parameters.py -v
+SAVE_IR=1 python3 -m pytest tests/test_parameters.py -v
 ```

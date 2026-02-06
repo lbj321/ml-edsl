@@ -119,10 +119,7 @@ python3 -m pytest tests/test_parameters.py -v
 # Run single test
 python3 -m pytest tests/test_parameters.py::TestParameterFunctionality::test_basic_two_parameters -v
 
-# Run with IR output (for debugging)
-PRINT_IR=1 python3 -m pytest tests/test_parameters.py -v
-
-# Save IR to files in ir_output/
+# Save IR to files in ir_output/ (for debugging)
 SAVE_IR=1 python3 -m pytest tests/test_parameters.py -v
 ```
 
