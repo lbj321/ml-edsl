@@ -11,7 +11,7 @@ Phase 3: C++ MLIR Backend
 from .types import i32, f32, i1, Array, Tensor
 from .ops import add, sub, mul, div, lt, le, gt, ge, eq, ne, If, For, cast, call
 from .functions import ml_function
-from .ast import Value, Constant, BinaryOp, CastOp, ArrayLiteral, ArrayAccess, ArrayStore, TensorFromElements, TensorExtract
+from .ast import Value, Constant, BinaryOp, CastOp, ArrayLiteral, ArrayAccess, ArrayStore, TensorFromElements, TensorExtract, TensorInsert
 from . import ast_pb2
 
 # Binary operation constants (from protobuf schema)
@@ -85,4 +85,5 @@ __all__ = [
     "ArrayStore",
     "TensorFromElements",
     "TensorExtract",
+    "TensorInsert",
 ] + __all_cpp__

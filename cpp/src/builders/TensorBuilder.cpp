@@ -45,4 +45,25 @@ mlir::Value TensorBuilder::buildExtract(const TensorExtract &node) {
   return builder.create<mlir::tensor::ExtractOp>(loc, tensor, indices);
 }
 
+mlir::Value TensorBuilder::buildInsert(const TensorInsert &node) {
+  auto loc = builder.getUnknownLoc();
+
+  // 1. Build the tensor value FIRST (for SSA value reuse - LET before REF)
+  mlir::Value tensor = parent->buildFromProtobufNode(node.tensor());
+
+  // 2. Build index values
+  llvm::SmallVector<mlir::Value> indices;
+  for (int i = 0; i < node.indices_size(); ++i) {
+    mlir::Value indexRaw = parent->buildFromProtobufNode(node.indices(i));
+    mlir::Value index = parent->castToIndexType(indexRaw);
+    indices.push_back(index);
+  }
+
+  // 3. Build the scalar value to insert (may reference tensor via REF)
+  mlir::Value scalar = parent->buildFromProtobufNode(node.value());
+
+  // 4. Create tensor.insert op (returns NEW tensor)
+  return builder.create<mlir::tensor::InsertOp>(loc, scalar, tensor, indices);
+}
+
 } // namespace mlir_edsl

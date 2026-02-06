@@ -105,6 +105,8 @@ mlir::Value MLIRBuilder::buildFromTensorNode(const mlir_edsl::TensorNode &node) 
       return tensorBuilder->buildFromElements(node.from_elements());
     case mlir_edsl::TensorNode::kExtract:
       return tensorBuilder->buildExtract(node.extract());
+    case mlir_edsl::TensorNode::kInsert:
+      return tensorBuilder->buildInsert(node.insert());
     default:
       throw std::runtime_error("Unknown tensor node type");
   }

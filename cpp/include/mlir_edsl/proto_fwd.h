@@ -39,6 +39,7 @@ class CallOp;
 // Tensor operations
 class TensorFromElements;
 class TensorExtract;
+class TensorInsert;
 
 // Binding operations
 class LetBinding;

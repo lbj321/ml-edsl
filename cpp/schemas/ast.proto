@@ -148,7 +148,7 @@ message TensorNode {
   oneof value {
     TensorFromElements from_elements = 1;
     TensorExtract extract = 2;
-    // Future: TensorInsert insert = 3;
+    TensorInsert insert = 3;
     // Future: TensorBinaryOp binary_op = 4;
   }
 }
@@ -291,6 +291,14 @@ message TensorExtract {
   ASTNode tensor = 1;              // Tensor to extract from
   repeated ASTNode indices = 2;    // Index values
   TypeSpec result_type = 3;        // Element type (ScalarTypeSpec)
+}
+
+// Insert scalar into tensor: tensor.insert (returns NEW tensor)
+message TensorInsert {
+  ASTNode tensor = 1;              // Tensor to insert into
+  repeated ASTNode indices = 2;    // Index values
+  ASTNode value = 3;               // Value to insert
+  TypeSpec result_type = 4;        // Result tensor type (TensorTypeSpec)
 }
 
 // ============================================================================

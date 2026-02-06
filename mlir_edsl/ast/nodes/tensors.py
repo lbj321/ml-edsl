@@ -195,3 +195,87 @@ class TensorExtract(Value):
             self._tensor_type.element_type.to_proto()
         )
         return pb_node
+
+
+class TensorInsert(Value):
+    """Insert scalar into tensor, returning a NEW tensor.
+
+    Maps to MLIR tensor.insert op (value-semantic, immutable).
+
+    Compile-time type checking:
+    - Tensor must be TensorType
+    - Index count must match tensor dimensions
+    - Indices must be i32
+    - Value type must match tensor element type exactly
+    - Result is a NEW tensor with same type
+
+    Example:
+        t = Tensor[4, i32]([1, 2, 3, 4])
+        t = t.at[1].set(99)  # Returns NEW tensor [1, 99, 3, 4]
+    """
+
+    def __init__(self, tensor: Value, index, value):
+        super().__init__()
+        self.tensor = tensor
+        self.indices = _normalize_indices(index)
+        self.value = _to_scalar_node(value)
+
+        # COMPILE-TIME TYPE CHECKING
+        self._validate_types()
+
+    def _validate_types(self):
+        """Validate tensor insert is type-safe."""
+        tensor_type = self.tensor.infer_type()
+        if not isinstance(tensor_type, TensorType):
+            raise TypeError(
+                f"Cannot use .at[].set() on non-tensor type. "
+                f"Expected tensor, got {tensor_type}"
+            )
+
+        # Check that number of indices matches tensor dimensions
+        if len(self.indices) != tensor_type.ndim:
+            raise TypeError(
+                f"Tensor dimension mismatch: {tensor_type.ndim}D tensor requires "
+                f"{tensor_type.ndim} indices, got {len(self.indices)}. "
+                f"Usage: t.at[i].set(v) for 1D, t.at[i,j].set(v) for 2D"
+            )
+
+        # Check that all indices are i32
+        for i, idx in enumerate(self.indices):
+            idx_type = idx.infer_type()
+            if not (isinstance(idx_type, ScalarType) and idx_type.is_integer()):
+                raise TypeError(
+                    f"Tensor index {i} must be i32, got {idx_type}. "
+                    f"Use cast() to convert to i32."
+                )
+
+        # Check value type matches tensor element type (STRICT!)
+        expected_type = tensor_type.element_type
+        actual_type = self.value.infer_type()
+
+        if actual_type != expected_type:
+            raise TypeError(
+                f"Cannot insert {actual_type} into "
+                f"Tensor[..., {expected_type}]. "
+                f"Use cast() for explicit conversion."
+            )
+
+        # Store tensor type for infer_type()
+        self._tensor_type = tensor_type
+
+    def infer_type(self) -> Type:
+        """Tensor insert returns the same TensorType (new tensor, same shape)."""
+        return self._tensor_type
+
+    def get_children(self) -> list['Value']:
+        """Return child nodes."""
+        return [self.tensor] + self.indices + [self.value]
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.tensor.insert.tensor.CopyFrom(self.tensor.to_proto(context))
+        for idx in self.indices:
+            pb_node.tensor.insert.indices.append(idx.to_proto(context))
+        pb_node.tensor.insert.value.CopyFrom(self.value.to_proto(context))
+        pb_node.tensor.insert.result_type.CopyFrom(self._tensor_type.to_proto())
+        return pb_node

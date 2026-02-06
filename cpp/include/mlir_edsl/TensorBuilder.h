@@ -23,6 +23,9 @@ public:
   /// Build tensor extract: tensor.extract
   mlir::Value buildExtract(const TensorExtract &node);
 
+  /// Build tensor insert: tensor.insert (returns new tensor)
+  mlir::Value buildInsert(const TensorInsert &node);
+
 private:
   mlir::OpBuilder &builder;
   mlir::MLIRContext *context;
