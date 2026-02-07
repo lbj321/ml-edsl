@@ -23,26 +23,22 @@ TYPE_TO_CTYPES = {
     ScalarType.I1: ctypes.c_bool,
 }
 
-_global_builder = None
+_global_backend = None
 
 
 class CppMLIRBackend:
-    """Schema-driven Python wrapper for C++ MLIR builder with ctypes execution.
+    """Python wrapper for unified C++ MLIRCompiler.
 
     Two-phase compilation model:
-    1. Definition phase: compile functions to MLIR, register signatures
-    2. Execution phase: JIT compile module on first execute, then run from cache
+    1. Building phase: compile functions to MLIR via compileFunction()
+    2. Execution phase: auto-finalizes on first getFunctionPointer() call
     """
 
     def __init__(self):
         if not HAS_CPP_BACKEND:
             raise RuntimeError("C++ backend not available. Build with CMake first.")
 
-        self.builder = _mlir_backend.MLIRBuilder()
-        self.builder.initialize_module()
-        self.executor = _mlir_backend.MLIRExecutor()
-        self.executor.initialize()
-        self.executor.set_optimization_level(2)
+        self.compiler = _mlir_backend.MLIRCompiler()
 
     # ==================== COMPILATION HELPERS (PRIVATE) ====================
     def _build_function_def_proto(self, name: str, params: list,
@@ -61,59 +57,18 @@ class CppMLIRBackend:
 
         return func_def.SerializeToString()
 
-    def _build_signature_proto(self, name: str, params: list,
-                                return_type: Type) -> bytes:
-        """Build and serialize FunctionSignature protobuf."""
-        sig = ast_pb2.FunctionSignature()
-        sig.name = name
-
-        for _, param_type in params:
-            sig.param_types.append(param_type.to_proto())
-
-        sig.return_type.CopyFrom(return_type.to_proto())
-
-        return sig.SerializeToString()
-
     # ==================== CORE COMPILATION (DEFINITION PHASE) ====================
     def compile_function_from_ast(self, name: str, params: list,
                                    return_type: Type, ast_node) -> None:
         """Compile function from AST (definition phase).
 
         Adds function to MLIR module and registers signature.
-        Invalidates JIT cache if previously finalized.
         """
         if not HAS_PROTOBUF:
             raise RuntimeError("Protobuf not available. Run ./build.sh")
 
-        # Adding a new function invalidates existing JIT
-        if not self.executor.is_jit_empty():
-            self.executor.clear_jit()
-
-        # Build and compile function definition
         func_def_bytes = self._build_function_def_proto(name, params, return_type, ast_node)
-        self.builder.compile_function(func_def_bytes)
-
-        # Register signature (persists across JIT clears)
-        sig_bytes = self._build_signature_proto(name, params, return_type)
-        self.executor.register_function_signature(sig_bytes)
-
-    # ==================== FINALIZATION ====================
-    def _ensure_finalized(self) -> None:
-        """Ensure JIT compilation is done. Called automatically on first execute."""
-        if not self.executor.is_jit_empty():
-            return  # Already finalized
-
-        llvm_ir = self.builder.get_llvm_ir_string()
-        if not self.executor.compile_module(llvm_ir):
-            raise RuntimeError(f"JIT compilation failed: {self.executor.get_last_error()}")
-
-    def finalize(self) -> None:
-        """Explicitly JIT compile all functions.
-
-        Optional - happens automatically on first execute.
-        Useful for measuring compile time or warming up before benchmarks.
-        """
-        self._ensure_finalized()
+        self.compiler.compile_function(func_def_bytes)
 
     # ==================== EXECUTION HELPERS (PRIVATE) ====================
     def _typespec_to_ctype(self, type_spec, context: str) -> type:
@@ -139,59 +94,41 @@ class CppMLIRBackend:
     # ==================== JIT EXECUTION ====================
     def execute_function(self, name: str, *args) -> Union[int, float, bool]:
         """Execute compiled function via JIT with ctypes."""
-        # Auto-finalize on first execute
-        self._ensure_finalized()
-
-        # Get signature and build wrapper
-        sig_bytes = self.executor.get_function_signature(name)
+        sig_bytes = self.compiler.get_function_signature(name)
         sig = ast_pb2.FunctionSignature()
         sig.ParseFromString(sig_bytes)
 
-        func_ptr = self.executor.get_function_pointer(name)
+        func_ptr = self.compiler.get_function_pointer(name)
         wrapper = self._build_ctypes_wrapper(func_ptr, sig)
         return wrapper(*args)
 
-    # ==================== INSPECTION ====================
-    def get_mlir_string(self) -> str:
-        """Get generated MLIR IR as string"""
-        return self.builder.get_mlir_string()
-
-    def get_llvm_ir_string(self) -> str:
-        """Get generated LLVM IR as string"""
-        return self.builder.get_llvm_ir_string()
-
     # ==================== MANAGEMENT ====================
     def has_function(self, name: str) -> bool:
-        """Check if function is already compiled"""
-        return self.builder.has_function(name)
+        """Check if function is already compiled."""
+        return self.compiler.has_function(name)
 
     def list_functions(self) -> list[str]:
-        """Get names of all compiled functions"""
-        return self.builder.list_functions()
+        """Get names of all compiled functions."""
+        return self.compiler.list_functions()
 
     def clear_module(self):
         """Clear all functions and reset completely."""
-        self.builder.clear_module()
-        self.executor.clear_all()
+        self.compiler.clear()
 
     def set_optimization_level(self, level: int):
-        """Set LLVM optimization level.
-
-        Invalidates JIT - will recompile on next execute.
-        """
+        """Set LLVM optimization level."""
         if level not in [0, 2, 3]:
             raise ValueError(f"Invalid optimization level {level}. Must be 0, 2, or 3.")
-        self.executor.set_optimization_level(level)
-        self.executor.clear_jit()  # Signatures persist, just recompile
+        self.compiler.set_optimization_level(level)
 
 
 def get_backend():
     """Get the appropriate backend (C++ if available)"""
-    global _global_builder
+    global _global_backend
 
     if HAS_CPP_BACKEND:
-        if _global_builder is None:
-            _global_builder = CppMLIRBackend()
-        return _global_builder
+        if _global_backend is None:
+            _global_backend = CppMLIRBackend()
+        return _global_backend
     else:
         return None

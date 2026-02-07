@@ -15,6 +15,7 @@ class FunctionNode;
 class BindingNode;
 class TensorNode;
 class FunctionDef;
+class FunctionSignature;
 
 // Type specifications
 class TypeSpec;

@@ -31,9 +31,10 @@ target_link_libraries(mlir_edsl_core PUBLIC
     pybind11::pybind11
 )
 
-# JIT Executor component
+# JIT Executor and Compiler component
 add_library(mlir_edsl_executor STATIC
     src/MLIRExecutor.cpp
+    src/MLIRCompiler.cpp
 )
 
 target_include_directories(mlir_edsl_executor PUBLIC
