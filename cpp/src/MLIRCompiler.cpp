@@ -121,7 +121,7 @@ bool MLIRCompiler::isValidReturnType(const mlir_edsl::TypeSpec& type) const {
 void MLIRCompiler::compileFunction(const std::string& functionDefBytes) {
   // Auto-invalidate JIT if adding function after finalization
   if (state == State::Finalized) {
-    executor->clearJit();
+    executor->clear();
     state = State::Building;
   }
 
@@ -161,9 +161,6 @@ void MLIRCompiler::compileFunction(const std::string& functionDefBytes) {
   }
   sig.mutable_return_type()->CopyFrom(funcDef.return_type());
   signatures[funcDef.name()] = sig.SerializeAsString();
-
-  // Register with executor so compileModule() can cache function pointers
-  executor->registerFunctionSignature(sig);
 }
 
 // ==================== FINALIZATION ====================
@@ -177,8 +174,9 @@ void MLIRCompiler::ensureFinalized() {
   MLIRLowering lowering(mlirContext.get());
   std::string llvmIR = lowering.lowerToLLVMIR(*module);
 
-  // JIT compile
-  if (!executor->compileModule(llvmIR)) {
+  // JIT compile with function names to look up
+  std::vector<std::string> names(compiledFunctions.begin(), compiledFunctions.end());
+  if (!executor->compileModule(llvmIR, names)) {
     throw std::runtime_error(
         "JIT compilation failed: " + executor->getLastError());
   }
@@ -216,7 +214,7 @@ void MLIRCompiler::clear() {
   builder->clearValueCache();
 
   // Clear executor and signatures
-  executor->clearAll();
+  executor->clear();
   signatures.clear();
 
   state = State::Building;

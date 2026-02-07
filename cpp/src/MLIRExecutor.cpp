@@ -46,7 +46,8 @@ bool MLIRExecutor::initialize() {
   return true;
 }
 
-bool MLIRExecutor::compileModule(const std::string &llvmIR) {
+bool MLIRExecutor::compileModule(const std::string &llvmIR,
+                                 const std::vector<std::string> &functionNames) {
   if (!initialize()) {
     return false;
   }
@@ -92,8 +93,8 @@ bool MLIRExecutor::compileModule(const std::string &llvmIR) {
     return false;
   }
 
-  // Lookup and cache function pointers for all registered signatures
-  for (const auto& [name, sig] : signatures) {
+  // Lookup and cache function pointers for requested names
+  for (const auto& name : functionNames) {
     auto symbolOrError = jit->lookup(name);
     if (symbolOrError) {
       functionPointers[name] = (void*)symbolOrError->getValue();
@@ -101,11 +102,6 @@ bool MLIRExecutor::compileModule(const std::string &llvmIR) {
   }
 
   return true;
-}
-
-void MLIRExecutor::registerFunctionSignature(const mlir_edsl::FunctionSignature &signature) {
-  // Store signature by function name
-  signatures[signature.name()] = signature;
 }
 
 uintptr_t MLIRExecutor::getFunctionPointer(const std::string &name) {
@@ -117,21 +113,11 @@ uintptr_t MLIRExecutor::getFunctionPointer(const std::string &name) {
   return reinterpret_cast<uintptr_t>(it->second);
 }
 
-std::string MLIRExecutor::getFunctionSignature(const std::string &name) const {
-  auto it = signatures.find(name);
-  if (it == signatures.end()) {
-    throw std::runtime_error("Function signature not found: " + name);
-  }
-
-  // Return serialized protobuf
-  return it->second.SerializeAsString();
-}
-
 void MLIRExecutor::setOptimizationLevel(OptLevel level) {
   optimizationLevel = level;
 }
 
-void MLIRExecutor::clearJit() {
+void MLIRExecutor::clear() {
   if (initialized) {
     // Create a fresh JIT instance
     auto jitOrError = llvm::orc::LLJITBuilder().create();
@@ -142,12 +128,6 @@ void MLIRExecutor::clearJit() {
     }
   }
   functionPointers.clear();
-  // Note: signatures NOT cleared - they persist across JIT recompilations
-}
-
-void MLIRExecutor::clearAll() {
-  clearJit();
-  signatures.clear();
 }
 
 void MLIRExecutor::optimizeModule(llvm::Module *module) {

@@ -3,12 +3,12 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <cstdint>
 
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
-#include "ast.pb.h"
 
 namespace mlir_edsl {
 
@@ -20,22 +20,15 @@ class MLIRExecutor {
     // Initialize the JIT execution engine
     bool initialize();
 
-    // Compile entire LLVM IR module (all functions at once)
-    bool compileModule(const std::string &llvmIR);
-
-    // Register function signature from protobuf object
-    void registerFunctionSignature(const mlir_edsl::FunctionSignature &signature);
+    // Compile LLVM IR module and look up the given function names
+    bool compileModule(const std::string &llvmIR,
+                       const std::vector<std::string> &functionNames);
 
     // Get function pointer as integer (for Python ctypes)
     uintptr_t getFunctionPointer(const std::string &name);
 
-    // Get function signature as protobuf (returns serialized FunctionSignature)
-    std::string getFunctionSignature(const std::string &name) const;
-
-    // JIT state management
-    bool isJitEmpty() const { return functionPointers.empty(); }
-    void clearJit();   // Clear JIT only, keep signatures
-    void clearAll();   // Clear JIT and signatures
+    // Reset JIT and cached function pointers
+    void clear();
 
     // Utility methods
     bool isInitialized() const { return initialized; }
@@ -52,9 +45,6 @@ class MLIRExecutor {
 
     OptLevel optimizationLevel;
     void optimizeModule(llvm::Module *module);
-
-    // Store function signatures as protobuf objects
-    std::unordered_map<std::string, FunctionSignature> signatures;
 
     // Store compiled function pointers
     std::unordered_map<std::string, void*> functionPointers;
