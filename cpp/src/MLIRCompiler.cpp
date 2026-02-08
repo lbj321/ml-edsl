@@ -117,17 +117,11 @@ bool MLIRCompiler::isValidReturnType(const mlir_edsl::TypeSpec& type) const {
 
 // ==================== COMPILATION ====================
 
-void MLIRCompiler::compileFunction(const std::string& functionDefBytes) {
+void MLIRCompiler::compileFunction(const mlir_edsl::FunctionDef& funcDef) {
   // Auto-invalidate JIT if adding function after finalization
   if (state == State::Finalized) {
     executor->clear();
     state = State::Building;
-  }
-
-  // Deserialize FunctionDef
-  mlir_edsl::FunctionDef funcDef;
-  if (!funcDef.ParseFromString(functionDefBytes)) {
-    throw std::runtime_error("Failed to parse FunctionDef protobuf");
   }
 
   // Validate and extract parameters

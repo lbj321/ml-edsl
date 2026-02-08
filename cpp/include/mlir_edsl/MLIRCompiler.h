@@ -18,6 +18,7 @@ namespace mlir_edsl {
 
 class MLIRBuilder;
 class MLIRExecutor;
+class FunctionDef;
 class TypeSpec;
 
 class MLIRCompiler {
@@ -35,7 +36,7 @@ public:
     MLIRCompiler& operator=(MLIRCompiler&&) = delete;
 
     // ==================== COMPILATION (Building state only) ====================
-    void compileFunction(const std::string& functionDefBytes);
+    void compileFunction(const mlir_edsl::FunctionDef& funcDef);
 
     // ==================== EXECUTION ====================
     uintptr_t getFunctionPointer(const std::string& name);
