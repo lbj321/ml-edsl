@@ -17,23 +17,21 @@ class MLIRExecutor {
     MLIRExecutor();
     ~MLIRExecutor() = default;
 
-    // Initialize the JIT execution engine
-    bool initialize();
+    // Initialize the JIT execution engine (throws on failure)
+    void initialize();
 
-    // Compile llvm::Module directly and look up the given function names
-    bool compileModule(std::unique_ptr<llvm::Module> module,
+    // Compile llvm::Module directly and look up the given function names (throws on failure)
+    void compileModule(std::unique_ptr<llvm::Module> module,
                        std::unique_ptr<llvm::LLVMContext> context,
                        const std::vector<std::string> &functionNames);
 
-    // Get function pointer as integer (for Python ctypes)
+    // Get function pointer as integer (for Python ctypes, throws if not found)
     uintptr_t getFunctionPointer(const std::string &name);
 
     // Reset JIT and cached function pointers
     void clear();
 
-    // Utility methods
     bool isInitialized() const { return initialized; }
-    std::string getLastError() const { return lastError; }
 
     enum class OptLevel { O0, O2, O3 };
     void setOptimizationLevel(OptLevel level);
@@ -41,7 +39,6 @@ class MLIRExecutor {
    private:
     std::unique_ptr<llvm::orc::LLJIT> jit;
     bool initialized;
-    std::string lastError;
 
     OptLevel optimizationLevel;
     void optimizeModule(llvm::Module *module);

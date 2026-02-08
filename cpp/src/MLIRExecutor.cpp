@@ -18,13 +18,12 @@ namespace mlir_edsl {
 MLIRExecutor::MLIRExecutor() {
   jit = nullptr;
   initialized = false;
-  lastError = "";
   optimizationLevel = OptLevel::O2;
 }
 
-bool MLIRExecutor::initialize() {
+void MLIRExecutor::initialize() {
   if (initialized) {
-    return true;
+    return;
   }
 
   llvm::InitializeNativeTarget();
@@ -33,22 +32,17 @@ bool MLIRExecutor::initialize() {
 
   auto jitOrError = llvm::orc::LLJITBuilder().create();
   if (!jitOrError) {
-    lastError = "Failed to create LLJIT";
-    return false;
+    throw std::runtime_error("Failed to create LLJIT");
   }
 
   jit = std::move(jitOrError.get());
   initialized = true;
-
-  return true;
 }
 
-bool MLIRExecutor::compileModule(std::unique_ptr<llvm::Module> module,
+void MLIRExecutor::compileModule(std::unique_ptr<llvm::Module> module,
                                  std::unique_ptr<llvm::LLVMContext> context,
                                  const std::vector<std::string> &functionNames) {
-  if (!initialize()) {
-    return false;
-  }
+  initialize();
 
   // Save unoptimized LLVM IR if SAVE_IR environment variable is set
   const bool saveIR = std::getenv("SAVE_IR") != nullptr;
@@ -77,8 +71,7 @@ bool MLIRExecutor::compileModule(std::unique_ptr<llvm::Module> module,
 
   auto err = jit->addIRModule(std::move(tsm));
   if (err) {
-    lastError = "Failed to add module to JIT";
-    return false;
+    throw std::runtime_error("Failed to add module to JIT");
   }
 
   // Lookup and cache function pointers for requested names
@@ -88,15 +81,12 @@ bool MLIRExecutor::compileModule(std::unique_ptr<llvm::Module> module,
       functionPointers[name] = (void*)symbolOrError->getValue();
     }
   }
-
-  return true;
 }
 
 uintptr_t MLIRExecutor::getFunctionPointer(const std::string &name) {
   auto it = functionPointers.find(name);
   if (it == functionPointers.end()) {
-    lastError = "Function not compiled: " + name;
-    throw std::runtime_error(lastError);
+    throw std::runtime_error("Function not compiled: " + name);
   }
   return reinterpret_cast<uintptr_t>(it->second);
 }
@@ -107,13 +97,11 @@ void MLIRExecutor::setOptimizationLevel(OptLevel level) {
 
 void MLIRExecutor::clear() {
   if (initialized) {
-    // Create a fresh JIT instance
     auto jitOrError = llvm::orc::LLJITBuilder().create();
-    if (jitOrError) {
-      jit = std::move(jitOrError.get());
-    } else {
-      lastError = "Failed to recreate LLJIT";
+    if (!jitOrError) {
+      throw std::runtime_error("Failed to recreate LLJIT");
     }
+    jit = std::move(jitOrError.get());
   }
   functionPointers.clear();
 }

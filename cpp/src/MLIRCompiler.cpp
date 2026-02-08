@@ -38,7 +38,6 @@ MLIRCompiler::MLIRCompiler()
 
   // Initialize executor
   executor = std::make_unique<MLIRExecutor>();
-  executor->initialize();
   executor->setOptimizationLevel(MLIRExecutor::OptLevel::O2);
 }
 
@@ -176,11 +175,8 @@ void MLIRCompiler::ensureFinalized() {
 
   // JIT compile with function names to look up
   std::vector<std::string> names(compiledFunctions.begin(), compiledFunctions.end());
-  if (!executor->compileModule(std::move(lowered.module),
-                               std::move(lowered.context), names)) {
-    throw std::runtime_error(
-        "JIT compilation failed: " + executor->getLastError());
-  }
+  executor->compileModule(std::move(lowered.module),
+                          std::move(lowered.context), names);
 
   state = State::Finalized;
 }
