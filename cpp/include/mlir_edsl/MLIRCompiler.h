@@ -28,6 +28,12 @@ public:
     MLIRCompiler();
     ~MLIRCompiler();
 
+    // Non-copyable, non-movable (raw pointer aliasing between members)
+    MLIRCompiler(const MLIRCompiler&) = delete;
+    MLIRCompiler& operator=(const MLIRCompiler&) = delete;
+    MLIRCompiler(MLIRCompiler&&) = delete;
+    MLIRCompiler& operator=(MLIRCompiler&&) = delete;
+
     // ==================== COMPILATION (Building state only) ====================
     void compileFunction(const std::string& functionDefBytes);
 
@@ -57,11 +63,9 @@ private:
     std::unique_ptr<mlir::OpBuilder> opBuilder;
     mlir::OwningOpRef<mlir::ModuleOp> module;
 
-    // ==================== OWNED COMPONENTS ====================
-    std::unique_ptr<MLIRBuilder> builder;
-    std::unique_ptr<MLIRExecutor> executor;
-
     // ==================== FUNCTION STATE ====================
+    // Declared before builder/executor: builder holds raw pointers into these,
+    // so they must outlive it (members destroy in reverse declaration order).
     mlir::func::FuncOp currentFunction;
     std::unordered_map<std::string, mlir::Value> parameterMap;
     std::unordered_map<std::string, mlir::func::FuncOp> functionTable;
@@ -69,6 +73,11 @@ private:
 
     // Signatures for ctypes (stored as serialized protobuf bytes)
     std::unordered_map<std::string, std::string> signatures;
+
+    // ==================== OWNED COMPONENTS ====================
+    // Destroyed before the data they reference (maps above, context above)
+    std::unique_ptr<MLIRBuilder> builder;
+    std::unique_ptr<MLIRExecutor> executor;
 
     // ==================== INTERNAL METHODS ====================
     void ensureFinalized();
