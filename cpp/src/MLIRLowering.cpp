@@ -1,6 +1,5 @@
 #include "mlir_edsl/MLIRLowering.h"
 
-#include <iostream>
 #include <stdexcept>
 
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -72,7 +71,6 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
 }
 
 void MLIRLowering::setupLoweringPipeline() {
-  passManager.enableTiming();
   passManager.enableVerifier(true);
 }
 
@@ -93,34 +91,9 @@ void MLIRLowering::addConversionPasses() {
 }
 
 bool MLIRLowering::runLoweringPipeline(mlir::ModuleOp module) {
-  const bool debug = std::getenv("MLIR_DEBUG") != nullptr;
-
-  if (debug) {
-    std::cerr << "=== BEFORE LOWERING ===\n";
-    module.print(llvm::errs());
-    std::cerr << "\n========================\n";
-  }
-
   passManager.clear();
   addConversionPasses();
-
-  if (mlir::failed(passManager.run(module))) {
-    std::cerr << "Failed to run lowering pipeline\n";
-    if (debug) {
-      std::cerr << "=== MODULE AFTER FAILED LOWERING ===\n";
-      module.print(llvm::errs());
-      std::cerr << "\n==================================\n";
-    }
-    return false;
-  }
-
-  if (debug) {
-    std::cerr << "=== AFTER SUCCESSFUL LOWERING ===\n";
-    module.print(llvm::errs());
-    std::cerr << "\n===============================\n";
-  }
-
-  return true;
+  return mlir::succeeded(passManager.run(module));
 }
 
 LoweredModule MLIRLowering::lowerToLLVMModule(mlir::ModuleOp module) {
