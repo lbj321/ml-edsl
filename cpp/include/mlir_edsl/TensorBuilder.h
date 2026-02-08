@@ -2,7 +2,6 @@
 #pragma once
 
 #include "ast.pb.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Value.h"
 

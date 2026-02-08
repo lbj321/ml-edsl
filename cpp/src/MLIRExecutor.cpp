@@ -3,9 +3,7 @@
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/IRReader/IRReader.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar/GVN.h"
@@ -18,7 +16,6 @@
 namespace mlir_edsl {
 
 MLIRExecutor::MLIRExecutor() {
-  context = std::make_unique<llvm::LLVMContext>();
   jit = nullptr;
   initialized = false;
   lastError = "";
@@ -46,18 +43,10 @@ bool MLIRExecutor::initialize() {
   return true;
 }
 
-bool MLIRExecutor::compileModule(const std::string &llvmIR,
+bool MLIRExecutor::compileModule(std::unique_ptr<llvm::Module> module,
+                                 std::unique_ptr<llvm::LLVMContext> context,
                                  const std::vector<std::string> &functionNames) {
   if (!initialize()) {
-    return false;
-  }
-
-  llvm::SMDiagnostic error;
-  auto buffer = llvm::MemoryBuffer::getMemBuffer(llvmIR);
-  auto module = llvm::parseIR(*buffer, error, *context);
-
-  if (!module) {
-    lastError = "Failed to parse LLVM IR";
     return false;
   }
 
@@ -84,8 +73,7 @@ bool MLIRExecutor::compileModule(const std::string &llvmIR,
     }
   }
 
-  auto tsm = llvm::orc::ThreadSafeModule(std::move(module),
-                                         std::make_unique<llvm::LLVMContext>());
+  auto tsm = llvm::orc::ThreadSafeModule(std::move(module), std::move(context));
 
   auto err = jit->addIRModule(std::move(tsm));
   if (err) {

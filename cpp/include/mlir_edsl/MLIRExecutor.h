@@ -20,8 +20,9 @@ class MLIRExecutor {
     // Initialize the JIT execution engine
     bool initialize();
 
-    // Compile LLVM IR module and look up the given function names
-    bool compileModule(const std::string &llvmIR,
+    // Compile llvm::Module directly and look up the given function names
+    bool compileModule(std::unique_ptr<llvm::Module> module,
+                       std::unique_ptr<llvm::LLVMContext> context,
                        const std::vector<std::string> &functionNames);
 
     // Get function pointer as integer (for Python ctypes)
@@ -39,7 +40,6 @@ class MLIRExecutor {
 
    private:
     std::unique_ptr<llvm::orc::LLJIT> jit;
-    std::unique_ptr<llvm::LLVMContext> context;
     bool initialized;
     std::string lastError;
 

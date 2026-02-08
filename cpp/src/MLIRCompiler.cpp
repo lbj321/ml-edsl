@@ -170,13 +170,14 @@ void MLIRCompiler::ensureFinalized() {
     return;
   }
 
-  // Lower MLIR to LLVM IR
+  // Lower MLIR to LLVM module
   MLIRLowering lowering(mlirContext.get());
-  std::string llvmIR = lowering.lowerToLLVMIR(*module);
+  auto lowered = lowering.lowerToLLVMModule(*module);
 
   // JIT compile with function names to look up
   std::vector<std::string> names(compiledFunctions.begin(), compiledFunctions.end());
-  if (!executor->compileModule(llvmIR, names)) {
+  if (!executor->compileModule(std::move(lowered.module),
+                               std::move(lowered.context), names)) {
     throw std::runtime_error(
         "JIT compilation failed: " + executor->getLastError());
   }

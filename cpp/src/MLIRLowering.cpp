@@ -1,6 +1,7 @@
 #include "mlir_edsl/MLIRLowering.h"
 
 #include <iostream>
+#include <stdexcept>
 
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -123,23 +124,28 @@ bool MLIRLowering::runLoweringPipeline(mlir::ModuleOp module) {
   return true;
 }
 
-std::string MLIRLowering::lowerToLLVMIR(mlir::ModuleOp module) {
+LoweredModule MLIRLowering::lowerToLLVMModule(mlir::ModuleOp module) {
   mlir::ModuleOp clonedModule = module.clone();
 
   if (!runLoweringPipeline(clonedModule)) {
-    return "ERROR: Lowering pipeline failed";
+    throw std::runtime_error("Lowering pipeline failed");
   }
 
-  llvm::LLVMContext llvmContext;
-  auto llvmModule = mlir::translateModuleToLLVMIR(clonedModule, llvmContext);
+  auto llvmContext = std::make_unique<llvm::LLVMContext>();
+  auto llvmModule = mlir::translateModuleToLLVMIR(clonedModule, *llvmContext);
 
   if (!llvmModule) {
-    return "ERROR: Translation to LLVM IR failed";
+    throw std::runtime_error("Translation to LLVM IR failed");
   }
 
+  return {std::move(llvmModule), std::move(llvmContext)};
+}
+
+std::string MLIRLowering::lowerToLLVMIR(mlir::ModuleOp module) {
+  auto lowered = lowerToLLVMModule(module);
   std::string result;
   llvm::raw_string_ostream stream(result);
-  llvmModule->print(stream, nullptr);
+  lowered.module->print(stream, nullptr);
   return result;
 }
 

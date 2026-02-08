@@ -2,7 +2,6 @@
 #include "mlir_edsl/TensorBuilder.h"
 #include "mlir_edsl/MLIRBuilder.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/IR/BuiltinTypes.h"
 
 namespace mlir_edsl {
 
