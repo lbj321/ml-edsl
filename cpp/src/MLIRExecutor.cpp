@@ -77,9 +77,13 @@ void MLIRExecutor::compileModule(std::unique_ptr<llvm::Module> module,
   // Lookup and cache function pointers for requested names
   for (const auto& name : functionNames) {
     auto symbolOrError = jit->lookup(name);
-    if (symbolOrError) {
-      functionPointers[name] = (void*)symbolOrError->getValue();
+    if (!symbolOrError) {
+      std::string errMsg;
+      llvm::raw_string_ostream os(errMsg);
+      os << symbolOrError.takeError();
+      throw std::runtime_error("JIT lookup failed for '" + name + "': " + errMsg);
     }
+    functionPointers[name] = (void*)symbolOrError->getValue();
   }
 }
 

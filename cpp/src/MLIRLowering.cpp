@@ -2,6 +2,8 @@
 
 #include <stdexcept>
 
+#include "mlir/IR/OwningOpRef.h"
+
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
@@ -97,14 +99,14 @@ bool MLIRLowering::runLoweringPipeline(mlir::ModuleOp module) {
 }
 
 LoweredModule MLIRLowering::lowerToLLVMModule(mlir::ModuleOp module) {
-  mlir::ModuleOp clonedModule = module.clone();
+  mlir::OwningOpRef<mlir::ModuleOp> clonedModule = module.clone();
 
-  if (!runLoweringPipeline(clonedModule)) {
+  if (!runLoweringPipeline(*clonedModule)) {
     throw std::runtime_error("Lowering pipeline failed");
   }
 
   auto llvmContext = std::make_unique<llvm::LLVMContext>();
-  auto llvmModule = mlir::translateModuleToLLVMIR(clonedModule, *llvmContext);
+  auto llvmModule = mlir::translateModuleToLLVMIR(*clonedModule, *llvmContext);
 
   if (!llvmModule) {
     throw std::runtime_error("Translation to LLVM IR failed");
