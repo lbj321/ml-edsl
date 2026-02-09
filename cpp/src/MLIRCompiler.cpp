@@ -145,15 +145,6 @@ void MLIRCompiler::compileFunction(const mlir_edsl::FunctionDef& funcDef) {
   createFunction(funcDef.name(), params, returnType);
   mlir::Value result = builder->buildFromProtobufNode(funcDef.body());
   finalizeFunction(funcDef.name(), result);
-
-  // Build and store serialized signature for ctypes
-  mlir_edsl::FunctionSignature sig;
-  sig.set_name(funcDef.name());
-  for (const auto& param : funcDef.params()) {
-    sig.add_param_types()->CopyFrom(param.type());
-  }
-  sig.mutable_return_type()->CopyFrom(funcDef.return_type());
-  signatures[funcDef.name()] = sig.SerializeAsString();
 }
 
 // ==================== FINALIZATION ====================
@@ -182,14 +173,6 @@ uintptr_t MLIRCompiler::getFunctionPointer(const std::string& name) {
   return executor->getFunctionPointer(name);
 }
 
-std::string MLIRCompiler::getFunctionSignature(const std::string& name) const {
-  auto it = signatures.find(name);
-  if (it == signatures.end()) {
-    throw std::runtime_error("Function signature not found: " + name);
-  }
-  return it->second;
-}
-
 // ==================== STATE MANAGEMENT ====================
 
 void MLIRCompiler::clear() {
@@ -204,9 +187,8 @@ void MLIRCompiler::clear() {
   compiledFunctions.clear();
   builder->clearValueCache();
 
-  // Clear executor and signatures
+  // Clear executor
   executor->clear();
-  signatures.clear();
 
   state = State::Building;
 }

@@ -39,6 +39,7 @@ class CppMLIRBackend:
             raise RuntimeError("C++ backend not available. Build with CMake first.")
 
         self.compiler = _mlir_backend.MLIRCompiler()
+        self._signatures: dict[str, tuple[list[Type], Type]] = {}
 
     # ==================== COMPILATION HELPERS (PRIVATE) ====================
     def _build_function_def_proto(self, name: str, params: list,
@@ -69,37 +70,24 @@ class CppMLIRBackend:
 
         func_def_bytes = self._build_function_def_proto(name, params, return_type, ast_node)
         self.compiler.compile_function(func_def_bytes)
+        self._signatures[name] = ([pt for _, pt in params], return_type)
 
     # ==================== EXECUTION HELPERS (PRIVATE) ====================
-    def _typespec_to_ctype(self, type_spec, context: str) -> type:
-        """Convert protobuf TypeSpec to ctypes type."""
-        if type_spec.HasField('scalar'):
-            return TYPE_TO_CTYPES[type_spec.scalar.kind]
-        elif type_spec.HasField('memref'):
-            raise RuntimeError(f"Array types not supported for {context} in JIT execution")
-        else:
-            raise RuntimeError(f"Unknown type specification for {context}")
-
-    def _build_ctypes_wrapper(self, func_ptr: int, sig) -> ctypes.CFUNCTYPE:
-        """Build ctypes function wrapper from signature."""
-        c_return_type = self._typespec_to_ctype(sig.return_type, "return type")
-
-        c_param_types = []
-        for i, pt in enumerate(sig.param_types):
-            c_param_types.append(self._typespec_to_ctype(pt, f"parameter {i}"))
-
-        func_type = ctypes.CFUNCTYPE(c_return_type, *c_param_types)
-        return func_type(func_ptr)
+    @staticmethod
+    def _type_to_ctype(t: Type, context: str) -> type:
+        """Convert a Type to its ctypes equivalent."""
+        if isinstance(t, ScalarType):
+            return TYPE_TO_CTYPES[t.kind]
+        raise RuntimeError(f"Aggregate types not supported for {context} in JIT execution")
 
     # ==================== JIT EXECUTION ====================
     def execute_function(self, name: str, *args) -> Union[int, float, bool]:
         """Execute compiled function via JIT with ctypes."""
-        sig_bytes = self.compiler.get_function_signature(name)
-        sig = ast_pb2.FunctionSignature()
-        sig.ParseFromString(sig_bytes)
-
-        func_ptr = self.compiler.get_function_pointer(name)
-        wrapper = self._build_ctypes_wrapper(func_ptr, sig)
+        param_types, return_type = self._signatures[name]
+        c_ret = self._type_to_ctype(return_type, "return type")
+        c_params = [self._type_to_ctype(pt, f"parameter {i}") for i, pt in enumerate(param_types)]
+        func_type = ctypes.CFUNCTYPE(c_ret, *c_params)
+        wrapper = func_type(self.compiler.get_function_pointer(name))
         return wrapper(*args)
 
     # ==================== MANAGEMENT ====================
@@ -114,6 +102,7 @@ class CppMLIRBackend:
     def clear_module(self):
         """Clear all functions and reset completely."""
         self.compiler.clear()
+        self._signatures.clear()
 
     def set_optimization_level(self, level: int):
         """Set LLVM optimization level."""

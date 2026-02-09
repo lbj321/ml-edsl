@@ -158,11 +158,11 @@ The original MLIR module is preserved — adding functions after finalization au
 
 ### 6. Execution
 
-`CppMLIRBackend.execute_function` retrieves the function pointer, wraps it with `ctypes.CFUNCTYPE` using the registered signature (mapping `i32 → ctypes.c_int32`), and calls it with the Python arguments. The native return value is marshalled back to a Python `int`.
+`CppMLIRBackend.execute_function` retrieves the function pointer and wraps it with `ctypes.CFUNCTYPE` using the Python-side cached signature (mapping `ScalarType → ctypes`, e.g. `i32 → c_int32`). Signatures are cached at compile time — no round-trip to C++ is needed. The ctypes wrapper calls directly into JIT-compiled native code and marshals the return value back to Python.
 
 ## Python/C++ Boundary
 
-Python talks to a single `MLIRCompiler` facade via pybind11. IR never crosses the boundary — only serialized protobuf bytes and integer function pointers:
+Python talks to a single `MLIRCompiler` facade via pybind11. Only two things cross the boundary: serialized protobuf bytes (in) and integer function pointers (out). Type signatures stay on the Python side.
 
 ```mermaid
 sequenceDiagram
@@ -170,20 +170,20 @@ sequenceDiagram
     participant C as C++ MLIRCompiler
     participant JIT as Native code
 
+    P->>P: cache param types + return type
     P->>C: compile_function(protobuf bytes)
     C-->>C: parse protobuf → MLIRBuilder generates MLIR
     P->>C: get_function_pointer("factorial")
     C-->>C: MLIRLowering (clone → lower) → MLIRExecutor (JIT)
     C-->>P: uintptr_t
-    P->>C: get_function_signature("factorial")
-    C-->>P: serialized FunctionSignature bytes
-    P-->>P: ctypes.CFUNCTYPE(ptr) → call
+    P-->>P: ctypes.CFUNCTYPE(ptr) from cached types
     P->>JIT: direct call to native code
     JIT-->>P: return value
 ```
 
 - **Serialization format**: Protobuf (`FunctionDef.SerializeToString()` / `ParseFromString()`)
 - **Execution format**: Function pointers returned as `uintptr_t`, called via `ctypes.CFUNCTYPE` (bypasses pybind11)
+- **Signature caching**: Python caches `(param_types, return_type)` at compile time — no C++ round-trip needed for ctypes wrapper construction
 - **Schema**: `cpp/schemas/ast.proto` is the single source of truth for AST node types, operation enums, and type definitions
 
 ## Type System
@@ -236,8 +236,7 @@ MLIRCompiler owns:
 ├── 2. Shared state (destroyed middle)
 │   ├── parameterMap                     ← current function's arg name → mlir::Value
 │   ├── functionTable                    ← all function name → FuncOp
-│   ├── compiledFunctions                ← set of compiled names
-│   └── signatures                       ← serialized FunctionSignature per function
+│   └── compiledFunctions                ← set of compiled names
 │
 └── 3. Components (destroyed first)
     ├── unique_ptr<MLIRBuilder>          ← borrows context*, builder*, parameterMap*, functionTable*

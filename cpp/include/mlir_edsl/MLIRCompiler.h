@@ -40,7 +40,6 @@ public:
 
     // ==================== EXECUTION ====================
     uintptr_t getFunctionPointer(const std::string& name);
-    std::string getFunctionSignature(const std::string& name) const;
 
     // ==================== STATE MANAGEMENT ====================
     void clear();
@@ -71,9 +70,6 @@ private:
     std::unordered_map<std::string, mlir::Value> parameterMap;
     std::unordered_map<std::string, mlir::func::FuncOp> functionTable;
     std::unordered_set<std::string> compiledFunctions;
-
-    // Signatures for ctypes (stored as serialized protobuf bytes)
-    std::unordered_map<std::string, std::string> signatures;
 
     // ==================== OWNED COMPONENTS ====================
     // Destroyed before the data they reference (maps above, context above)

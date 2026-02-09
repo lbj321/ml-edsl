@@ -24,14 +24,6 @@ PYBIND11_MODULE(_mlir_backend, m) {
       .def("get_function_pointer", &mlir_edsl::MLIRCompiler::getFunctionPointer,
            py::arg("name"),
            "Get JIT-compiled function pointer (auto-finalizes on first call)")
-      .def(
-          "get_function_signature",
-          [](mlir_edsl::MLIRCompiler &self, const std::string &name) {
-            std::string result = self.getFunctionSignature(name);
-            return py::bytes(result);
-          },
-          py::arg("name"),
-          "Get function signature as serialized FunctionSignature protobuf")
       .def("has_function", &mlir_edsl::MLIRCompiler::hasFunction,
            py::arg("name"), "Check if function is already compiled")
       .def("list_functions", &mlir_edsl::MLIRCompiler::listFunctions,
