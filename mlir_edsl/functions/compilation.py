@@ -1,9 +1,18 @@
 """Compilation and execution of ML functions"""
+import os
 from typing import Callable, Optional, Union
 
 from ..ast import Value
 from ..backend import get_backend
 from .signature import FunctionSignature
+
+_DUMP_AST = os.getenv("DUMP_AST", "").lower() in ("1", "true", "yes")
+
+if _DUMP_AST:
+    import shutil
+    _ast_out = os.path.join(os.getcwd(), "ast_output")
+    if os.path.exists(_ast_out):
+        shutil.rmtree(_ast_out)
 
 
 class CompiledFunction:
@@ -42,6 +51,10 @@ def compile_function(signature: FunctionSignature, result_ast: Value) -> Compile
     if backend.has_function(signature.name):
         return CompiledFunction(signature.name, signature, backend)
 
+    # Save AST dump before compilation
+    if _DUMP_AST:
+        _save_ast_dump(signature.name, result_ast)
+
     # Compile to backend
     backend.compile_function_from_ast(
         signature.name,
@@ -51,3 +64,18 @@ def compile_function(signature: FunctionSignature, result_ast: Value) -> Compile
     )
 
     return CompiledFunction(signature.name, signature, backend)
+
+
+def _save_ast_dump(name: str, ast: Value) -> None:
+    """Save AST dump to ast_output/ directory."""
+    out_dir = os.path.join(os.getcwd(), "ast_output")
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"{name}.txt")
+    if os.path.exists(path):
+        counter = 1
+        while os.path.exists(os.path.join(out_dir, f"{name}_{counter}.txt")):
+            counter += 1
+        path = os.path.join(out_dir, f"{name}_{counter}.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(ast.dump())
+        f.write("\n")

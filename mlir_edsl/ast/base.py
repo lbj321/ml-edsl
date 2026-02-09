@@ -72,6 +72,11 @@ class Value(ABC, OperatorMixin):
         """Return list of child Value nodes. Override in subclasses with children."""
         return []  # Default: no children (for leaf nodes like Constant, Parameter)
 
+    def dump(self) -> str:
+        """Dump AST as indented tree with SSA for shared values."""
+        from .dump import dump
+        return dump(self)
+
     def to_proto_with_reuse(self):
         """Serialize with SSA value reuse detection (two-pass approach)"""
         # Pass 1: Count how many times each Value is referenced
