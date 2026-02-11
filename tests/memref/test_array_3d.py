@@ -15,13 +15,11 @@ from mlir_edsl import i32, f32
 from mlir_edsl.ast import ArrayLiteral, ArrayAccess, ArrayStore
 from mlir_edsl.ast.serialization import SerializationContext
 from mlir_edsl.types import ArrayType, i32, f32
-from mlir_edsl.backend import HAS_CPP_BACKEND
-from tests.test_base import MLIRTestBase
 
 
 # ==================== 3D ARRAY LITERAL CREATION ====================
 
-class TestArray3DLiteralCreation(MLIRTestBase):
+class TestArray3DLiteralCreation:
     """Test 3D ArrayLiteral creation with triple-nested lists"""
 
     def test_3d_array_literal_i32(self):
@@ -64,7 +62,7 @@ class TestArray3DLiteralCreation(MLIRTestBase):
 
 # ==================== 3D ARRAY LITERAL VALIDATION ====================
 
-class TestArray3DLiteralValidation(MLIRTestBase):
+class TestArray3DLiteralValidation:
     """Test validation for 3D array literal creation"""
 
     def test_3d_size_mismatch_wrong_dim0(self):
@@ -111,7 +109,7 @@ class TestArray3DLiteralValidation(MLIRTestBase):
 
 # ==================== 3D ARRAY ACCESS ====================
 
-class TestArray3DAccess(MLIRTestBase):
+class TestArray3DAccess:
     """Test 3D ArrayAccess with 3-tuple indices"""
 
     def test_3d_array_access_creation(self):
@@ -168,7 +166,7 @@ class TestArray3DAccess(MLIRTestBase):
 
 # ==================== 3D ARRAY STORE ====================
 
-class TestArray3DStore(MLIRTestBase):
+class TestArray3DStore:
     """Test 3D ArrayStore with 3-tuple indices"""
 
     def test_3d_array_store_creation(self):
@@ -217,7 +215,7 @@ class TestArray3DStore(MLIRTestBase):
 
 # ==================== 3D ARRAY PROTOBUF SERIALIZATION ====================
 
-class TestArray3DProtobufSerialization(MLIRTestBase):
+class TestArray3DProtobufSerialization:
     """Test protobuf serialization for 3D arrays"""
 
     def test_3d_array_literal_to_proto(self):
@@ -271,7 +269,7 @@ class TestArray3DProtobufSerialization(MLIRTestBase):
 
 # ==================== 3D ELEMENT-WISE OPERATIONS ====================
 
-class TestArray3DElementwise(MLIRTestBase):
+class TestArray3DElementwise:
     """Test element-wise operations on 3D arrays"""
 
     def test_3d_array_add_arrays(self):
@@ -314,11 +312,10 @@ class TestArray3DElementwise(MLIRTestBase):
 
 # ==================== 3D MLIR GENERATION ====================
 
-@pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-class TestArray3DMLIRGeneration(MLIRTestBase):
+class TestArray3DMLIRGeneration:
     """Test MLIR generation for 3D arrays"""
 
-    def test_3d_array_literal_generates_memref(self):
+    def test_3d_array_literal_generates_memref(self, backend):
         """Test that 3D array literal compiles and generates memref type"""
         @ml_function
         def create_3d_array() -> i32:
@@ -331,7 +328,7 @@ class TestArray3DMLIRGeneration(MLIRTestBase):
         # Should compile without errors - IR contains memref<2x2x2xi32>
         assert create_3d_array is not None
 
-    def test_3d_array_access_generates_load(self):
+    def test_3d_array_access_generates_load(self, backend):
         """Test that 3D array access compiles and generates memref.load with 3 indices"""
         @ml_function
         def access_3d_element() -> i32:
@@ -347,11 +344,10 @@ class TestArray3DMLIRGeneration(MLIRTestBase):
 
 # ==================== 3D EXECUTION TESTS ====================
 
-@pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-class TestArray3DExecution(MLIRTestBase):
+class TestArray3DExecution:
     """Test execution of 3D array operations"""
 
-    def test_3d_array_element_access_execution(self):
+    def test_3d_array_element_access_execution(self, backend):
         """Test executing 3D array element access"""
         @ml_function
         def get_element() -> i32:
@@ -364,7 +360,7 @@ class TestArray3DExecution(MLIRTestBase):
         result = get_element()
         assert result == 120
 
-    def test_3d_array_add_execution(self):
+    def test_3d_array_add_execution(self, backend):
         """Test executing 3D array addition"""
         @ml_function
         def add_arrays() -> i32:
@@ -381,7 +377,7 @@ class TestArray3DExecution(MLIRTestBase):
 
         assert add_arrays() == 88
 
-    def test_3d_array_scalar_broadcast_execution(self):
+    def test_3d_array_scalar_broadcast_execution(self, backend):
         """Test executing 3D array + scalar broadcasting"""
         @ml_function
         def add_scalar() -> i32:

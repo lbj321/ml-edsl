@@ -28,6 +28,8 @@ PYBIND11_MODULE(_mlir_backend, m) {
            py::arg("name"), "Check if function is already compiled")
       .def("list_functions", &mlir_edsl::MLIRCompiler::listFunctions,
            "List all compiled function names")
+      .def("get_module_ir", &mlir_edsl::MLIRCompiler::getModuleIR,
+           "Get current MLIR module IR as string")
       .def("clear", &mlir_edsl::MLIRCompiler::clear,
            "Reset to Building state, clear all compiled functions")
       .def(

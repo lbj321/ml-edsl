@@ -99,6 +99,10 @@ class CppMLIRBackend:
         """Get names of all compiled functions."""
         return self.compiler.list_functions()
 
+    def get_module_ir(self) -> str:
+        """Get current MLIR module IR as string."""
+        return self.compiler.get_module_ir()
+
     def clear_module(self):
         """Clear all functions and reset completely."""
         self.compiler.clear()

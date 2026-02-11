@@ -6,10 +6,9 @@ Note: These tests only verify IR generation, not execution (Step 6).
 
 import pytest
 from mlir_edsl import ml_function, Array, i32, f32
-from tests.test_base import MLIRTestBase
 
 
-class TestArrayMLIRGeneration(MLIRTestBase):
+class TestArrayMLIRGeneration:
     """Test that array operations generate correct MLIR IR"""
 
     def test_array_literal_and_access(self):

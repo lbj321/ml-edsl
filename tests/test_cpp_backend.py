@@ -5,66 +5,61 @@ It uses AST nodes directly rather than @ml_function to isolate backend testing.
 """
 
 import pytest
-from mlir_edsl.backend import HAS_CPP_BACKEND
 from mlir_edsl.ast import Constant, BinaryOp, CompareOp, IfOp, Parameter
 from mlir_edsl.types import i32, f32, i1
 from mlir_edsl import cast, ADD, SUB, MUL, DIV, SGT
-from tests.test_base import MLIRTestBase
-
-# Skip all tests if C++ backend is not available
-pytestmark = pytest.mark.skipif(not HAS_CPP_BACKEND, reason="C++ backend not available")
 
 
 # ==================== BACKEND AVAILABILITY ====================
 
-class TestBackendAvailability(MLIRTestBase):
+class TestBackendAvailability:
     """Test backend instantiation and error handling"""
 
-    def test_backend_available(self):
+    def test_backend_available(self, backend):
         """Test that C++ backend is available and initialized"""
-        assert self.backend is not None
+        assert backend is not None
 
-    def test_backend_starts_empty(self):
+    def test_backend_starts_empty(self, backend):
         """Test that backend starts with no compiled functions"""
-        assert self.backend.list_functions() == []
+        assert backend.list_functions() == []
 
 
 # ==================== BASIC ARITHMETIC ====================
 
-class TestBasicArithmetic(MLIRTestBase):
+class TestBasicArithmetic:
     """Test basic arithmetic operations via AST compilation"""
 
-    def test_constant_addition(self):
+    def test_constant_addition(self, backend):
         """Test compiling and executing constant addition"""
         result = BinaryOp(ADD, Constant(5), Constant(3))
-        self.backend.compile_function_from_ast("test_add", [], i32, result)
-        assert self.backend.execute_function("test_add") == 8
+        backend.compile_function_from_ast("test_add", [], i32, result)
+        assert backend.execute_function("test_add") == 8
 
-    def test_all_arithmetic_operations(self):
+    def test_all_arithmetic_operations(self, backend):
         """Test all four arithmetic operations"""
         add_result = BinaryOp(ADD, Constant(10), Constant(5))
-        self.backend.compile_function_from_ast("test_add", [], i32, add_result)
-        assert self.backend.execute_function("test_add") == 15
+        backend.compile_function_from_ast("test_add", [], i32, add_result)
+        assert backend.execute_function("test_add") == 15
 
         sub_result = BinaryOp(SUB, Constant(10), Constant(3))
-        self.backend.compile_function_from_ast("test_sub", [], i32, sub_result)
-        assert self.backend.execute_function("test_sub") == 7
+        backend.compile_function_from_ast("test_sub", [], i32, sub_result)
+        assert backend.execute_function("test_sub") == 7
 
         mul_result = BinaryOp(MUL, Constant(6), Constant(4))
-        self.backend.compile_function_from_ast("test_mul", [], i32, mul_result)
-        assert self.backend.execute_function("test_mul") == 24
+        backend.compile_function_from_ast("test_mul", [], i32, mul_result)
+        assert backend.execute_function("test_mul") == 24
 
         div_result = BinaryOp(DIV, Constant(20), Constant(4))
-        self.backend.compile_function_from_ast("test_div", [], i32, div_result)
-        assert self.backend.execute_function("test_div") == 5
+        backend.compile_function_from_ast("test_div", [], i32, div_result)
+        assert backend.execute_function("test_div") == 5
 
-    def test_float_addition(self):
+    def test_float_addition(self, backend):
         """Test float addition execution"""
         result = BinaryOp(ADD, Constant(5.5), Constant(2.5))
-        self.backend.compile_function_from_ast("test_float_add", [], f32, result)
-        assert abs(self.backend.execute_function("test_float_add") - 8.0) < 0.001
+        backend.compile_function_from_ast("test_float_add", [], f32, result)
+        assert abs(backend.execute_function("test_float_add") - 8.0) < 0.001
 
-    def test_type_promotion(self):
+    def test_type_promotion(self, backend):
         """Test mixed type promotion (cast int to float, then add)"""
         int_val = Constant(5)
         float_val = Constant(2.5)
@@ -72,105 +67,105 @@ class TestBasicArithmetic(MLIRTestBase):
 
         assert result.infer_type() == f32
 
-        self.backend.compile_function_from_ast("test_promotion", [], f32, result)
-        assert abs(self.backend.execute_function("test_promotion") - 7.5) < 0.001
+        backend.compile_function_from_ast("test_promotion", [], f32, result)
+        assert abs(backend.execute_function("test_promotion") - 7.5) < 0.001
 
-    def test_complex_expression(self):
+    def test_complex_expression(self, backend):
         """Test nested expression: (5 + 3) * 2 = 16"""
         add_result = BinaryOp(ADD, Constant(5), Constant(3))
         final_result = BinaryOp(MUL, add_result, Constant(2))
 
-        self.backend.compile_function_from_ast("test_complex", [], i32, final_result)
-        assert self.backend.execute_function("test_complex") == 16
+        backend.compile_function_from_ast("test_complex", [], i32, final_result)
+        assert backend.execute_function("test_complex") == 16
 
 
 # ==================== PARAMETERIZED FUNCTIONS ====================
 
-class TestParameterizedFunctions(MLIRTestBase):
+class TestParameterizedFunctions:
     """Test functions with parameters"""
 
-    def test_integer_parameters(self):
+    def test_integer_parameters(self, backend):
         """Test function with integer parameters: add(x, y) = x + y"""
         param_x = Parameter("x", i32)
         param_y = Parameter("y", i32)
         result = BinaryOp(ADD, param_x, param_y)
 
-        self.backend.compile_function_from_ast(
+        backend.compile_function_from_ast(
             "test_param_add", [("x", i32), ("y", i32)], i32, result
         )
 
-        assert self.backend.execute_function("test_param_add", 10, 5) == 15
-        assert self.backend.execute_function("test_param_add", 100, 200) == 300
+        assert backend.execute_function("test_param_add", 10, 5) == 15
+        assert backend.execute_function("test_param_add", 100, 200) == 300
 
-    def test_float_parameters(self):
+    def test_float_parameters(self, backend):
         """Test function with float parameters: mul(x, y) = x * y"""
         param_x = Parameter("x", f32)
         param_y = Parameter("y", f32)
         result = BinaryOp(MUL, param_x, param_y)
 
-        self.backend.compile_function_from_ast(
+        backend.compile_function_from_ast(
             "test_float_param", [("x", f32), ("y", f32)], f32, result
         )
 
-        assert abs(self.backend.execute_function("test_float_param", 2.5, 4.0) - 10.0) < 0.001
+        assert abs(backend.execute_function("test_float_param", 2.5, 4.0) - 10.0) < 0.001
 
 
 # ==================== CONDITIONAL OPERATIONS ====================
 
-class TestConditionalOperations(MLIRTestBase):
+class TestConditionalOperations:
     """Test comparison and if-else operations"""
 
-    def test_comparison_in_conditional(self):
+    def test_comparison_in_conditional(self, backend):
         """Test comparison used in if-else returns correct branch"""
         comparison = CompareOp(SGT, Constant(5), Constant(3))
         assert comparison.infer_type() == i1
 
         result = IfOp(comparison, Constant(1), Constant(0))
-        self.backend.compile_function_from_ast("test_compare", [], i32, result)
-        assert self.backend.execute_function("test_compare") == 1
+        backend.compile_function_from_ast("test_compare", [], i32, result)
+        assert backend.execute_function("test_compare") == 1
 
-    def test_if_else_execution(self):
+    def test_if_else_execution(self, backend):
         """Test if-else returns correct branch value"""
         condition = CompareOp(SGT, Constant(10), Constant(5))
         result = IfOp(condition, Constant(100), Constant(200))
 
-        self.backend.compile_function_from_ast("test_if", [], i32, result)
-        assert self.backend.execute_function("test_if") == 100
+        backend.compile_function_from_ast("test_if", [], i32, result)
+        assert backend.execute_function("test_if") == 100
 
 
 # ==================== MODULE MANAGEMENT ====================
 
-class TestModuleManagement(MLIRTestBase):
+class TestModuleManagement:
     """Test module management operations"""
 
-    def test_has_function(self):
+    def test_has_function(self, backend):
         """Test has_function reports correctly before and after compilation"""
-        assert not self.backend.has_function("test_func")
+        assert not backend.has_function("test_func")
 
         result = BinaryOp(ADD, Constant(1), Constant(2))
-        self.backend.compile_function_from_ast("test_func", [], i32, result)
-        assert self.backend.has_function("test_func")
+        backend.compile_function_from_ast("test_func", [], i32, result)
+        assert backend.has_function("test_func")
 
-    def test_list_functions(self):
+    def test_list_functions(self, backend):
         """Test list_functions returns all compiled function names"""
         result1 = BinaryOp(ADD, Constant(1), Constant(2))
-        self.backend.compile_function_from_ast("func1", [], i32, result1)
+        backend.compile_function_from_ast("func1", [], i32, result1)
 
         result2 = BinaryOp(MUL, Constant(3), Constant(4))
-        self.backend.compile_function_from_ast("func2", [], i32, result2)
+        backend.compile_function_from_ast("func2", [], i32, result2)
 
-        functions = self.backend.list_functions()
+        functions = backend.list_functions()
         assert "func1" in functions
         assert "func2" in functions
 
-    def test_clear_module(self):
+    def test_clear_module(self, backend):
         """Test clear_module removes all compiled functions"""
         result = BinaryOp(ADD, Constant(1), Constant(2))
-        self.backend.compile_function_from_ast("test_func", [], i32, result)
-        assert self.backend.has_function("test_func")
+        backend.compile_function_from_ast("test_func", [], i32, result)
+        assert backend.has_function("test_func")
 
-        self.backend.clear_module()
-        assert not self.backend.has_function("test_func")
+        backend.clear_module()
+        assert not backend.has_function("test_func")
 
 
 if __name__ == "__main__":

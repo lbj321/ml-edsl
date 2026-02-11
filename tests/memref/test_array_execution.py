@@ -5,15 +5,12 @@ This test validates that array operations execute correctly with the JIT compile
 
 import pytest
 from mlir_edsl import ml_function, Array, i32, f32
-from mlir_edsl.backend import HAS_CPP_BACKEND
-from tests.test_base import MLIRTestBase
 
 
-class TestArrayExecution(MLIRTestBase):
+class TestArrayExecution:
     """Test array operations execute correctly with JIT"""
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
-    def test_array_access_execution(self):
+    def test_array_access_execution(self, backend):
         """Test array element access returns correct value"""
         @ml_function
         def array_access() -> i32:
@@ -23,8 +20,7 @@ class TestArrayExecution(MLIRTestBase):
         result = array_access()
         assert result == 30
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
-    def test_array_store_execution(self):
+    def test_array_store_execution(self, backend):
         """Test array element store and retrieve using .at[] syntax"""
         @ml_function
         def array_store() -> i32:
@@ -35,8 +31,7 @@ class TestArrayExecution(MLIRTestBase):
         result = array_store()
         assert result == 99
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
-    def test_array_reuse_execution(self):
+    def test_array_reuse_execution(self, backend):
         """Test array reuse in computation"""
         @ml_function
         def array_reuse() -> i32:
@@ -48,8 +43,7 @@ class TestArrayExecution(MLIRTestBase):
         result = array_reuse()
         assert result == 50  # 10 + 40
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
-    def test_float_array_execution(self):
+    def test_float_array_execution(self, backend):
         """Test float array operations"""
         @ml_function
         def float_array() -> f32:
@@ -59,8 +53,7 @@ class TestArrayExecution(MLIRTestBase):
         result = float_array()
         assert abs(result - 2.5) < 0.001
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
-    def test_array_with_computed_index(self):
+    def test_array_with_computed_index(self, backend):
         """Test array access with computed index"""
         @ml_function
         def computed_index() -> i32:
@@ -71,8 +64,7 @@ class TestArrayExecution(MLIRTestBase):
         result = computed_index()
         assert result == 30  # arr[2]
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
-    def test_array_multiple_stores(self):
+    def test_array_multiple_stores(self, backend):
         """Test multiple store operations on same array using .at[] syntax"""
         @ml_function
         def multiple_stores() -> i32:

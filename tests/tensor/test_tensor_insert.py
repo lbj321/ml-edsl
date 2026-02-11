@@ -13,13 +13,11 @@ from mlir_edsl import ml_function, i32, f32, Tensor, Array
 from mlir_edsl.ast import TensorFromElements, TensorExtract, TensorInsert, Constant, ArrayStore
 from mlir_edsl.ast.serialization import SerializationContext
 from mlir_edsl.types import TensorType, ScalarType
-from mlir_edsl.backend import HAS_CPP_BACKEND
-from tests.test_base import MLIRTestBase
 
 
 # ==================== TENSOR INSERT CREATION ====================
 
-class TestTensorInsertCreation(MLIRTestBase):
+class TestTensorInsertCreation:
     """Test TensorInsert AST node creation"""
 
     def test_tensor_insert_creation(self):
@@ -53,7 +51,7 @@ class TestTensorInsertCreation(MLIRTestBase):
 
 # ==================== TENSOR INSERT TYPE CHECKING ====================
 
-class TestTensorInsertTypeChecking(MLIRTestBase):
+class TestTensorInsertTypeChecking:
     """Test compile-time type checking for TensorInsert"""
 
     def test_tensor_insert_requires_tensor(self):
@@ -96,7 +94,7 @@ class TestTensorInsertTypeChecking(MLIRTestBase):
 
 # ==================== TENSOR INSERT TYPE INFERENCE ====================
 
-class TestTensorInsertTypeInference(MLIRTestBase):
+class TestTensorInsertTypeInference:
     """Test type inference for TensorInsert"""
 
     def test_tensor_insert_returns_same_tensor_type(self):
@@ -121,7 +119,7 @@ class TestTensorInsertTypeInference(MLIRTestBase):
 
 # ==================== .at[].set() DISPATCH ====================
 
-class TestAtSetDispatch(MLIRTestBase):
+class TestAtSetDispatch:
     """Test that .at[].set() correctly dispatches to TensorInsert vs ArrayStore"""
 
     def test_tensor_at_set_creates_tensor_insert(self):
@@ -166,7 +164,7 @@ class TestAtSetDispatch(MLIRTestBase):
 
 # ==================== .at[].get() DISPATCH ====================
 
-class TestAtGetDispatch(MLIRTestBase):
+class TestAtGetDispatch:
     """Test that .at[].get() correctly dispatches to TensorExtract vs ArrayAccess"""
 
     def test_tensor_at_get_creates_tensor_extract(self):
@@ -186,7 +184,7 @@ class TestAtGetDispatch(MLIRTestBase):
 
 # ==================== GET_CHILDREN FOR SERIALIZATION ====================
 
-class TestTensorInsertGetChildren(MLIRTestBase):
+class TestTensorInsertGetChildren:
     """Test get_children() for TensorInsert serialization traversal"""
 
     def test_tensor_insert_get_children(self):
@@ -212,7 +210,7 @@ class TestTensorInsertGetChildren(MLIRTestBase):
 
 # ==================== PROTOBUF SERIALIZATION ====================
 
-class TestTensorInsertProtobuf(MLIRTestBase):
+class TestTensorInsertProtobuf:
     """Test protobuf serialization for TensorInsert"""
 
     def test_tensor_insert_to_proto(self):
@@ -242,10 +240,10 @@ class TestTensorInsertProtobuf(MLIRTestBase):
 
 # ==================== END-TO-END EXECUTION ====================
 
-class TestTensorInsertExecution(MLIRTestBase):
+class TestTensorInsertExecution:
     """Test end-to-end execution of tensor.insert"""
 
-    def test_tensor_insert_basic_execution(self):
+    def test_tensor_insert_basic_execution(self, backend):
         """Test basic tensor insert and extract"""
         @ml_function
         def insert_and_extract() -> i32:
@@ -256,7 +254,7 @@ class TestTensorInsertExecution(MLIRTestBase):
         result = insert_and_extract()
         assert result == 99
 
-    def test_tensor_insert_preserves_other_elements(self):
+    def test_tensor_insert_preserves_other_elements(self, backend):
         """Test that insert preserves other elements"""
         @ml_function
         def insert_check_others() -> i32:
@@ -268,7 +266,7 @@ class TestTensorInsertExecution(MLIRTestBase):
         result = insert_check_others()
         assert result == 10 + 30 + 40  # 80
 
-    def test_tensor_insert_multiple(self):
+    def test_tensor_insert_multiple(self, backend):
         """Test multiple inserts"""
         @ml_function
         def multiple_inserts() -> i32:
@@ -280,7 +278,7 @@ class TestTensorInsertExecution(MLIRTestBase):
         result = multiple_inserts()
         assert result == 10 + 40  # 50
 
-    def test_tensor_insert_f32(self):
+    def test_tensor_insert_f32(self, backend):
         """Test tensor insert with f32"""
         @ml_function
         def insert_f32() -> f32:
@@ -291,7 +289,7 @@ class TestTensorInsertExecution(MLIRTestBase):
         result = insert_f32()
         assert abs(result - 9.5) < 0.001
 
-    def test_tensor_insert_2d_execution(self):
+    def test_tensor_insert_2d_execution(self, backend):
         """Test 2D tensor insert"""
         @ml_function
         def insert_2d() -> i32:
@@ -303,7 +301,7 @@ class TestTensorInsertExecution(MLIRTestBase):
         result = insert_2d()
         assert result == 99
 
-    def test_tensor_insert_with_computed_value(self):
+    def test_tensor_insert_with_computed_value(self, backend):
         """Test inserting a computed value"""
         @ml_function
         def insert_computed() -> i32:
@@ -315,7 +313,7 @@ class TestTensorInsertExecution(MLIRTestBase):
         result = insert_computed()
         assert result == 30
 
-    def test_tensor_insert_chain(self):
+    def test_tensor_insert_chain(self, backend):
         """Test chained inserts"""
         @ml_function
         def chain_inserts() -> i32:

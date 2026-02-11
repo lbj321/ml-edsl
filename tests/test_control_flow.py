@@ -12,19 +12,14 @@ Test Organization:
 
 import pytest
 from mlir_edsl import ml_function, If, cast, f32
-from mlir_edsl.backend import HAS_CPP_BACKEND
-from tests.test_base import MLIRTestBase
-
-# Skip all tests if C++ backend is not available
-pytestmark = pytest.mark.skipif(not HAS_CPP_BACKEND, reason="C++ backend not available")
 
 
 # ==================== CONDITIONALS (IF) ====================
 
-class TestBasicConditionals(MLIRTestBase):
+class TestBasicConditionals:
     """Test basic conditional operations"""
 
-    def test_if_greater_than(self):
+    def test_if_greater_than(self, backend):
         """Test If with greater than comparison"""
         @ml_function
         def max_value(x: int, y: int) -> int:
@@ -34,7 +29,7 @@ class TestBasicConditionals(MLIRTestBase):
         assert max_value(3, 7) == 7
         assert max_value(5, 5) == 5
 
-    def test_if_less_than(self):
+    def test_if_less_than(self, backend):
         """Test If with less than comparison"""
         @ml_function
         def min_value(x: int, y: int) -> int:
@@ -44,7 +39,7 @@ class TestBasicConditionals(MLIRTestBase):
         assert min_value(3, 7) == 3
         assert min_value(5, 5) == 5
 
-    def test_if_equality(self):
+    def test_if_equality(self, backend):
         """Test If with equality comparison"""
         @ml_function
         def check_equal(x: int, y: int) -> int:
@@ -53,7 +48,7 @@ class TestBasicConditionals(MLIRTestBase):
         assert check_equal(5, 5) == 1
         assert check_equal(5, 3) == 0
 
-    def test_if_not_equal(self):
+    def test_if_not_equal(self, backend):
         """Test If with not-equal comparison"""
         @ml_function
         def check_not_equal(x: int, y: int) -> int:
@@ -63,10 +58,10 @@ class TestBasicConditionals(MLIRTestBase):
         assert check_not_equal(5, 5) == 0
 
 
-class TestConditionalExpressions(MLIRTestBase):
+class TestConditionalExpressions:
     """Test conditionals with complex expressions"""
 
-    def test_if_with_arithmetic_branches(self):
+    def test_if_with_arithmetic_branches(self, backend):
         """Test If with arithmetic in branches"""
         @ml_function
         def conditional_calc(x: int, y: int) -> int:
@@ -75,7 +70,7 @@ class TestConditionalExpressions(MLIRTestBase):
         assert conditional_calc(10, 5) == 20  # 10 > 5, so 10 * 2
         assert conditional_calc(3, 7) == 14   # 3 < 7, so 7 * 2
 
-    def test_if_with_complex_condition(self):
+    def test_if_with_complex_condition(self, backend):
         """Test If with complex expression in condition"""
         @ml_function
         def complex_condition(a: int, b: int, c: int) -> int:
@@ -85,7 +80,7 @@ class TestConditionalExpressions(MLIRTestBase):
         assert complex_condition(10, 5, 12) == 15  # (10+5)=15 > 12, return 15
         assert complex_condition(3, 2, 10) == 10   # (3+2)=5 < 10, return 10
 
-    def test_if_with_complex_branches(self):
+    def test_if_with_complex_branches(self, backend):
         """Test If with complex expressions in both branches"""
         @ml_function
         def nested_arithmetic(x: int, y: int) -> int:
@@ -99,10 +94,10 @@ class TestConditionalExpressions(MLIRTestBase):
         assert nested_arithmetic(5, 0) == 15   # (5+5)=10 < 12, return 20-5=15
 
 
-class TestFloatConditionals(MLIRTestBase):
+class TestFloatConditionals:
     """Test conditional operations with floats"""
 
-    def test_if_float_comparison(self):
+    def test_if_float_comparison(self, backend):
         """Test If with float comparisons"""
         @ml_function
         def float_max(x: float, y: float) -> float:
@@ -114,7 +109,7 @@ class TestFloatConditionals(MLIRTestBase):
         result = float_max(1.5, 2.8)
         assert abs(result - 2.8) < 0.001
 
-    def test_if_float_operations(self):
+    def test_if_float_operations(self, backend):
         """Test If with float arithmetic in branches"""
         @ml_function
         def float_conditional(x: float, y: float) -> float:
@@ -126,7 +121,7 @@ class TestFloatConditionals(MLIRTestBase):
         result = float_conditional(3.0, 7.0)
         assert abs(result - 9.5) < 0.001   # 3 < 7, so 7 + 2.5
 
-    def test_if_mixed_type_comparison(self):
+    def test_if_mixed_type_comparison(self, backend):
         """Test If with mixed int/float using explicit cast"""
         @ml_function
         def mixed_conditional(x: int, y: float) -> float:
@@ -139,10 +134,10 @@ class TestFloatConditionals(MLIRTestBase):
         assert abs(result - 10.0) < 0.001
 
 
-class TestComparisonOperators(MLIRTestBase):
+class TestComparisonOperators:
     """Test all comparison operators"""
 
-    def test_all_comparison_operators(self):
+    def test_all_comparison_operators(self, backend):
         """Test all comparison operators via overloading"""
         @ml_function
         def test_gt(x: int, y: int) -> int:
@@ -179,10 +174,10 @@ class TestComparisonOperators(MLIRTestBase):
         assert test_le(10, 5) == 0
 
 
-class TestParameterizedConditionals(MLIRTestBase):
+class TestParameterizedConditionals:
     """Test conditionals with function parameters"""
 
-    def test_if_with_parameters(self):
+    def test_if_with_parameters(self, backend):
         """Test If using function parameters in all parts"""
         @ml_function
         def param_conditional(a: int, b: int, x: int, y: int) -> int:
@@ -192,7 +187,7 @@ class TestParameterizedConditionals(MLIRTestBase):
         assert param_conditional(10, 5, 100, 200) == 100
         assert param_conditional(3, 7, 100, 200) == 200
 
-    def test_if_chained_logic(self):
+    def test_if_chained_logic(self, backend):
         """Test multiple conditional-like logic"""
         @ml_function
         def clamp(value: int, min_val: int, max_val: int) -> int:

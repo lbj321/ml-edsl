@@ -12,16 +12,14 @@ Recursion uses the `call()` function with explicit function name references.
 import pytest
 from mlir_edsl import ml_function, add, sub, mul, eq, le, If, call
 from mlir_edsl import i32, i1
-from mlir_edsl.backend import HAS_CPP_BACKEND
-from tests.test_base import MLIRTestBase
 
 
 # ==================== BASIC RECURSION ====================
 
-class TestBasicRecursion(MLIRTestBase):
+class TestBasicRecursion:
     """Test basic recursive function patterns"""
 
-    def test_simple_recursive_factorial(self):
+    def test_simple_recursive_factorial(self, backend):
         """Test basic recursive factorial: fact(n) = n == 0 ? 1 : n * fact(n-1)"""
         @ml_function
         def factorial(n: int) -> int:
@@ -32,7 +30,7 @@ class TestBasicRecursion(MLIRTestBase):
         result = factorial(5)
         assert result == 120
 
-    def test_fibonacci_recursion(self):
+    def test_fibonacci_recursion(self, backend):
         """Test fibonacci: fib(n) = n <= 1 ? n : fib(n-1) + fib(n-2)"""
         @ml_function
         def fibonacci(n: int) -> int:
@@ -44,7 +42,7 @@ class TestBasicRecursion(MLIRTestBase):
         result = fibonacci(7)
         assert result == 13
 
-    def test_countdown_recursion(self):
+    def test_countdown_recursion(self, backend):
         """Test simple countdown: countdown(n) = n <= 0 ? 0 : countdown(n-1)"""
         @ml_function
         def countdown(n: int) -> int:
@@ -58,10 +56,10 @@ class TestBasicRecursion(MLIRTestBase):
 
 # ==================== TAIL RECURSION ====================
 
-class TestTailRecursion(MLIRTestBase):
+class TestTailRecursion:
     """Test tail recursive patterns with accumulators"""
 
-    def test_tail_recursive_sum(self):
+    def test_tail_recursive_sum(self, backend):
         """Test tail recursive sum: sum(n, acc) = n == 0 ? acc : sum(n-1, acc+n)"""
         @ml_function
         def tail_sum(n: int, acc: int) -> int:
@@ -72,7 +70,7 @@ class TestTailRecursion(MLIRTestBase):
         result = tail_sum(10, 0)
         assert result == 55  # 1+2+3+...+10
 
-    def test_tail_recursive_factorial(self):
+    def test_tail_recursive_factorial(self, backend):
         """Test tail recursive factorial with accumulator"""
         @ml_function
         def tail_factorial(n: int, acc: int) -> int:
@@ -86,10 +84,10 @@ class TestTailRecursion(MLIRTestBase):
 
 # ==================== SYMBOL RESOLUTION ====================
 
-class TestRecursionSymbolResolution(MLIRTestBase):
+class TestRecursionSymbolResolution:
     """Test symbol table handling for recursive function definitions"""
 
-    def test_recursive_function_symbol_resolution(self):
+    def test_recursive_function_symbol_resolution(self, backend):
         """Test that recursive functions can reference themselves during definition"""
         # This tests that a function is available in the symbol table
         # while its body is being defined, allowing self-reference
@@ -105,7 +103,7 @@ class TestRecursionSymbolResolution(MLIRTestBase):
         result = self_test(3)
         assert result == 6  # 3 + 2 + 1 + 0
 
-    def test_nested_recursive_calls(self):
+    def test_nested_recursive_calls(self, backend):
         """Test multiple recursive calls in a single expression"""
         @ml_function
         def nested_fib(n: int) -> int:
@@ -121,7 +119,7 @@ class TestRecursionSymbolResolution(MLIRTestBase):
 
 # ==================== MUTUAL RECURSION ====================
 
-class TestMutualRecursion(MLIRTestBase):
+class TestMutualRecursion:
     """Test mutually recursive functions calling each other"""
 
     def test_mutual_recursion_even_odd(self):
@@ -140,10 +138,10 @@ class TestMutualRecursion(MLIRTestBase):
 
 # ==================== MLIR/LLVM OUTPUT VALIDATION ====================
 
-class TestRecursionCodeGeneration(MLIRTestBase):
+class TestRecursionCodeGeneration:
     """Test MLIR and LLVM IR generation for recursive functions"""
 
-    def test_recursive_factorial_compiles(self):
+    def test_recursive_factorial_compiles(self, backend):
         """Test that recursive factorial compiles without errors"""
         @ml_function
         def fact(n: int) -> int:
@@ -156,10 +154,10 @@ class TestRecursionCodeGeneration(MLIRTestBase):
 
 # ==================== EDGE CASES ====================
 
-class TestRecursionEdgeCases(MLIRTestBase):
+class TestRecursionEdgeCases:
     """Test edge cases and boundary conditions for recursion"""
 
-    def test_recursion_base_case_immediate(self):
+    def test_recursion_base_case_immediate(self, backend):
         """Test recursion where base case is hit immediately"""
         @ml_function
         def factorial(n: int) -> int:
@@ -169,7 +167,7 @@ class TestRecursionEdgeCases(MLIRTestBase):
         result = factorial(0)
         assert result == 1
 
-    def test_recursion_single_level(self):
+    def test_recursion_single_level(self, backend):
         """Test recursion with single recursive call"""
         @ml_function
         def factorial(n: int) -> int:
@@ -179,7 +177,7 @@ class TestRecursionEdgeCases(MLIRTestBase):
         result = factorial(1)
         assert result == 1
 
-    def test_deep_recursion_compilation(self):
+    def test_deep_recursion_compilation(self, backend):
         """Test that deeper recursion compiles correctly"""
         @ml_function
         def factorial(n: int) -> int:

@@ -12,15 +12,12 @@ This test suite validates:
 import pytest
 from mlir_edsl import ml_function, cast
 from mlir_edsl import f32
-from mlir_edsl.backend import HAS_CPP_BACKEND
-from tests.test_base import MLIRTestBase
 
 
-@pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-class TestJITIntegration(MLIRTestBase):
+class TestJITIntegration:
     """Test JIT execution with @ml_function decorator"""
 
-    def test_ml_function_jit_execution(self):
+    def test_ml_function_jit_execution(self, backend):
         """Test JIT execution through @ml_function decorator with operator overloading"""
         @ml_function
         def add_example(x: int, y: int) -> int:
@@ -30,7 +27,7 @@ class TestJITIntegration(MLIRTestBase):
         result = add_example(4, 6)
         assert result == 10
 
-    def test_ml_function_float_jit(self):
+    def test_ml_function_float_jit(self, backend):
         """Test JIT execution with float operations"""
         @ml_function
         def float_mul(x: float, y: float) -> float:
@@ -39,7 +36,7 @@ class TestJITIntegration(MLIRTestBase):
         result = float_mul(2.5, 4.0)
         assert abs(result - 10.0) < 1e-6
 
-    def test_ml_function_subtraction_jit(self):
+    def test_ml_function_subtraction_jit(self, backend):
         """Test JIT execution with subtraction using operator overloading"""
         @ml_function
         def sub_example(x: int, y: int) -> int:
@@ -48,7 +45,7 @@ class TestJITIntegration(MLIRTestBase):
         result = sub_example(20, 8)
         assert result == 12
 
-    def test_ml_function_division_jit(self):
+    def test_ml_function_division_jit(self, backend):
         """Test JIT execution with division using operator overloading"""
         @ml_function
         def div_example(x: float, y: float) -> float:
@@ -57,7 +54,7 @@ class TestJITIntegration(MLIRTestBase):
         result = div_example(15.0, 3.0)
         assert abs(result - 5.0) < 1e-6
 
-    def test_ml_function_complex_expression(self):
+    def test_ml_function_complex_expression(self, backend):
         """Test JIT execution with complex expression using operator overloading"""
         @ml_function
         def complex_example(a: int, b: int, c: int, d: int) -> int:
@@ -66,7 +63,7 @@ class TestJITIntegration(MLIRTestBase):
         result = complex_example(10, 5, 2, 3)
         assert result == 9  # (10 + 5) - (2 * 3) = 15 - 6 = 9
 
-    def test_ml_function_mixed_types(self):
+    def test_ml_function_mixed_types(self, backend):
         """Test JIT execution with mixed int/float types using explicit cast"""
         @ml_function
         def mixed_types(x: int, y: float) -> float:
@@ -75,7 +72,7 @@ class TestJITIntegration(MLIRTestBase):
         result = mixed_types(5, 2.5)
         assert abs(result - 7.5) < 1e-6
 
-    def test_ml_function_reverse_operations(self):
+    def test_ml_function_reverse_operations(self, backend):
         """Test reverse operator overloading (literal on left side)"""
         @ml_function
         def reverse_add(x: int) -> int:

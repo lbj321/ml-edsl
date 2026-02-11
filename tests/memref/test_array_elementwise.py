@@ -10,17 +10,14 @@ This test validates array arithmetic operations:
 
 import pytest
 from mlir_edsl import ml_function, Array, i32, f32, cast
-from mlir_edsl.backend import HAS_CPP_BACKEND
-from tests.test_base import MLIRTestBase
 
 
 # ==================== ARRAY-ARRAY OPERATIONS ====================
 
-class TestArrayArrayOps(MLIRTestBase):
+class TestArrayArrayOps:
     """Test element-wise operations on two arrays"""
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_array_add_array(self):
+    def test_array_add_array(self, backend):
         """Test element-wise array addition"""
         @ml_function
         def array_add() -> i32:
@@ -31,8 +28,7 @@ class TestArrayArrayOps(MLIRTestBase):
 
         assert array_add() == 33
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_array_sub_array(self):
+    def test_array_sub_array(self, backend):
         """Test element-wise array subtraction"""
         @ml_function
         def array_sub() -> i32:
@@ -43,8 +39,7 @@ class TestArrayArrayOps(MLIRTestBase):
 
         assert array_sub() == 30
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_array_mul_array(self):
+    def test_array_mul_array(self, backend):
         """Test element-wise array multiplication"""
         @ml_function
         def array_mul() -> i32:
@@ -55,8 +50,7 @@ class TestArrayArrayOps(MLIRTestBase):
 
         assert array_mul() == 18
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_array_div_array(self):
+    def test_array_div_array(self, backend):
         """Test element-wise array division"""
         @ml_function
         def array_div() -> i32:
@@ -88,11 +82,10 @@ class TestArrayArrayOps(MLIRTestBase):
 
 # ==================== ARRAY-SCALAR OPERATIONS ====================
 
-class TestArrayScalarOps(MLIRTestBase):
+class TestArrayScalarOps:
     """Test broadcasting with scalar values (array op scalar)"""
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_array_add_scalar(self):
+    def test_array_add_scalar(self, backend):
         """Test array + scalar broadcasting"""
         @ml_function
         def array_add_scalar() -> i32:
@@ -102,8 +95,7 @@ class TestArrayScalarOps(MLIRTestBase):
 
         assert array_add_scalar() == 25
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_array_sub_scalar(self):
+    def test_array_sub_scalar(self, backend):
         """Test array - scalar broadcasting"""
         @ml_function
         def array_sub_scalar() -> i32:
@@ -113,8 +105,7 @@ class TestArrayScalarOps(MLIRTestBase):
 
         assert array_sub_scalar() == 15
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_array_mul_scalar(self):
+    def test_array_mul_scalar(self, backend):
         """Test array * scalar broadcasting"""
         @ml_function
         def array_mul_scalar() -> i32:
@@ -124,8 +115,7 @@ class TestArrayScalarOps(MLIRTestBase):
 
         assert array_mul_scalar() == 10
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_array_div_scalar(self):
+    def test_array_div_scalar(self, backend):
         """Test array / scalar broadcasting"""
         @ml_function
         def array_div_scalar() -> i32:
@@ -147,11 +137,10 @@ class TestArrayScalarOps(MLIRTestBase):
 
 # ==================== SCALAR-ARRAY OPERATIONS ====================
 
-class TestScalarArrayOps(MLIRTestBase):
+class TestScalarArrayOps:
     """Test broadcasting with scalar values (scalar op array)"""
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_scalar_add_array(self):
+    def test_scalar_add_array(self, backend):
         """Test scalar + array broadcasting"""
         @ml_function
         def scalar_add_array() -> i32:
@@ -161,8 +150,7 @@ class TestScalarArrayOps(MLIRTestBase):
 
         assert scalar_add_array() == 35
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_scalar_sub_array(self):
+    def test_scalar_sub_array(self, backend):
         """Test scalar - array broadcasting"""
         @ml_function
         def scalar_sub_array() -> i32:
@@ -172,8 +160,7 @@ class TestScalarArrayOps(MLIRTestBase):
 
         assert scalar_sub_array() == 80
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_scalar_mul_array(self):
+    def test_scalar_mul_array(self, backend):
         """Test scalar * array broadcasting"""
         @ml_function
         def scalar_mul_array() -> i32:
@@ -183,8 +170,7 @@ class TestScalarArrayOps(MLIRTestBase):
 
         assert scalar_mul_array() == 40
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_scalar_div_array(self):
+    def test_scalar_div_array(self, backend):
         """Test scalar / array broadcasting"""
         @ml_function
         def scalar_div_array() -> i32:
@@ -206,11 +192,10 @@ class TestScalarArrayOps(MLIRTestBase):
 
 # ==================== FLOAT ARRAY OPERATIONS ====================
 
-class TestFloatArrayOps(MLIRTestBase):
+class TestFloatArrayOps:
     """Test element-wise operations with float arrays"""
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_float_array_add_array(self):
+    def test_float_array_add_array(self, backend):
         """Test float array element-wise addition"""
         @ml_function
         def float_add() -> f32:
@@ -222,8 +207,7 @@ class TestFloatArrayOps(MLIRTestBase):
         result = float_add()
         assert abs(result - 3.5) < 0.001
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_float_array_mul_scalar(self):
+    def test_float_array_mul_scalar(self, backend):
         """Test float array with scalar broadcasting"""
         @ml_function
         def float_broadcast() -> f32:
@@ -234,8 +218,7 @@ class TestFloatArrayOps(MLIRTestBase):
         result = float_broadcast()
         assert abs(result - 5.0) < 0.001
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_float_scalar_div_array(self):
+    def test_float_scalar_div_array(self, backend):
         """Test float scalar / array broadcasting"""
         @ml_function
         def float_div() -> f32:
@@ -249,11 +232,10 @@ class TestFloatArrayOps(MLIRTestBase):
 
 # ==================== COMPLEX EXPRESSIONS ====================
 
-class TestComplexExpressions(MLIRTestBase):
+class TestComplexExpressions:
     """Test chained and nested array operations"""
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_chained_operations(self):
+    def test_chained_operations(self, backend):
         """Test multiple operations: (arr1 + arr2) * scalar"""
         @ml_function
         def chained() -> i32:
@@ -264,8 +246,7 @@ class TestComplexExpressions(MLIRTestBase):
 
         assert chained() == 18
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_mixed_operations(self):
+    def test_mixed_operations(self, backend):
         """Test mixing array and scalar operations"""
         @ml_function
         def mixed() -> i32:
@@ -277,8 +258,7 @@ class TestComplexExpressions(MLIRTestBase):
 
         assert mixed() == 100
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_array_operations_with_access(self):
+    def test_array_operations_with_access(self, backend):
         """Test array operations combined with element access"""
         @ml_function
         def complex_expr() -> i32:
@@ -290,8 +270,7 @@ class TestComplexExpressions(MLIRTestBase):
 
         assert complex_expr() == 112
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_nested_broadcast(self):
+    def test_nested_broadcast(self, backend):
         """Test nested operations with broadcasting"""
         @ml_function
         def nested() -> i32:
@@ -305,11 +284,10 @@ class TestComplexExpressions(MLIRTestBase):
 
 # ==================== INTEGRATION WITH EXISTING FEATURES ====================
 
-class TestIntegrationWithExisting(MLIRTestBase):
+class TestIntegrationWithExisting:
     """Test element-wise operations work with other features"""
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_array_ops_with_store(self):
+    def test_array_ops_with_store(self, backend):
         """Test element-wise ops combined with array store"""
         @ml_function
         def with_store() -> i32:
@@ -322,8 +300,7 @@ class TestIntegrationWithExisting(MLIRTestBase):
 
         assert with_store() == 99
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-    def test_array_ops_all_four_operations(self):
+    def test_array_ops_all_four_operations(self, backend):
         """Test all four operations in one function"""
         @ml_function
         def all_ops() -> i32:

@@ -15,13 +15,11 @@ from mlir_edsl import i32, f32, i1
 from mlir_edsl.ast import ArrayLiteral, ArrayAccess, ArrayStore
 from mlir_edsl.ast.serialization import SerializationContext
 from mlir_edsl.types import ArrayType, i32, f32
-from mlir_edsl.backend import HAS_CPP_BACKEND
-from tests.test_base import MLIRTestBase
 
 
 # ==================== 2D ARRAY LITERAL CREATION ====================
 
-class TestArray2DLiteralCreation(MLIRTestBase):
+class TestArray2DLiteralCreation:
     """Test 2D ArrayLiteral creation with nested lists"""
 
     def test_2d_array_literal_i32(self):
@@ -65,7 +63,7 @@ class TestArray2DLiteralCreation(MLIRTestBase):
 
 # ==================== 2D ARRAY LITERAL VALIDATION ====================
 
-class TestArray2DLiteralValidation(MLIRTestBase):
+class TestArray2DLiteralValidation:
     """Test validation for 2D array literal creation"""
 
     def test_2d_size_mismatch_wrong_rows(self):
@@ -109,7 +107,7 @@ class TestArray2DLiteralValidation(MLIRTestBase):
 
 # ==================== 2D ARRAY ACCESS ====================
 
-class TestArray2DAccess(MLIRTestBase):
+class TestArray2DAccess:
     """Test 2D ArrayAccess with tuple indices"""
 
     def test_2d_array_access_creation(self):
@@ -164,7 +162,7 @@ class TestArray2DAccess(MLIRTestBase):
 
 # ==================== 2D ARRAY STORE ====================
 
-class TestArray2DStore(MLIRTestBase):
+class TestArray2DStore:
     """Test 2D ArrayStore with tuple indices"""
 
     def test_2d_array_store_creation(self):
@@ -211,7 +209,7 @@ class TestArray2DStore(MLIRTestBase):
 
 # ==================== 2D ARRAY PROTOBUF SERIALIZATION ====================
 
-class TestArray2DProtobufSerialization(MLIRTestBase):
+class TestArray2DProtobufSerialization:
     """Test protobuf serialization for 2D arrays"""
 
     def test_2d_array_literal_to_proto(self):
@@ -265,7 +263,7 @@ class TestArray2DProtobufSerialization(MLIRTestBase):
 
 # ==================== 2D ELEMENT-WISE OPERATIONS ====================
 
-class TestArray2DElementwise(MLIRTestBase):
+class TestArray2DElementwise:
     """Test element-wise operations on 2D arrays"""
 
     def test_2d_array_add_arrays(self):
@@ -309,11 +307,10 @@ class TestArray2DElementwise(MLIRTestBase):
 
 # ==================== 2D MLIR GENERATION ====================
 
-@pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-class TestArray2DMLIRGeneration(MLIRTestBase):
+class TestArray2DMLIRGeneration:
     """Test MLIR generation for 2D arrays"""
 
-    def test_2d_array_literal_generates_memref(self):
+    def test_2d_array_literal_generates_memref(self, backend):
         """Test that 2D array literal compiles and generates memref type"""
         @ml_function
         def create_2d_array() -> i32:
@@ -326,7 +323,7 @@ class TestArray2DMLIRGeneration(MLIRTestBase):
         # Should compile without errors - IR contains memref<2x3xi32>
         assert create_2d_array is not None
 
-    def test_2d_array_access_generates_load(self):
+    def test_2d_array_access_generates_load(self, backend):
         """Test that 2D array access compiles and generates memref.load with 2 indices"""
         @ml_function
         def access_2d_element() -> i32:
@@ -336,7 +333,7 @@ class TestArray2DMLIRGeneration(MLIRTestBase):
         # Should compile without errors - IR contains memref.load with 2 indices
         assert access_2d_element is not None
 
-    def test_2d_array_store_generates_nested_loops(self):
+    def test_2d_array_store_generates_nested_loops(self, backend):
         """Test that 2D array store compiles correctly"""
         @ml_function
         def store_2d_element() -> i32:
@@ -350,11 +347,10 @@ class TestArray2DMLIRGeneration(MLIRTestBase):
 
 # ==================== 2D EXECUTION TESTS ====================
 
-@pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-class TestArray2DExecution(MLIRTestBase):
+class TestArray2DExecution:
     """Test execution of 2D array operations"""
 
-    def test_2d_array_element_access_execution(self):
+    def test_2d_array_element_access_execution(self, backend):
         """Test executing 2D array element access"""
         @ml_function
         def get_element() -> i32:
@@ -367,7 +363,7 @@ class TestArray2DExecution(MLIRTestBase):
         result = get_element()
         assert result == 60
 
-    def test_2d_array_add_execution(self):
+    def test_2d_array_add_execution(self, backend):
         """Test executing 2D array addition"""
         @ml_function
         def add_arrays() -> i32:
@@ -380,7 +376,7 @@ class TestArray2DExecution(MLIRTestBase):
         total = add_arrays()
         assert total == 11 + 22 + 33 + 44  # 110
 
-    def test_2d_array_scalar_broadcast_execution(self):
+    def test_2d_array_scalar_broadcast_execution(self, backend):
         """Test executing 2D array + scalar broadcasting"""
         @ml_function
         def add_scalar() -> i32:

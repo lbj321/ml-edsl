@@ -203,6 +203,13 @@ std::vector<std::string> MLIRCompiler::listFunctions() const {
   return {compiledFunctions.begin(), compiledFunctions.end()};
 }
 
+std::string MLIRCompiler::getModuleIR() {
+  std::string result;
+  llvm::raw_string_ostream os(result);
+  module->print(os);
+  return result;
+}
+
 // ==================== CONFIGURATION ====================
 
 void MLIRCompiler::setOptimizationLevel(OptLevel level) {

@@ -3,13 +3,12 @@
 import pytest
 from mlir_edsl import ml_function, add, sub, mul, div, cast
 from mlir_edsl import i32, f32, i1
-from mlir_edsl.backend import HAS_CPP_BACKEND
-from tests.test_base import MLIRTestBase
 
-class TestParameterFunctionality(MLIRTestBase):
+
+class TestParameterFunctionality:
     """Test Phase 6.3: Function Parameters"""
     
-    def test_basic_two_parameters(self):
+    def test_basic_two_parameters(self, backend):
         """Test function with two integer parameters"""
         @ml_function
         def add_params(a: int, b: int) -> int:
@@ -23,7 +22,7 @@ class TestParameterFunctionality(MLIRTestBase):
         result2 = add_params(10, 20)
         assert result2 == 30
     
-    def test_single_parameter(self):
+    def test_single_parameter(self, backend):
         """Test function with single parameter"""
         @ml_function
         def double_value(x: int) -> int:
@@ -32,7 +31,7 @@ class TestParameterFunctionality(MLIRTestBase):
         result = double_value(5)
         assert result == 10
     
-    def test_three_parameters(self):
+    def test_three_parameters(self, backend):
         """Test function with three parameters"""
         @ml_function
         def three_param_ops(a: int, b: int, c: int) -> int:
@@ -42,7 +41,7 @@ class TestParameterFunctionality(MLIRTestBase):
         result = three_param_ops(10, 5, 3)  # (10 + 5) - 3 = 12
         assert result == 12
     
-    def test_complex_expressions(self):
+    def test_complex_expressions(self, backend):
         """Test complex expressions with parameters"""
         @ml_function
         def complex_calc(x: int, y: int) -> int:
@@ -55,7 +54,7 @@ class TestParameterFunctionality(MLIRTestBase):
         result = complex_calc(4, 3)  # ((4*2) + 3) - (4/2) = (8 + 3) - 2 = 9
         assert result == 9
     
-    def test_explicit_type_casting(self):
+    def test_explicit_type_casting(self, backend):
         """Test explicit type casting in strict typing system"""
         @ml_function
         def mixed_types_with_cast(a: int, b: float) -> float:
@@ -66,7 +65,7 @@ class TestParameterFunctionality(MLIRTestBase):
         result = mixed_types_with_cast(7, 8.0)
         assert abs(result - 15.0) < 0.001
     
-    def test_multiple_function_calls_no_collision(self):
+    def test_multiple_function_calls_no_collision(self, backend):
         """Test multiple function calls don't interfere with each other"""
         @ml_function
         def func1(a: int, b: int) -> int:
@@ -87,7 +86,7 @@ class TestParameterFunctionality(MLIRTestBase):
         result3 = func1(10, 15)
         assert result3 == 25
     
-    def test_parameter_reuse_same_function(self):
+    def test_parameter_reuse_same_function(self, backend):
         """Test calling same function multiple times with different parameters"""
         @ml_function
         def reusable_func(a: int, b: int) -> int:
@@ -105,7 +104,7 @@ class TestParameterFunctionality(MLIRTestBase):
         result3 = reusable_func(1, 4)
         assert result3 == -1
     
-    def test_zero_parameters(self):
+    def test_zero_parameters(self, backend):
         """Test function with no parameters (regression test)"""
         @ml_function
         def constant_func() -> int:
@@ -114,7 +113,7 @@ class TestParameterFunctionality(MLIRTestBase):
         result = constant_func()
         assert result == 8
     
-    def test_parameter_order_matters(self):
+    def test_parameter_order_matters(self, backend):
         """Test that parameter order is preserved"""
         @ml_function
         def order_test(a: int, b: int) -> int:

@@ -50,6 +50,7 @@ public:
     // ==================== INSPECTION ====================
     bool hasFunction(const std::string& name) const;
     std::vector<std::string> listFunctions() const;
+    std::string getModuleIR();
 
     // ==================== CONFIGURATION ====================
     void setOptimizationLevel(OptLevel level);
