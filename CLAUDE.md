@@ -62,7 +62,7 @@ This project follows **user-driven implementation**. Claude should guide and adv
 - **C++ Backend**: `MLIRCompiler` (unified facade) → `MLIRBuilder` → `MLIRLowering` → `MLIRExecutor`
 - **Python Frontend**: `mlir_edsl/` - AST-based frontend with strict typing
 - **Execution**: `MLIRExecutor` - JIT compilation with optimization levels (O0/O2/O3)
-- **Testing**: `tests/` - Comprehensive pytest suite with class-based organization
+- **Testing**: `tests/` - Comprehensive pytest suite with conftest fixtures and FileCheck IR tests
 - **Build System**: CMake with LLVM/MLIR 18+ dependencies
 
 ### Code Organization
@@ -115,10 +115,11 @@ This project follows **user-driven implementation**. Claude should guide and adv
   - `backend.py` - Python/C++ interface (pybind11)
   - `types.py` - Type system (ScalarType, ArrayType, TypeSystem)
   - `ast_pb2.py` - Generated protobuf Python module
-- `tests/` - Test suite (see `tests/CLAUDE.md` for test-specific guidelines)
-  - `test_*.py` - Root-level tests (base, control_flow, cpp_backend, jit_integration, etc.)
-  - `memref/` - MemRef/array-specific tests (2D, 3D, AST, elementwise, execution, MLIR, types)
-  - `tensor/` - Tensor dialect tests (AST, execution, insert, types)
+- `tests/` - Test suite
+  - `conftest.py` - Pytest fixtures (`backend`, `clean_module`, `check_ir`)
+  - `core/` - Core feature tests (parameters, control flow, recursion, typing, backend, JIT, optimization, IR)
+  - `memref/` - MemRef/array tests (2D, 3D, AST, elementwise, execution, types, IR)
+  - `tensor/` - Tensor dialect tests (AST, execution, insert, types, IR)
 - `examples/` - Usage examples and demos
 - `build/` - CMake build directory (gitignored)
 
@@ -126,44 +127,88 @@ This project follows **user-driven implementation**. Claude should guide and adv
 1. **Always reference ROADMAP.md** for current implementation status and phase details
 2. **Maintain user-driven approach** - guide rather than implement directly
 3. **Focus on architecture and design** when advising
-4. **Use existing test patterns** - Follow patterns in `tests/` (see `tests/CLAUDE.md`)
+4. **Use existing test patterns** - Follow patterns in existing test files
 5. **Follow established C++/Python integration patterns** via pybind11
 6. **Test incrementally** - Run tests frequently during development
 
 ## Testing Guidelines
 
-### Quick Reference
-- **Test Organization**: Class-based with `MLIRTestBase` inheritance
-- **Detailed Guidelines**: See `tests/CLAUDE.md` for comprehensive test standards
-- **Test Files**: Follow `test_<feature>.py` naming convention
+### Test Infrastructure
+- **Fixtures** (in `tests/conftest.py`):
+  - `backend` — session-scoped C++ backend; auto-skips tests when unavailable
+  - `clean_module` — autouse; clears module before each test, saves IR after if `SAVE_IR=1`
+  - `check_ir` — FileCheck-based IR assertions (requires LLVM `FileCheck` binary)
+- **No base class** — tests are plain classes, no inheritance required
+- **Backend-dependent tests** add `backend` as a fixture parameter; pure-Python AST tests omit it
+
+### Test Organization
+- `tests/core/` — scalar ops, control flow, recursion, typing, backend, JIT, optimization
+- `tests/memref/` — array operations (memref dialect)
+- `tests/tensor/` — tensor operations (tensor dialect)
+- Each folder has a `test_ir.py` for FileCheck IR structure tests
+
+### Writing Tests
+
+**Runtime test** (verifies correct values):
+```python
+class TestFeature:
+    def test_something(self, backend):
+        @ml_function
+        def my_func(x: int) -> int:
+            return add(x, 5)
+        assert my_func(10) == 15
+```
+
+**IR test** (verifies MLIR structure via FileCheck):
+```python
+class TestFeatureIR:
+    def test_something_ir(self, check_ir):
+        @ml_function
+        def my_func(x: int) -> int:
+            return add(x, 5)
+        my_func(1)
+        check_ir("""
+        // CHECK: func.func @my_func(%arg0: i32) -> i32
+        // CHECK: arith.addi
+        // CHECK: return
+        """)
+```
+
+**Pure-Python AST test** (no backend needed):
+```python
+class TestASTNodes:
+    def test_type_inference(self):
+        node = BinaryOp(ADD, Constant(5), Constant(3))
+        assert node.infer_type() == i32
+```
 
 ### Running Tests
 ```bash
 # Run all tests
 python3 -m pytest tests/ -v
 
-# Run specific test file
-python3 -m pytest tests/test_parameter.py -v
+# Run specific folder
+python3 -m pytest tests/core/ -v
 
-# Run tests in a subdirectory
-python3 -m pytest tests/tensor/ -v
+# Run specific test file
+python3 -m pytest tests/core/test_parameter.py -v
 
 # Run single test
-python3 -m pytest tests/test_parameter.py::TestParameterFunctionality::test_basic_two_parameters -v
+python3 -m pytest tests/core/test_parameter.py::TestParameterFunctionality::test_basic_two_parameters -v
 
 # Save IR to files in ir_output/ (for debugging)
-SAVE_IR=1 python3 -m pytest tests/test_parameter.py -v
+SAVE_IR=1 python3 -m pytest tests/core/test_parameter.py -v
 
 # Dump AST to ast_output/ (for debugging)
-DUMP_AST=1 python3 -m pytest tests/test_parameter.py -v
+DUMP_AST=1 python3 -m pytest tests/core/test_parameter.py -v
 ```
 
 ### Test Coverage Requirements
 When adding new features:
-1. Create corresponding test file: `tests/test_<feature>.py` (or in `tests/<dialect>/` for dialect-specific tests)
-2. Test both success and error cases
-3. Test edge cases and boundary conditions
-4. Follow patterns in `tests/CLAUDE.md`
+1. Add runtime tests in the appropriate folder (`core/`, `memref/`, or `tensor/`)
+2. Add FileCheck IR tests in the folder's `test_ir.py` for dialect op verification
+3. Test both success and error cases
+4. Test edge cases and boundary conditions
 
 ## Build and Development
 
