@@ -32,8 +32,9 @@ def _read_file(path):
         return f"(File not found: {path})"
 
 
-def _generate_ir_html(test_name, func_name, ast_dump, mlir, snapshots, unopt_llvm, opt_llvm):
-    """Generate HTML with vertical pipeline layout showing all lowering stages."""
+def _generate_ir_html(test_name, func_name, func_source, ast_dump, mlir,
+                      snapshots, unopt_llvm, opt_llvm):
+    """Generate HTML with vertical pipeline layout showing all compilation stages."""
     from html import escape
     import datetime
 
@@ -134,6 +135,7 @@ def _generate_ir_html(test_name, func_name, ast_dump, mlir, snapshots, unopt_llv
             font-size: 14px;
             line-height: 1.4;
         }}
+        .python {{ color: #dcdcaa; }}
         .ast {{ color: #b5cea8; }}
         .mlir {{ color: #ce9178; }}
         .llvm-unopt {{ color: #dcdcaa; }}
@@ -160,6 +162,13 @@ def _generate_ir_html(test_name, func_name, ast_dump, mlir, snapshots, unopt_llv
         Function: {escape(func_name)}<br>
         Generated: {escape(str(datetime.datetime.now()))}
     </div>
+
+    <!-- Python Source -->
+    <h2 class="section-header">Python Source</h2>
+    <details open>
+        <summary>@ml_function</summary>
+        <pre class="python">{escape(func_source) if func_source else "(no source captured)"}</pre>
+    </details>
 
     <!-- AST -->
     <h2 class="section-header">AST</h2>
@@ -230,14 +239,16 @@ def _save_ir_for_test(backend, test_name):
     unopt_ir = _read_file(os.path.join(ir_output_dir, "module_unopt.ll"))
     opt_ir = _read_file(os.path.join(ir_output_dir, "module_opt.ll"))
 
-    # Get lowering pipeline snapshots and AST dump
+    # Get lowering pipeline snapshots, AST dump, and Python source
     snapshots = backend.get_lowering_snapshots()
     ast_dump = backend._ast_dumps.get(func_name, "")
+    func_source = backend._func_sources.get(func_name, "")
 
     # Generate HTML report
     html_path = os.path.join(ir_html_dir, f"{test_name}.html")
     html_content = _generate_ir_html(
-        test_name, func_name, ast_dump, mlir_ir, snapshots, unopt_ir, opt_ir
+        test_name, func_name, func_source, ast_dump, mlir_ir,
+        snapshots, unopt_ir, opt_ir
     )
     with open(html_path, "w") as f:
         f.write(html_content)
