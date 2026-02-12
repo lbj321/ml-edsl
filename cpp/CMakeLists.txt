@@ -13,6 +13,13 @@ add_library(mlir_edsl_core STATIC
     src/builders/TensorBuilder.cpp
 )
 
+# MLIRLowering subclasses mlir::PassInstrumentation which requires -fno-rtti
+# to match LLVM's build. Other files use pybind11 which requires RTTI.
+if(NOT LLVM_ENABLE_RTTI)
+    set_source_files_properties(src/MLIRLowering.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+endif()
+
 target_include_directories(mlir_edsl_core PUBLIC
     include
 )

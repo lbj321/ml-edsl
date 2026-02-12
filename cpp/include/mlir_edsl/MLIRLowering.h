@@ -7,39 +7,48 @@
 #include "llvm/IR/Module.h"
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace mlir_edsl {
 
 struct LoweredModule {
-    std::unique_ptr<llvm::Module> module;
-    std::unique_ptr<llvm::LLVMContext> context;
+  std::unique_ptr<llvm::Module> module;
+  std::unique_ptr<llvm::LLVMContext> context;
 };
 
 class MLIRLowering {
 public:
-    MLIRLowering();
-    MLIRLowering(mlir::MLIRContext* sharedContext);
-    ~MLIRLowering() = default;
+  using SnapshotList = std::vector<std::pair<std::string, std::string>>;
 
-    // Lower MLIR module to llvm::Module directly (no serialization)
-    LoweredModule lowerToLLVMModule(mlir::ModuleOp module);
+  MLIRLowering();
+  MLIRLowering(mlir::MLIRContext *sharedContext, bool captureSnapshots = false);
+  ~MLIRLowering() = default;
 
-    // Lower MLIR module to LLVM IR string (convenience, calls lowerToLLVMModule)
-    std::string lowerToLLVMIR(mlir::ModuleOp module);
+  // Lower MLIR module to llvm::Module directly (no serialization)
+  LoweredModule lowerToLLVMModule(mlir::ModuleOp module);
 
-    // Get the pass manager for advanced usage
-    mlir::PassManager& getPassManager() { return passManager; }
+  // Lower MLIR module to LLVM IR string (convenience, calls lowerToLLVMModule)
+  std::string lowerToLLVMIR(mlir::ModuleOp module);
+
+  // Get the pass manager for advanced usage
+  mlir::PassManager &getPassManager() { return passManager; }
+
+  // Move captured snapshots out (only populated when captureSnapshots=true)
+  SnapshotList takeSnapshots() { return std::move(snapshots); }
 
 private:
-    std::unique_ptr<mlir::MLIRContext> context;
-    mlir::PassManager passManager;
+  std::unique_ptr<mlir::MLIRContext> context;
+  mlir::PassManager passManager;
+  bool snapshotsEnabled = false;
+  SnapshotList snapshots;
 
-    // Helper methods
-    void registerRequiredDialects();
-    void registerRequiredDialects(mlir::MLIRContext* ctx);
-    void setupLoweringPipeline();
-    void addConversionPasses();
-    bool runLoweringPipeline(mlir::ModuleOp module);
+  // Helper methods
+  void registerRequiredDialects();
+  void registerRequiredDialects(mlir::MLIRContext *ctx);
+  void setupLoweringPipeline();
+  void addConversionPasses();
+  bool runLoweringPipeline(mlir::ModuleOp module);
 };
 
 } // namespace mlir_edsl

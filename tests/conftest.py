@@ -32,10 +32,36 @@ def _read_file(path):
         return f"(File not found: {path})"
 
 
-def _generate_ir_html(test_name, func_name, mlir, unopt_llvm, opt_llvm):
-    """Generate HTML with side-by-side IR sections."""
+def _generate_ir_html(test_name, func_name, ast_dump, mlir, snapshots, unopt_llvm, opt_llvm):
+    """Generate HTML with vertical pipeline layout showing all lowering stages."""
     from html import escape
     import datetime
+
+    # Build lowering pipeline section
+    pipeline_html = ""
+    if snapshots:
+        prev_ir = mlir
+        for i, (pass_name, ir) in enumerate(snapshots):
+            changed = (ir != prev_ir)
+            badge = "" if changed else ' <span class="badge-unchanged">(unchanged)</span>'
+            # Auto-expand passes that changed IR and involve bufferization
+            is_open = changed and "bufferize" in pass_name.lower()
+            open_attr = " open" if is_open else ""
+            css_class = "pass-changed" if changed else "pass-unchanged"
+            escaped_name = escape(pass_name)
+            escaped_ir = escape(ir)
+            pipeline_html += (
+                f'\n        <details{open_attr} class="{css_class}">'
+                f"\n            <summary>Pass {i+1}: {escaped_name}{badge}</summary>"
+                f'\n            <pre class="mlir">{escaped_ir}</pre>'
+                f"\n        </details>"
+            )
+            prev_ir = ir
+    else:
+        pipeline_html = (
+            '\n        <p style="color: #808080; font-style: italic;">'
+            "No lowering snapshots captured (set SAVE_IR=1)</p>"
+        )
 
     return f"""<!DOCTYPE html>
 <html>
@@ -62,6 +88,13 @@ def _generate_ir_html(test_name, func_name, mlir, unopt_llvm, opt_llvm):
             margin-bottom: 20px;
             font-size: 14px;
         }}
+        .section-header {{
+            color: #569cd6;
+            font-size: 20px;
+            margin: 30px 0 10px 0;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #3c3c3c;
+        }}
         .ir-row {{
             display: flex;
             gap: 10px;
@@ -75,7 +108,11 @@ def _generate_ir_html(test_name, func_name, mlir, unopt_llvm, opt_llvm):
             border: 1px solid #3c3c3c;
             border-radius: 5px;
             background-color: #252526;
+            margin-bottom: 8px;
+        }}
+        .ir-column details {{
             height: 100%;
+            margin-bottom: 0;
         }}
         summary {{
             padding: 15px;
@@ -97,9 +134,24 @@ def _generate_ir_html(test_name, func_name, mlir, unopt_llvm, opt_llvm):
             font-size: 14px;
             line-height: 1.4;
         }}
+        .ast {{ color: #b5cea8; }}
         .mlir {{ color: #ce9178; }}
         .llvm-unopt {{ color: #dcdcaa; }}
         .llvm-opt {{ color: #9cdcfe; }}
+        .badge-unchanged {{
+            font-size: 12px;
+            color: #6a9955;
+            font-weight: normal;
+        }}
+        .pass-unchanged summary {{
+            color: #808080;
+        }}
+        .pass-changed summary {{
+            color: #4ec9b0;
+        }}
+        .pipeline-section {{
+            margin: 10px 0 10px 20px;
+        }}
     </style>
 </head>
 <body>
@@ -109,33 +161,37 @@ def _generate_ir_html(test_name, func_name, mlir, unopt_llvm, opt_llvm):
         Generated: {escape(str(datetime.datetime.now()))}
     </div>
 
-    <!-- MLIR Row -->
-    <div class="ir-row">
-        <div class="ir-column">
-            <details>
-                <summary>MLIR Dialect</summary>
-                <pre class="mlir">{escape(mlir)}</pre>
-            </details>
-        </div>
-        <div class="ir-column">
-            <details>
-                <summary>MLIR Dialect (Placeholder)</summary>
-                <pre class="mlir">{escape(mlir)}</pre>
-            </details>
-        </div>
+    <!-- AST -->
+    <h2 class="section-header">AST</h2>
+    <details open>
+        <summary>Expression Tree</summary>
+        <pre class="ast">{escape(ast_dump) if ast_dump else "(no AST dump captured)"}</pre>
+    </details>
+
+    <!-- Input MLIR -->
+    <h2 class="section-header">Input MLIR</h2>
+    <details open>
+        <summary>MLIR Dialect</summary>
+        <pre class="mlir">{escape(mlir)}</pre>
+    </details>
+
+    <!-- Lowering Pipeline -->
+    <h2 class="section-header">Lowering Pipeline ({len(snapshots)} passes)</h2>
+    <div class="pipeline-section">{pipeline_html}
     </div>
 
-    <!-- LLVM IR Row (Unoptimized | Optimized) -->
+    <!-- LLVM IR (side-by-side) -->
+    <h2 class="section-header">LLVM IR</h2>
     <div class="ir-row">
         <div class="ir-column">
             <details open>
-                <summary>LLVM IR (Unoptimized)</summary>
+                <summary>Unoptimized</summary>
                 <pre class="llvm-unopt">{escape(unopt_llvm)}</pre>
             </details>
         </div>
         <div class="ir-column">
             <details open>
-                <summary>LLVM IR (Optimized O2)</summary>
+                <summary>Optimized (O2)</summary>
                 <pre class="llvm-opt">{escape(opt_llvm)}</pre>
             </details>
         </div>
@@ -174,9 +230,15 @@ def _save_ir_for_test(backend, test_name):
     unopt_ir = _read_file(os.path.join(ir_output_dir, "module_unopt.ll"))
     opt_ir = _read_file(os.path.join(ir_output_dir, "module_opt.ll"))
 
+    # Get lowering pipeline snapshots and AST dump
+    snapshots = backend.get_lowering_snapshots()
+    ast_dump = backend._ast_dumps.get(func_name, "")
+
     # Generate HTML report
     html_path = os.path.join(ir_html_dir, f"{test_name}.html")
-    html_content = _generate_ir_html(test_name, func_name, mlir_ir, unopt_ir, opt_ir)
+    html_content = _generate_ir_html(
+        test_name, func_name, ast_dump, mlir_ir, snapshots, unopt_ir, opt_ir
+    )
     with open(html_path, "w") as f:
         f.write(html_content)
 

@@ -32,6 +32,10 @@ PYBIND11_MODULE(_mlir_backend, m) {
            "Get current MLIR module IR as string")
       .def("clear", &mlir_edsl::MLIRCompiler::clear,
            "Reset to Building state, clear all compiled functions")
+      .def("get_lowering_snapshots",
+           &mlir_edsl::MLIRCompiler::getLoweringSnapshots,
+           "Get IR snapshots after each lowering pass (populated when "
+           "SAVE_IR is set)")
       .def(
           "set_optimization_level",
           [](mlir_edsl::MLIRCompiler &self, int level) {

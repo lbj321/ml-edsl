@@ -40,6 +40,7 @@ class CppMLIRBackend:
 
         self.compiler = _mlir_backend.MLIRCompiler()
         self._signatures: dict[str, tuple[list[Type], Type]] = {}
+        self._ast_dumps: dict[str, str] = {}
 
     # ==================== COMPILATION HELPERS (PRIVATE) ====================
     def _build_function_def_proto(self, name: str, params: list,
@@ -103,10 +104,15 @@ class CppMLIRBackend:
         """Get current MLIR module IR as string."""
         return self.compiler.get_module_ir()
 
+    def get_lowering_snapshots(self) -> list[tuple[str, str]]:
+        """Get IR snapshots from lowering pipeline. Only populated with SAVE_IR=1."""
+        return self.compiler.get_lowering_snapshots()
+
     def clear_module(self):
         """Clear all functions and reset completely."""
         self.compiler.clear()
         self._signatures.clear()
+        self._ast_dumps.clear()
 
     def set_optimization_level(self, level: int):
         """Set LLVM optimization level."""

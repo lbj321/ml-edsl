@@ -55,6 +55,10 @@ def compile_function(signature: FunctionSignature, result_ast: Value) -> Compile
     if _DUMP_AST:
         _save_ast_dump(signature.name, result_ast)
 
+    # Store AST dump on backend for HTML report (SAVE_IR=1)
+    if os.getenv("SAVE_IR"):
+        backend._ast_dumps[signature.name] = result_ast.dump()
+
     # Compile to backend
     backend.compile_function_from_ast(
         signature.name,
