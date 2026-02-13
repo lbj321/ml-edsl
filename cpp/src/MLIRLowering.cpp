@@ -29,6 +29,7 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/Passes.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace {
@@ -118,6 +119,14 @@ void MLIRLowering::setupLoweringPipeline() {
 void MLIRLowering::addConversionPasses() {
   // Bufferize tensor ops to memref ops
   passManager.addPass(mlir::bufferization::createOneShotBufferizePass());
+
+  // Insert deallocs for buffers created during bufferization
+  passManager.addPass(
+      mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
+  passManager.addPass(mlir::createCanonicalizerPass());
+  passManager.addPass(
+      mlir::bufferization::createBufferDeallocationSimplificationPass());
+  passManager.addPass(mlir::bufferization::createLowerDeallocationsPass());
 
   // Lower SCF to ControlFlow dialect
   passManager.addPass(mlir::createSCFToControlFlowPass());
