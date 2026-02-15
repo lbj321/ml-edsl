@@ -209,8 +209,13 @@ def _generate_ir_html(test_name, func_name, func_source, ast_dump, mlir,
 </html>"""
 
 
-def _save_ir_for_test(backend, test_name):
-    """Save IR files and generate HTML report for a test."""
+def _save_ir_for_test(backend, node):
+    """Save IR files and generate HTML report for a test.
+
+    Uses the pytest node ID to create a hierarchical output structure:
+        tests/memref/test_array_execution.py::TestArrayExecution::test_basic
+        -> ir_html/memref/test_array_execution/test_basic.html
+    """
     global _ir_output_cleared
 
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -226,13 +231,28 @@ def _save_ir_for_test(backend, test_name):
         _ir_output_cleared = True
 
     os.makedirs(ir_output_dir, exist_ok=True)
-    os.makedirs(ir_html_dir, exist_ok=True)
 
     functions = backend.list_functions()
     if not functions:
         return
 
     func_name = functions[0]
+
+    # Build hierarchical output path from node ID
+    # e.g. "tests/memref/test_array_execution.py::TestClass::test_name"
+    # ->   "memref/test_array_execution/test_name.html"
+    node_id = node.nodeid
+    # Strip "tests/" prefix
+    rel = node_id.split("tests/", 1)[-1] if "tests/" in node_id else node_id
+    # Split file path and test path
+    file_part, _, test_part = rel.partition("::")
+    # Remove .py extension, use as directory
+    file_dir = file_part.replace(".py", "")
+    # Use only the test method name (last segment after ::)
+    test_name = test_part.split("::")[-1] if test_part else node.name
+
+    html_dir = os.path.join(ir_html_dir, file_dir)
+    os.makedirs(html_dir, exist_ok=True)
 
     # Read IR files written by C++ backend
     mlir_ir = _read_file(os.path.join(ir_output_dir, f"{func_name}.mlir"))
@@ -245,7 +265,7 @@ def _save_ir_for_test(backend, test_name):
     func_source = backend._func_sources.get(func_name, "")
 
     # Generate HTML report
-    html_path = os.path.join(ir_html_dir, f"{test_name}.html")
+    html_path = os.path.join(html_dir, f"{test_name}.html")
     html_content = _generate_ir_html(
         test_name, func_name, func_source, ast_dump, mlir_ir,
         snapshots, unopt_ir, opt_ir
@@ -305,7 +325,7 @@ def clean_module(request):
         save_ir = os.getenv("SAVE_IR", "").lower() in ("1", "true", "yes")
         if save_ir:
             try:
-                _save_ir_for_test(b, request.node.name)
+                _save_ir_for_test(b, request.node)
             except Exception as e:
                 print(f"\nWarning: Could not save IR: {e}")
 

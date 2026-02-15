@@ -131,84 +131,17 @@ This project follows **user-driven implementation**. Claude should guide and adv
 5. **Follow established C++/Python integration patterns** via pybind11
 6. **Test incrementally** - Run tests frequently during development
 
-## Testing Guidelines
+## Testing
 
-### Test Infrastructure
-- **Fixtures** (in `tests/conftest.py`):
-  - `backend` — session-scoped C++ backend; auto-skips tests when unavailable
-  - `clean_module` — autouse; clears module before each test, saves IR after if `SAVE_IR=1`
-  - `check_ir` — FileCheck-based IR assertions (requires LLVM `FileCheck` binary)
-- **No base class** — tests are plain classes, no inheritance required
-- **Backend-dependent tests** add `backend` as a fixture parameter; pure-Python AST tests omit it
-
-### Test Organization
-- `tests/core/` — scalar ops, control flow, recursion, typing, backend, JIT, optimization
-- `tests/memref/` — array operations (memref dialect)
-- `tests/tensor/` — tensor operations (tensor dialect)
-- Each folder has a `test_ir.py` for FileCheck IR structure tests
-
-### Writing Tests
-
-**Runtime test** (verifies correct values):
-```python
-class TestFeature:
-    def test_something(self, backend):
-        @ml_function
-        def my_func(x: int) -> int:
-            return add(x, 5)
-        assert my_func(10) == 15
-```
-
-**IR test** (verifies MLIR structure via FileCheck):
-```python
-class TestFeatureIR:
-    def test_something_ir(self, check_ir):
-        @ml_function
-        def my_func(x: int) -> int:
-            return add(x, 5)
-        my_func(1)
-        check_ir("""
-        // CHECK: func.func @my_func(%arg0: i32) -> i32
-        // CHECK: arith.addi
-        // CHECK: return
-        """)
-```
-
-**Pure-Python AST test** (no backend needed):
-```python
-class TestASTNodes:
-    def test_type_inference(self):
-        node = BinaryOp(ADD, Constant(5), Constant(3))
-        assert node.infer_type() == i32
-```
+**For test structure, categories, conventions, and guidelines, see [`tests/CLAUDE.md`](tests/CLAUDE.md).**
 
 ### Running Tests
 ```bash
-# Run all tests
-python3 -m pytest tests/ -v
-
-# Run specific folder
-python3 -m pytest tests/core/ -v
-
-# Run specific test file
-python3 -m pytest tests/core/test_parameter.py -v
-
-# Run single test
-python3 -m pytest tests/core/test_parameter.py::TestParameterFunctionality::test_basic_two_parameters -v
-
-# Save IR to files in ir_output/ (for debugging)
-SAVE_IR=1 python3 -m pytest tests/core/test_parameter.py -v
-
-# Dump AST to ast_output/ (for debugging)
-DUMP_AST=1 python3 -m pytest tests/core/test_parameter.py -v
+python3 -m pytest tests/ -v                    # All tests
+python3 -m pytest tests/core/ -v               # Core tests only
+SAVE_IR=1 python3 -m pytest tests/ -v          # Save IR to ir_output/ + ir_html/
+DUMP_AST=1 python3 -m pytest tests/ -v         # Dump AST to ast_output/
 ```
-
-### Test Coverage Requirements
-When adding new features:
-1. Add runtime tests in the appropriate folder (`core/`, `memref/`, or `tensor/`)
-2. Add FileCheck IR tests in the folder's `test_ir.py` for dialect op verification
-3. Test both success and error cases
-4. Test edge cases and boundary conditions
 
 ## Build and Development
 
