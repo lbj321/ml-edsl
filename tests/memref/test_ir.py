@@ -29,5 +29,37 @@ class TestDialectBoundaryIR:
         """)
 
 
+class TestShapeRepresentationIR:
+    """Test that multi-dimensional arrays preserve shape in IR (not flattened)"""
+
+    def test_2d_array_shape(self, check_ir):
+        """Test 2D array emits memref<2x3xi32>, not memref<6xi32>"""
+        @ml_function
+        def array_2d_shape() -> i32:
+            arr = Array[i32, 2, 3]([[1, 2, 3], [4, 5, 6]])
+            return arr[0, 0]
+
+        array_2d_shape()
+
+        check_ir("""
+        // CHECK: memref.alloca() : memref<2x3xi32>
+        // CHECK-NOT: memref<6xi32>
+        """)
+
+    def test_3d_array_shape(self, check_ir):
+        """Test 3D array emits memref<2x2x2xi32>, not memref<8xi32>"""
+        @ml_function
+        def array_3d_shape() -> i32:
+            arr = Array[i32, 2, 2, 2]([[[1, 2], [3, 4]], [[5, 6], [7, 8]]])
+            return arr[0, 0, 0]
+
+        array_3d_shape()
+
+        check_ir("""
+        // CHECK: memref.alloca() : memref<2x2x2xi32>
+        // CHECK-NOT: memref<8xi32>
+        """)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
