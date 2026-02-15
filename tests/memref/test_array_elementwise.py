@@ -21,8 +21,8 @@ class TestArrayArrayOps:
         """Test element-wise array addition"""
         @ml_function
         def array_add() -> i32:
-            arr1 = Array[4, i32]([1, 2, 3, 4])
-            arr2 = Array[4, i32]([10, 20, 30, 40])
+            arr1 = Array[i32, 4]([1, 2, 3, 4])
+            arr2 = Array[i32, 4]([10, 20, 30, 40])
             result = arr1 + arr2
             return result[2]  # Should be 33
 
@@ -32,8 +32,8 @@ class TestArrayArrayOps:
         """Test element-wise array subtraction"""
         @ml_function
         def array_sub() -> i32:
-            arr1 = Array[3, i32]([100, 50, 25])
-            arr2 = Array[3, i32]([10, 20, 5])
+            arr1 = Array[i32, 3]([100, 50, 25])
+            arr2 = Array[i32, 3]([10, 20, 5])
             result = arr1 - arr2
             return result[1]  # Should be 30
 
@@ -43,8 +43,8 @@ class TestArrayArrayOps:
         """Test element-wise array multiplication"""
         @ml_function
         def array_mul() -> i32:
-            arr1 = Array[3, i32]([2, 3, 4])
-            arr2 = Array[3, i32]([5, 6, 7])
+            arr1 = Array[i32, 3]([2, 3, 4])
+            arr2 = Array[i32, 3]([5, 6, 7])
             result = arr1 * arr2
             return result[1]  # Should be 18
 
@@ -54,8 +54,8 @@ class TestArrayArrayOps:
         """Test element-wise array division"""
         @ml_function
         def array_div() -> i32:
-            arr1 = Array[3, i32]([100, 50, 20])
-            arr2 = Array[3, i32]([10, 5, 2])
+            arr1 = Array[i32, 3]([100, 50, 20])
+            arr2 = Array[i32, 3]([10, 5, 2])
             result = arr1 / arr2
             return result[0]  # Should be 10
 
@@ -66,8 +66,8 @@ class TestArrayArrayOps:
         with pytest.raises(TypeError, match="shapes must match"):
             @ml_function
             def bad_add() -> i32:
-                arr1 = Array[3, i32]([1, 2, 3])
-                arr2 = Array[4, i32]([1, 2, 3, 4])
+                arr1 = Array[i32, 3]([1, 2, 3])
+                arr2 = Array[i32, 4]([1, 2, 3, 4])
                 return (arr1 + arr2)[0]
 
     def test_array_type_mismatch_error(self):
@@ -75,8 +75,8 @@ class TestArrayArrayOps:
         with pytest.raises(TypeError, match="element types must match"):
             @ml_function
             def bad_types() -> i32:
-                arr1 = Array[3, i32]([1, 2, 3])
-                arr2 = Array[3, f32]([1.0, 2.0, 3.0])
+                arr1 = Array[i32, 3]([1, 2, 3])
+                arr2 = Array[f32, 3]([1.0, 2.0, 3.0])
                 return (arr1 + arr2)[0]
 
 
@@ -89,7 +89,7 @@ class TestArrayScalarOps:
         """Test array + scalar broadcasting"""
         @ml_function
         def array_add_scalar() -> i32:
-            arr = Array[4, i32]([10, 20, 30, 40])
+            arr = Array[i32, 4]([10, 20, 30, 40])
             result = arr + 5
             return result[1]  # Should be 25
 
@@ -99,7 +99,7 @@ class TestArrayScalarOps:
         """Test array - scalar broadcasting"""
         @ml_function
         def array_sub_scalar() -> i32:
-            arr = Array[3, i32]([100, 50, 25])
+            arr = Array[i32, 3]([100, 50, 25])
             result = arr - 10
             return result[2]  # Should be 15
 
@@ -109,7 +109,7 @@ class TestArrayScalarOps:
         """Test array * scalar broadcasting"""
         @ml_function
         def array_mul_scalar() -> i32:
-            arr = Array[3, i32]([2, 3, 4])
+            arr = Array[i32, 3]([2, 3, 4])
             result = arr * 5
             return result[0]  # Should be 10
 
@@ -119,7 +119,7 @@ class TestArrayScalarOps:
         """Test array / scalar broadcasting"""
         @ml_function
         def array_div_scalar() -> i32:
-            arr = Array[4, i32]([100, 50, 20, 10])
+            arr = Array[i32, 4]([100, 50, 20, 10])
             result = arr / 10
             return result[1]  # Should be 5
 
@@ -130,7 +130,7 @@ class TestArrayScalarOps:
         with pytest.raises(TypeError, match="Scalar type must match"):
             @ml_function
             def bad_types() -> i32:
-                arr = Array[3, i32]([1, 2, 3])
+                arr = Array[i32, 3]([1, 2, 3])
                 result = arr + 2.5  # i32 array + f32 scalar
                 return result[0]
 
@@ -144,7 +144,7 @@ class TestScalarArrayOps:
         """Test scalar + array broadcasting"""
         @ml_function
         def scalar_add_array() -> i32:
-            arr = Array[3, i32]([10, 20, 30])
+            arr = Array[i32, 3]([10, 20, 30])
             result = 5 + arr
             return result[2]  # Should be 35
 
@@ -154,7 +154,7 @@ class TestScalarArrayOps:
         """Test scalar - array broadcasting"""
         @ml_function
         def scalar_sub_array() -> i32:
-            arr = Array[3, i32]([10, 20, 30])
+            arr = Array[i32, 3]([10, 20, 30])
             result = 100 - arr
             return result[1]  # Should be 80
 
@@ -164,7 +164,7 @@ class TestScalarArrayOps:
         """Test scalar * array broadcasting"""
         @ml_function
         def scalar_mul_array() -> i32:
-            arr = Array[3, i32]([2, 3, 4])
+            arr = Array[i32, 3]([2, 3, 4])
             result = 10 * arr
             return result[2]  # Should be 40
 
@@ -174,7 +174,7 @@ class TestScalarArrayOps:
         """Test scalar / array broadcasting"""
         @ml_function
         def scalar_div_array() -> i32:
-            arr = Array[3, i32]([1, 2, 5])
+            arr = Array[i32, 3]([1, 2, 5])
             result = 100 / arr
             return result[1]  # Should be 50
 
@@ -185,7 +185,7 @@ class TestScalarArrayOps:
         with pytest.raises(TypeError, match="Scalar type must match"):
             @ml_function
             def bad_types() -> f32:
-                arr = Array[3, f32]([1.0, 2.0, 3.0])
+                arr = Array[f32, 3]([1.0, 2.0, 3.0])
                 result = 5 + arr  # i32 scalar + f32 array
                 return result[0]
 
@@ -199,8 +199,8 @@ class TestFloatArrayOps:
         """Test float array element-wise addition"""
         @ml_function
         def float_add() -> f32:
-            arr1 = Array[3, f32]([1.0, 2.0, 3.0])
-            arr2 = Array[3, f32]([0.5, 1.5, 2.5])
+            arr1 = Array[f32, 3]([1.0, 2.0, 3.0])
+            arr2 = Array[f32, 3]([0.5, 1.5, 2.5])
             result = arr1 + arr2
             return result[1]  # Should be 3.5
 
@@ -211,7 +211,7 @@ class TestFloatArrayOps:
         """Test float array with scalar broadcasting"""
         @ml_function
         def float_broadcast() -> f32:
-            arr = Array[3, f32]([1.0, 2.0, 3.0])
+            arr = Array[f32, 3]([1.0, 2.0, 3.0])
             result = arr * 2.5
             return result[1]  # Should be 5.0
 
@@ -222,7 +222,7 @@ class TestFloatArrayOps:
         """Test float scalar / array broadcasting"""
         @ml_function
         def float_div() -> f32:
-            arr = Array[3, f32]([2.0, 4.0, 5.0])
+            arr = Array[f32, 3]([2.0, 4.0, 5.0])
             result = 10.0 / arr
             return result[0]  # Should be 5.0
 
@@ -239,8 +239,8 @@ class TestComplexExpressions:
         """Test multiple operations: (arr1 + arr2) * scalar"""
         @ml_function
         def chained() -> i32:
-            arr1 = Array[3, i32]([1, 2, 3])
-            arr2 = Array[3, i32]([4, 5, 6])
+            arr1 = Array[i32, 3]([1, 2, 3])
+            arr2 = Array[i32, 3]([4, 5, 6])
             result = (arr1 + arr2) * 2
             return result[2]  # (3 + 6) * 2 = 18
 
@@ -250,7 +250,7 @@ class TestComplexExpressions:
         """Test mixing array and scalar operations"""
         @ml_function
         def mixed() -> i32:
-            arr = Array[4, i32]([10, 20, 30, 40])
+            arr = Array[i32, 4]([10, 20, 30, 40])
             result = (arr + 5) * 2 - 10
             x = result[0]  # (10 + 5) * 2 - 10 = 20
             y = result[3]  # (40 + 5) * 2 - 10 = 80
@@ -262,8 +262,8 @@ class TestComplexExpressions:
         """Test array operations combined with element access"""
         @ml_function
         def complex_expr() -> i32:
-            arr1 = Array[4, i32]([1, 2, 3, 4])
-            arr2 = Array[4, i32]([10, 20, 30, 40])
+            arr1 = Array[i32, 4]([1, 2, 3, 4])
+            arr2 = Array[i32, 4]([10, 20, 30, 40])
             sum_arr = arr1 + arr2
             prod_arr = arr1 * arr2
             return sum_arr[1] + prod_arr[2]  # 22 + 90 = 112
@@ -274,7 +274,7 @@ class TestComplexExpressions:
         """Test nested operations with broadcasting"""
         @ml_function
         def nested() -> i32:
-            arr = Array[3, i32]([5, 10, 15])
+            arr = Array[i32, 3]([5, 10, 15])
             # ((arr * 2) + 10) / 5
             result = ((arr * 2) + 10) / 5
             return result[1]  # ((10 * 2) + 10) / 5 = 6
@@ -291,8 +291,8 @@ class TestIntegrationWithExisting:
         """Test element-wise ops combined with array store"""
         @ml_function
         def with_store() -> i32:
-            arr1 = Array[3, i32]([1, 2, 3])
-            arr2 = Array[3, i32]([10, 20, 30])
+            arr1 = Array[i32, 3]([1, 2, 3])
+            arr2 = Array[i32, 3]([10, 20, 30])
             result = arr1 + arr2
             # Modify one element
             result = result.at[1].set(99)
@@ -304,7 +304,7 @@ class TestIntegrationWithExisting:
         """Test all four operations in one function"""
         @ml_function
         def all_ops() -> i32:
-            arr = Array[4, i32]([100, 50, 20, 10])
+            arr = Array[i32, 4]([100, 50, 20, 10])
             add_result = arr + 10
             sub_result = arr - 10
             mul_result = arr * 2

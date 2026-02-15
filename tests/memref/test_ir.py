@@ -17,7 +17,7 @@ class TestArrayBasicIR:
         """Test array literal emits memref.alloca + stores"""
         @ml_function
         def array_access() -> i32:
-            arr = Array[4, i32]([10, 20, 30, 40])
+            arr = Array[i32, 4]([10, 20, 30, 40])
             return arr[2]
 
         array_access()
@@ -34,7 +34,7 @@ class TestArrayBasicIR:
         """Test .at[].set() emits memref.store for the update"""
         @ml_function
         def array_store() -> i32:
-            arr = Array[3, i32]([1, 2, 3])
+            arr = Array[i32, 3]([1, 2, 3])
             arr = arr.at[1].set(99)
             return arr[1]
 
@@ -53,7 +53,7 @@ class TestArrayBasicIR:
         """Test float array emits memref with f32 element type"""
         @ml_function
         def float_array() -> f32:
-            arr = Array[3, f32]([1.5, 2.5, 3.5])
+            arr = Array[f32, 3]([1.5, 2.5, 3.5])
             return arr[1]
 
         float_array()
@@ -77,8 +77,8 @@ class TestElementwiseIR:
         """Test element-wise add emits scf.for with addi"""
         @ml_function
         def array_add() -> i32:
-            arr1 = Array[3, i32]([1, 2, 3])
-            arr2 = Array[3, i32]([10, 20, 30])
+            arr1 = Array[i32, 3]([1, 2, 3])
+            arr2 = Array[i32, 3]([10, 20, 30])
             result = arr1 + arr2
             return result[1]
 
@@ -103,7 +103,7 @@ class TestElementwiseIR:
         """Test scalar broadcast emits scf.for with muli"""
         @ml_function
         def scalar_broadcast() -> i32:
-            arr = Array[3, i32]([10, 20, 30])
+            arr = Array[i32, 3]([10, 20, 30])
             result = arr * 2
             return result[1]
 
@@ -132,7 +132,7 @@ class TestMultiDimIR:
         """Test 2D array emits memref<2x3xi32> type"""
         @ml_function
         def array_2d() -> i32:
-            arr = Array[2, 3, i32]([[1, 2, 3], [4, 5, 6]])
+            arr = Array[i32, 2, 3]([[1, 2, 3], [4, 5, 6]])
             return arr[1, 2]
 
         array_2d()
@@ -150,7 +150,7 @@ class TestMultiDimIR:
         """Test 2D array uses memref dialect, not tensor"""
         @ml_function
         def array_2d_only() -> i32:
-            arr = Array[2, 2, i32]([[1, 2], [3, 4]])
+            arr = Array[i32, 2, 2]([[1, 2], [3, 4]])
             return arr[0, 0]
 
         array_2d_only()

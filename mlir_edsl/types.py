@@ -188,10 +188,10 @@ class ArrayType(Type):
     Used for type hints in function signatures and array construction.
 
     Examples:
-        def foo(arr: Array[10, i32]) -> i32:  # 1D array parameter
+        def foo(arr: Array[i32, 10]) -> i32:  # 1D array parameter
             ...
 
-        arr = Array[2, 3, f32]([...])  # 2D array literal
+        arr = Array[f32, 2, 3]([...])  # 2D array literal
     """
 
     def __init__(self, shape, element_type: ScalarType):
@@ -296,14 +296,11 @@ class ArrayType(Type):
         return hash((self.shape, self.element_type))
 
     def __repr__(self) -> str:
-        if len(self.shape) == 1:
-            return f"Array[{self.shape[0]}, {self.element_type.name}]"
-        else:
-            dims = ', '.join(str(d) for d in self.shape)
-            return f"Array[{dims}, {self.element_type.name}]"
+        dims = ', '.join(str(d) for d in self.shape)
+        return f"Array[{self.element_type.name}, {dims}]"
 
     def __call__(self, elements: list):
-        """Enable Array[4, i32]([1, 2, 3, 4]) construction syntax."""
+        """Enable Array[i32, 4]([1, 2, 3, 4]) construction syntax."""
         from .ast import ArrayLiteral
         return ArrayLiteral(elements, self)
 
@@ -319,7 +316,7 @@ class TensorType(Type):
     new tensors rather than mutating in place.
 
     Examples:
-        t = Tensor[4, f32]([1.0, 2.0, 3.0, 4.0])
+        t = Tensor[f32, 4]([1.0, 2.0, 3.0, 4.0])
         val = t[2]  # Extract element
     """
 
@@ -422,53 +419,50 @@ class TensorType(Type):
         return hash(('tensor', self.shape, self.element_type))
 
     def __repr__(self) -> str:
-        if len(self.shape) == 1:
-            return f"Tensor[{self.shape[0]}, {self.element_type.name}]"
-        else:
-            dims = ', '.join(str(d) for d in self.shape)
-            return f"Tensor[{dims}, {self.element_type.name}]"
+        dims = ', '.join(str(d) for d in self.shape)
+        return f"Tensor[{self.element_type.name}, {dims}]"
 
     def __call__(self, elements: list):
-        """Enable Tensor[4, f32]([1.0, 2.0, 3.0, 4.0]) construction syntax."""
+        """Enable Tensor[f32, 4]([1.0, 2.0, 3.0, 4.0]) construction syntax."""
         from .ast import TensorFromElements
         return TensorFromElements(elements, self)
 
 
 # ============================================================================
-# ARRAY SUBSCRIPT SYNTAX (Array[N, dtype])
+# ARRAY SUBSCRIPT SYNTAX (Array[dtype, N] or Array[dtype, M, N])
 # ============================================================================
 
 class ArrayMeta(type):
-    """Metaclass to enable Array[size, dtype] subscript syntax."""
+    """Metaclass to enable Array[dtype, size] subscript syntax."""
 
     def __getitem__(cls, params):
-        """Handle Array[size, dtype] or Array[M, N, dtype] syntax.
+        """Handle Array[dtype, size] or Array[dtype, M, N] syntax.
 
         Args:
-            params: Tuple where last element is dtype, preceding are dimensions
+            params: Tuple where first element is dtype, rest are dimensions
 
         Returns:
             ArrayType instance
         """
         if not isinstance(params, tuple):
             raise TypeError(
-                f"Array requires parameters: Array[size, dtype] or Array[M, N, dtype]. "
-                f"Example: Array[10, i32]"
+                f"Array requires parameters: Array[dtype, size] or Array[dtype, M, N]. "
+                f"Example: Array[i32, 10]"
             )
 
         if len(params) < 2:
             raise TypeError(
-                f"Array requires at least 2 parameters (dimensions + dtype), got {len(params)}"
+                f"Array requires at least 2 parameters (dtype + dimensions), got {len(params)}"
             )
 
-        # Last parameter is dtype, rest are dimensions
-        dtype = params[-1]
-        dims = params[:-1]
+        # First parameter is dtype, rest are dimensions
+        dtype = params[0]
+        dims = params[1:]
 
         # Validate dtype
         if not isinstance(dtype, ScalarType):
             raise TypeError(
-                f"Last parameter must be element type (i32, f32, i1), got {dtype!r}"
+                f"First parameter must be element type (i32, f32, i1), got {dtype!r}"
             )
 
         # Validate dimensionality
@@ -493,50 +487,50 @@ class Array(metaclass=ArrayMeta):
     """Fixed-size array type for memref dialect.
 
     Usage as type hint:
-        def foo(arr: Array[10, i32]) -> i32:
+        def foo(arr: Array[i32, 10]) -> i32:
             ...
 
     Usage for construction (inside @ml_function):
-        arr = Array[4, i32]([1, 2, 3, 4])
+        arr = Array[i32, 4]([1, 2, 3, 4])
     """
     pass
 
 
 # ============================================================================
-# TENSOR SUBSCRIPT SYNTAX (Tensor[N, dtype])
+# TENSOR SUBSCRIPT SYNTAX (Tensor[dtype, N] or Tensor[dtype, M, N])
 # ============================================================================
 
 class TensorMeta(type):
-    """Metaclass to enable Tensor[size, dtype] subscript syntax."""
+    """Metaclass to enable Tensor[dtype, size] subscript syntax."""
 
     def __getitem__(cls, params):
-        """Handle Tensor[size, dtype] or Tensor[M, N, dtype] syntax.
+        """Handle Tensor[dtype, size] or Tensor[dtype, M, N] syntax.
 
         Args:
-            params: Tuple where last element is dtype, preceding are dimensions
+            params: Tuple where first element is dtype, rest are dimensions
 
         Returns:
             TensorType instance
         """
         if not isinstance(params, tuple):
             raise TypeError(
-                f"Tensor requires parameters: Tensor[size, dtype] or Tensor[M, N, dtype]. "
-                f"Example: Tensor[4, f32]"
+                f"Tensor requires parameters: Tensor[dtype, size] or Tensor[dtype, M, N]. "
+                f"Example: Tensor[f32, 4]"
             )
 
         if len(params) < 2:
             raise TypeError(
-                f"Tensor requires at least 2 parameters (dimensions + dtype), got {len(params)}"
+                f"Tensor requires at least 2 parameters (dtype + dimensions), got {len(params)}"
             )
 
-        # Last parameter is dtype, rest are dimensions
-        dtype = params[-1]
-        dims = params[:-1]
+        # First parameter is dtype, rest are dimensions
+        dtype = params[0]
+        dims = params[1:]
 
         # Validate dtype
         if not isinstance(dtype, ScalarType):
             raise TypeError(
-                f"Last parameter must be element type (i32, f32, i1), got {dtype!r}"
+                f"First parameter must be element type (i32, f32, i1), got {dtype!r}"
             )
 
         # Validate dimensionality
@@ -561,7 +555,7 @@ class Tensor(metaclass=TensorMeta):
     """Value-semantic tensor type for tensor dialect.
 
     Usage for construction (inside @ml_function):
-        t = Tensor[4, f32]([1.0, 2.0, 3.0, 4.0])
+        t = Tensor[f32, 4]([1.0, 2.0, 3.0, 4.0])
         val = t[2]  # Extract element
     """
     pass
@@ -578,7 +572,7 @@ class TypeSystem:
     def parse_type_hint(cls, hint, context: str = "parameter") -> Type:
         """Parse type hint to Type object.
 
-        Supports: int, float, bool, i32, f32, i1, Array[N, dtype], Tensor[N, dtype]
+        Supports: int, float, bool, i32, f32, i1, Array[dtype, N], Tensor[dtype, N]
 
         Returns:
             Type instance (ScalarType or ArrayType)

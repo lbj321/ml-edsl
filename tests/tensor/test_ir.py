@@ -17,7 +17,7 @@ class TestTensorBasicIR:
         """Test tensor literal emits tensor.from_elements"""
         @ml_function
         def tensor_access() -> i32:
-            t = Tensor[4, i32]([10, 20, 30, 40])
+            t = Tensor[i32, 4]([10, 20, 30, 40])
             return t[2]
 
         tensor_access()
@@ -35,7 +35,7 @@ class TestTensorBasicIR:
         """Test float tensor emits tensor<3xf32> type"""
         @ml_function
         def tensor_float() -> f32:
-            t = Tensor[3, f32]([1.0, 2.0, 3.0])
+            t = Tensor[f32, 3]([1.0, 2.0, 3.0])
             return t[1]
 
         tensor_float()
@@ -53,7 +53,7 @@ class TestTensorBasicIR:
         """Test tensors use tensor dialect, not memref"""
         @ml_function
         def tensor_only() -> i32:
-            t = Tensor[3, i32]([1, 2, 3])
+            t = Tensor[i32, 3]([1, 2, 3])
             return t[0]
 
         tensor_only()
@@ -77,7 +77,7 @@ class TestTensorInsertIR:
         """Test .at[].set() emits tensor.insert"""
         @ml_function
         def tensor_insert() -> i32:
-            t = Tensor[4, i32]([10, 20, 30, 40])
+            t = Tensor[i32, 4]([10, 20, 30, 40])
             t = t.at[1].set(99)
             return t[1]
 
@@ -104,7 +104,7 @@ class TestTensorMultiDimIR:
         """Test 2D tensor emits tensor<2x3xi32> type"""
         @ml_function
         def tensor_2d() -> i32:
-            t = Tensor[2, 3, i32]([[1, 2, 3], [4, 5, 6]])
+            t = Tensor[i32, 2, 3]([[1, 2, 3], [4, 5, 6]])
             return t[1, 2]
 
         tensor_2d()

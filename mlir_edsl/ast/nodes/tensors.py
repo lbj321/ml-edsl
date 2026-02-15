@@ -23,7 +23,7 @@ class TensorFromElements(Value):
     - Validates all elements match declared element type (strict!)
 
     Example:
-        t = Tensor[4, f32]([1.0, 2.0, 3.0, 4.0])
+        t = Tensor[f32, 4]([1.0, 2.0, 3.0, 4.0])
     """
 
     def __init__(self, elements: list, tensor_type: TensorType):
@@ -210,7 +210,7 @@ class TensorInsert(Value):
     - Result is a NEW tensor with same type
 
     Example:
-        t = Tensor[4, i32]([1, 2, 3, 4])
+        t = Tensor[i32, 4]([1, 2, 3, 4])
         t = t.at[1].set(99)  # Returns NEW tensor [1, 99, 3, 4]
     """
 

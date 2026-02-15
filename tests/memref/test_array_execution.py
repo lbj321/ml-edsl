@@ -14,7 +14,7 @@ class TestArrayExecution:
         """Test array element access returns correct value"""
         @ml_function
         def array_access() -> i32:
-            arr = Array[4, i32]([10, 20, 30, 40])
+            arr = Array[i32, 4]([10, 20, 30, 40])
             return arr[2]
 
         result = array_access()
@@ -24,7 +24,7 @@ class TestArrayExecution:
         """Test array element store and retrieve using .at[] syntax"""
         @ml_function
         def array_store() -> i32:
-            arr = Array[3, i32]([1, 2, 3])
+            arr = Array[i32, 3]([1, 2, 3])
             arr = arr.at[1].set(99)
             return arr[1]
 
@@ -35,7 +35,7 @@ class TestArrayExecution:
         """Test array reuse in computation"""
         @ml_function
         def array_reuse() -> i32:
-            arr = Array[4, i32]([10, 20, 30, 40])
+            arr = Array[i32, 4]([10, 20, 30, 40])
             x = arr[0]
             y = arr[3]
             return x + y
@@ -47,7 +47,7 @@ class TestArrayExecution:
         """Test float array operations"""
         @ml_function
         def float_array() -> f32:
-            arr = Array[3, f32]([1.5, 2.5, 3.5])
+            arr = Array[f32, 3]([1.5, 2.5, 3.5])
             return arr[1]
 
         result = float_array()
@@ -57,7 +57,7 @@ class TestArrayExecution:
         """Test array access with computed index"""
         @ml_function
         def computed_index() -> i32:
-            arr = Array[5, i32]([10, 20, 30, 40, 50])
+            arr = Array[i32, 5]([10, 20, 30, 40, 50])
             idx = 1 + 1
             return arr[idx]
 
@@ -68,7 +68,7 @@ class TestArrayExecution:
         """Test multiple store operations on same array using .at[] syntax"""
         @ml_function
         def multiple_stores() -> i32:
-            arr = Array[4, i32]([1, 2, 3, 4])
+            arr = Array[i32, 4]([1, 2, 3, 4])
             arr = arr.at[0].set(100)
             arr = arr.at[2].set(300)
             x = arr[0]
@@ -84,6 +84,6 @@ class TestArrayExecution:
         with pytest.raises(TypeError, match=r"arr = arr\.at\[.*\]\.set"):
             @ml_function
             def bad_store() -> i32:
-                arr = Array[3, i32]([1, 2, 3])
+                arr = Array[i32, 3]([1, 2, 3])
                 arr[1] = 99  # Should raise TypeError with helpful message
                 return arr[1]

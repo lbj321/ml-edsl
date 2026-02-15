@@ -74,10 +74,10 @@ class _AtSetter:
             ArrayStore or TensorInsert node representing the updated container
 
         Example:
-            arr = Array[4, i32]([1, 2, 3, 4])
+            arr = Array[i32, 4]([1, 2, 3, 4])
             arr = arr.at[1].set(99)  # Returns new array [1, 99, 3, 4]
 
-            t = Tensor[4, i32]([1, 2, 3, 4])
+            t = Tensor[i32, 4]([1, 2, 3, 4])
             t = t.at[1].set(99)  # Returns new tensor [1, 99, 3, 4]
         """
         # Import here to avoid circular dependency

@@ -24,7 +24,7 @@ class TestArray3DLiteralCreation:
 
     def test_3d_array_literal_i32(self):
         """Test creating 3D array literal with i32 elements"""
-        arr_type = Array[2, 2, 3, i32]  # 2x2x3 array
+        arr_type = Array[i32, 2, 2, 3]  # 2x2x3 array
         arr = ArrayLiteral([
             [[1, 2, 3], [4, 5, 6]],
             [[7, 8, 9], [10, 11, 12]]
@@ -39,7 +39,7 @@ class TestArray3DLiteralCreation:
 
     def test_3d_array_literal_f32(self):
         """Test creating 3D array literal with f32 elements"""
-        arr_type = Array[2, 3, 2, f32]  # 2x3x2 array
+        arr_type = Array[f32, 2, 3, 2]  # 2x3x2 array
         arr = ArrayLiteral([
             [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
             [[7.0, 8.0], [9.0, 10.0], [11.0, 12.0]]
@@ -51,13 +51,13 @@ class TestArray3DLiteralCreation:
 
     def test_3d_array_construction_syntax(self):
         """Test Array[M, N, P, dtype]([...]) construction syntax"""
-        arr = Array[2, 2, 2, i32]([
+        arr = Array[i32, 2, 2, 2]([
             [[1, 2], [3, 4]],
             [[5, 6], [7, 8]]
         ])
 
         assert isinstance(arr, ArrayLiteral)
-        assert arr.array_type == Array[2, 2, 2, i32]
+        assert arr.array_type == Array[i32, 2, 2, 2]
 
 
 # ==================== 3D ARRAY LITERAL VALIDATION ====================
@@ -67,7 +67,7 @@ class TestArray3DLiteralValidation:
 
     def test_3d_size_mismatch_wrong_dim0(self):
         """Test that wrong first dimension is caught"""
-        arr_type = Array[2, 2, 2, i32]  # Expect 2x2x2
+        arr_type = Array[i32, 2, 2, 2]  # Expect 2x2x2
 
         with pytest.raises(TypeError, match="3D array expects 2 matrices, got 3"):
             ArrayLiteral([
@@ -78,7 +78,7 @@ class TestArray3DLiteralValidation:
 
     def test_3d_size_mismatch_wrong_dim1(self):
         """Test that wrong second dimension is caught"""
-        arr_type = Array[2, 2, 2, i32]
+        arr_type = Array[i32, 2, 2, 2]
 
         with pytest.raises(TypeError, match="Matrix 0: expected 2 rows, got 3"):
             ArrayLiteral([
@@ -88,7 +88,7 @@ class TestArray3DLiteralValidation:
 
     def test_3d_size_mismatch_wrong_dim2(self):
         """Test that wrong third dimension is caught"""
-        arr_type = Array[2, 2, 3, i32]  # Expect 3 columns
+        arr_type = Array[i32, 2, 2, 3]  # Expect 3 columns
 
         with pytest.raises(TypeError, match="Matrix 1, row 0: expected 3 elements"):
             ArrayLiteral([
@@ -98,7 +98,7 @@ class TestArray3DLiteralValidation:
 
     def test_3d_type_mismatch(self):
         """Test that element type mismatch is caught"""
-        arr_type = Array[2, 2, 2, i32]
+        arr_type = Array[i32, 2, 2, 2]
 
         with pytest.raises(TypeError, match="expected i32.*got f32"):
             ArrayLiteral([
@@ -117,7 +117,7 @@ class TestArray3DAccess:
         arr = ArrayLiteral([
             [[1, 2], [3, 4]],
             [[5, 6], [7, 8]]
-        ], Array[2, 2, 2, i32])
+        ], Array[i32, 2, 2, 2])
 
         access = ArrayAccess(arr, (1, 0, 1))  # Access [1][0][1]
 
@@ -133,7 +133,7 @@ class TestArray3DAccess:
         arr = ArrayLiteral([
             [[10, 20], [30, 40]],
             [[50, 60], [70, 80]]
-        ], Array[2, 2, 2, i32])
+        ], Array[i32, 2, 2, 2])
 
         access = arr[0, 1, 0]  # Access [0][1][0]
 
@@ -148,7 +148,7 @@ class TestArray3DAccess:
         arr = ArrayLiteral([
             [[1.0, 2.0], [3.0, 4.0]],
             [[5.0, 6.0], [7.0, 8.0]]
-        ], Array[2, 2, 2, f32])
+        ], Array[f32, 2, 2, 2])
 
         access = ArrayAccess(arr, (0, 0, 0))
         assert access.infer_type() == f32  # Returns scalar, not array
@@ -158,7 +158,7 @@ class TestArray3DAccess:
         arr = ArrayLiteral([
             [[1, 2], [3, 4]],
             [[5, 6], [7, 8]]
-        ], Array[2, 2, 2, i32])
+        ], Array[i32, 2, 2, 2])
 
         with pytest.raises(TypeError, match="Array dimension mismatch: 3D array requires 3 indices, got 2"):
             ArrayAccess(arr, (0, 1))  # Only 2 indices for 3D array
@@ -174,7 +174,7 @@ class TestArray3DStore:
         arr = ArrayLiteral([
             [[1, 2], [3, 4]],
             [[5, 6], [7, 8]]
-        ], Array[2, 2, 2, i32])
+        ], Array[i32, 2, 2, 2])
 
         store = ArrayStore(arr, (1, 1, 0), 99)
 
@@ -191,7 +191,7 @@ class TestArray3DStore:
         arr = ArrayLiteral([
             [[10, 20], [30, 40]],
             [[50, 60], [70, 80]]
-        ], Array[2, 2, 2, i32])
+        ], Array[i32, 2, 2, 2])
 
         store = arr.at[0, 0, 1].set(100)
 
@@ -207,7 +207,7 @@ class TestArray3DStore:
         arr = ArrayLiteral([
             [[1, 2], [3, 4]],
             [[5, 6], [7, 8]]
-        ], Array[2, 2, 2, i32])
+        ], Array[i32, 2, 2, 2])
 
         with pytest.raises(TypeError, match="Cannot store f32 into Array"):
             ArrayStore(arr, (0, 0, 0), 3.14)
@@ -223,7 +223,7 @@ class TestArray3DProtobufSerialization:
         arr = ArrayLiteral([
             [[1, 2], [3, 4]],
             [[5, 6], [7, 8]]
-        ], Array[2, 2, 2, i32])
+        ], Array[i32, 2, 2, 2])
 
         context = SerializationContext()
         pb = arr.to_proto(context)
@@ -244,7 +244,7 @@ class TestArray3DProtobufSerialization:
 
     def test_3d_array_access_to_proto(self):
         """Test that 3D ArrayAccess serializes with 3 indices"""
-        arr = ArrayLiteral([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], Array[2, 2, 2, i32])
+        arr = ArrayLiteral([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], Array[i32, 2, 2, 2])
         access = ArrayAccess(arr, (1, 0, 1))
 
         context = SerializationContext()
@@ -256,7 +256,7 @@ class TestArray3DProtobufSerialization:
 
     def test_3d_array_store_to_proto(self):
         """Test that 3D ArrayStore serializes with 3 indices"""
-        arr = ArrayLiteral([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], Array[2, 2, 2, i32])
+        arr = ArrayLiteral([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], Array[i32, 2, 2, 2])
         store = ArrayStore(arr, (0, 1, 0), 99)
 
         context = SerializationContext()
@@ -274,8 +274,8 @@ class TestArray3DElementwise:
 
     def test_3d_array_add_arrays(self):
         """Test 3D array + 3D array element-wise addition"""
-        arr1 = ArrayLiteral([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], Array[2, 2, 2, i32])
-        arr2 = ArrayLiteral([[[10, 20], [30, 40]], [[50, 60], [70, 80]]], Array[2, 2, 2, i32])
+        arr1 = ArrayLiteral([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], Array[i32, 2, 2, 2])
+        arr2 = ArrayLiteral([[[10, 20], [30, 40]], [[50, 60], [70, 80]]], Array[i32, 2, 2, 2])
 
         result = arr1 + arr2
 
@@ -285,7 +285,7 @@ class TestArray3DElementwise:
 
     def test_3d_array_add_scalar(self):
         """Test 3D array + scalar broadcasting"""
-        arr = ArrayLiteral([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], Array[2, 2, 2, i32])
+        arr = ArrayLiteral([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], Array[i32, 2, 2, 2])
         scalar = 100
 
         result = arr + scalar
@@ -294,8 +294,8 @@ class TestArray3DElementwise:
 
     def test_3d_array_mul_arrays(self):
         """Test 3D array * 3D array element-wise multiplication"""
-        arr1 = ArrayLiteral([[[2, 3], [4, 5]], [[6, 7], [8, 9]]], Array[2, 2, 2, i32])
-        arr2 = ArrayLiteral([[[10, 10], [10, 10]], [[10, 10], [10, 10]]], Array[2, 2, 2, i32])
+        arr1 = ArrayLiteral([[[2, 3], [4, 5]], [[6, 7], [8, 9]]], Array[i32, 2, 2, 2])
+        arr2 = ArrayLiteral([[[10, 10], [10, 10]], [[10, 10], [10, 10]]], Array[i32, 2, 2, 2])
 
         result = arr1 * arr2
 
@@ -303,8 +303,8 @@ class TestArray3DElementwise:
 
     def test_3d_shape_mismatch(self):
         """Test that mismatched shapes are rejected"""
-        arr1 = ArrayLiteral([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], Array[2, 2, 2, i32])  # 2x2x2
-        arr2 = ArrayLiteral([[[1]], [[2]]], Array[2, 1, 1, i32])  # 2x1x1
+        arr1 = ArrayLiteral([[[1, 2], [3, 4]], [[5, 6], [7, 8]]], Array[i32, 2, 2, 2])  # 2x2x2
+        arr2 = ArrayLiteral([[[1]], [[2]]], Array[i32, 2, 1, 1])  # 2x1x1
 
         with pytest.raises(TypeError, match="Array shapes must match"):
             arr1 + arr2
@@ -319,7 +319,7 @@ class TestArray3DMLIRGeneration:
         """Test that 3D array literal compiles and generates memref type"""
         @ml_function
         def create_3d_array() -> i32:
-            arr = Array[2, 2, 2, i32]([
+            arr = Array[i32, 2, 2, 2]([
                 [[1, 2], [3, 4]],
                 [[5, 6], [7, 8]]
             ])
@@ -332,7 +332,7 @@ class TestArray3DMLIRGeneration:
         """Test that 3D array access compiles and generates memref.load with 3 indices"""
         @ml_function
         def access_3d_element() -> i32:
-            arr = Array[2, 2, 2, i32]([
+            arr = Array[i32, 2, 2, 2]([
                 [[1, 2], [3, 4]],
                 [[5, 6], [7, 8]]
             ])
@@ -351,7 +351,7 @@ class TestArray3DExecution:
         """Test executing 3D array element access"""
         @ml_function
         def get_element() -> i32:
-            arr = Array[2, 2, 3, i32]([
+            arr = Array[i32, 2, 2, 3]([
                 [[10, 20, 30], [40, 50, 60]],
                 [[70, 80, 90], [100, 110, 120]]
             ])
@@ -364,11 +364,11 @@ class TestArray3DExecution:
         """Test executing 3D array addition"""
         @ml_function
         def add_arrays() -> i32:
-            arr1 = Array[2, 2, 2, i32]([
+            arr1 = Array[i32, 2, 2, 2]([
                 [[1, 2], [3, 4]],
                 [[5, 6], [7, 8]]
             ])
-            arr2 = Array[2, 2, 2, i32]([
+            arr2 = Array[i32, 2, 2, 2]([
                 [[10, 20], [30, 40]],
                 [[50, 60], [70, 80]]
             ])
@@ -381,7 +381,7 @@ class TestArray3DExecution:
         """Test executing 3D array + scalar broadcasting"""
         @ml_function
         def add_scalar() -> i32:
-            arr = Array[2, 2, 2, i32]([
+            arr = Array[i32, 2, 2, 2]([
                 [[1, 2], [3, 4]],
                 [[5, 6], [7, 8]]
             ])

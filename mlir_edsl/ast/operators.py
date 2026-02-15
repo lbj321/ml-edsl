@@ -117,7 +117,7 @@ class OperatorMixin:
             _AtIndexer object that captures the index
 
         Example:
-            arr = Array[4, i32]([10, 20, 30, 40])
+            arr = Array[i32, 4]([10, 20, 30, 40])
             arr = arr.at[1].set(99)       # Returns new array
             arr = arr.at[2].set(88)       # Can chain updates
         """

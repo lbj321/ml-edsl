@@ -24,7 +24,7 @@ class TestArray2DLiteralCreation:
 
     def test_2d_array_literal_i32(self):
         """Test creating 2D array literal with i32 elements"""
-        arr_type = Array[2, 3, i32]  # 2 rows, 3 columns
+        arr_type = Array[i32, 2, 3]  # 2 rows, 3 columns
         arr = ArrayLiteral([
             [1, 2, 3],
             [4, 5, 6]
@@ -39,7 +39,7 @@ class TestArray2DLiteralCreation:
 
     def test_2d_array_literal_f32(self):
         """Test creating 2D array literal with f32 elements"""
-        arr_type = Array[3, 2, f32]  # 3 rows, 2 columns
+        arr_type = Array[f32, 3, 2]  # 3 rows, 2 columns
         arr = ArrayLiteral([
             [1.0, 2.0],
             [3.0, 4.0],
@@ -52,13 +52,13 @@ class TestArray2DLiteralCreation:
 
     def test_2d_array_construction_syntax(self):
         """Test Array[M, N, dtype]([...]) construction syntax"""
-        arr = Array[2, 2, i32]([
+        arr = Array[i32, 2, 2]([
             [10, 20],
             [30, 40]
         ])
 
         assert isinstance(arr, ArrayLiteral)
-        assert arr.array_type == Array[2, 2, i32]
+        assert arr.array_type == Array[i32, 2, 2]
 
 
 # ==================== 2D ARRAY LITERAL VALIDATION ====================
@@ -68,7 +68,7 @@ class TestArray2DLiteralValidation:
 
     def test_2d_size_mismatch_wrong_rows(self):
         """Test that wrong number of rows is caught"""
-        arr_type = Array[2, 3, i32]  # Expect 2 rows
+        arr_type = Array[i32, 2, 3]  # Expect 2 rows
 
         with pytest.raises(TypeError, match="2D array expects 2 rows, got 3"):
             ArrayLiteral([
@@ -79,7 +79,7 @@ class TestArray2DLiteralValidation:
 
     def test_2d_size_mismatch_wrong_cols(self):
         """Test that wrong number of columns is caught"""
-        arr_type = Array[2, 3, i32]  # Expect 3 columns
+        arr_type = Array[i32, 2, 3]  # Expect 3 columns
 
         with pytest.raises(TypeError, match="Row 1: expected 3 elements"):
             ArrayLiteral([
@@ -89,7 +89,7 @@ class TestArray2DLiteralValidation:
 
     def test_2d_type_mismatch(self):
         """Test that element type mismatch is caught"""
-        arr_type = Array[2, 2, i32]
+        arr_type = Array[i32, 2, 2]
 
         with pytest.raises(TypeError, match="expected i32.*got f32"):
             ArrayLiteral([
@@ -99,7 +99,7 @@ class TestArray2DLiteralValidation:
 
     def test_2d_not_nested_list(self):
         """Test that flat list is rejected for 2D array"""
-        arr_type = Array[2, 2, i32]
+        arr_type = Array[i32, 2, 2]
 
         with pytest.raises(TypeError, match="2D array expects 2 rows, got 4"):
             ArrayLiteral([1, 2, 3, 4], arr_type)
@@ -115,7 +115,7 @@ class TestArray2DAccess:
         arr = ArrayLiteral([
             [1, 2, 3],
             [4, 5, 6]
-        ], Array[2, 3, i32])
+        ], Array[i32, 2, 3])
 
         access = ArrayAccess(arr, (0, 1))  # Access row 0, col 1
 
@@ -130,7 +130,7 @@ class TestArray2DAccess:
         arr = ArrayLiteral([
             [10, 20],
             [30, 40]
-        ], Array[2, 2, i32])
+        ], Array[i32, 2, 2])
 
         access = arr[1, 0]  # Access row 1, col 0
 
@@ -144,7 +144,7 @@ class TestArray2DAccess:
         arr = ArrayLiteral([
             [1.0, 2.0],
             [3.0, 4.0]
-        ], Array[2, 2, f32])
+        ], Array[f32, 2, 2])
 
         access = ArrayAccess(arr, (0, 0))
         assert access.infer_type() == f32  # Returns scalar, not array
@@ -154,7 +154,7 @@ class TestArray2DAccess:
         arr = ArrayLiteral([
             [1, 2],
             [3, 4]
-        ], Array[2, 2, i32])
+        ], Array[i32, 2, 2])
 
         with pytest.raises(TypeError, match="Array dimension mismatch: 2D array requires 2 indices, got 1"):
             ArrayAccess(arr, 0)  # Only 1 index for 2D array
@@ -170,7 +170,7 @@ class TestArray2DStore:
         arr = ArrayLiteral([
             [1, 2, 3],
             [4, 5, 6]
-        ], Array[2, 3, i32])
+        ], Array[i32, 2, 3])
 
         store = ArrayStore(arr, (1, 2), 99)  # Store 99 at row 1, col 2
 
@@ -186,7 +186,7 @@ class TestArray2DStore:
         arr = ArrayLiteral([
             [10, 20],
             [30, 40]
-        ], Array[2, 2, i32])
+        ], Array[i32, 2, 2])
 
         store = arr.at[0, 1].set(50)
 
@@ -201,7 +201,7 @@ class TestArray2DStore:
         arr = ArrayLiteral([
             [1, 2],
             [3, 4]
-        ], Array[2, 2, i32])
+        ], Array[i32, 2, 2])
 
         with pytest.raises(TypeError, match="Cannot store f32 into Array"):
             ArrayStore(arr, (0, 0), 3.14)  # Float into i32 array
@@ -217,7 +217,7 @@ class TestArray2DProtobufSerialization:
         arr = ArrayLiteral([
             [1, 2],
             [3, 4]
-        ], Array[2, 2, i32])
+        ], Array[i32, 2, 2])
 
         context = SerializationContext()
         pb = arr.to_proto(context)
@@ -237,7 +237,7 @@ class TestArray2DProtobufSerialization:
 
     def test_2d_array_access_to_proto(self):
         """Test that 2D ArrayAccess serializes with multiple indices"""
-        arr = ArrayLiteral([[1, 2], [3, 4]], Array[2, 2, i32])
+        arr = ArrayLiteral([[1, 2], [3, 4]], Array[i32, 2, 2])
         access = ArrayAccess(arr, (1, 0))
 
         context = SerializationContext()
@@ -250,7 +250,7 @@ class TestArray2DProtobufSerialization:
 
     def test_2d_array_store_to_proto(self):
         """Test that 2D ArrayStore serializes with multiple indices"""
-        arr = ArrayLiteral([[1, 2], [3, 4]], Array[2, 2, i32])
+        arr = ArrayLiteral([[1, 2], [3, 4]], Array[i32, 2, 2])
         store = ArrayStore(arr, (0, 1), 5)
 
         context = SerializationContext()
@@ -268,8 +268,8 @@ class TestArray2DElementwise:
 
     def test_2d_array_add_arrays(self):
         """Test 2D array + 2D array element-wise addition"""
-        arr1 = ArrayLiteral([[1, 2], [3, 4]], Array[2, 2, i32])
-        arr2 = ArrayLiteral([[10, 20], [30, 40]], Array[2, 2, i32])
+        arr1 = ArrayLiteral([[1, 2], [3, 4]], Array[i32, 2, 2])
+        arr2 = ArrayLiteral([[10, 20], [30, 40]], Array[i32, 2, 2])
 
         result = arr1 + arr2
 
@@ -279,7 +279,7 @@ class TestArray2DElementwise:
 
     def test_2d_array_add_scalar(self):
         """Test 2D array + scalar broadcasting"""
-        arr = ArrayLiteral([[1, 2], [3, 4]], Array[2, 2, i32])
+        arr = ArrayLiteral([[1, 2], [3, 4]], Array[i32, 2, 2])
         scalar = 10
 
         result = arr + scalar
@@ -289,8 +289,8 @@ class TestArray2DElementwise:
 
     def test_2d_array_mul_arrays(self):
         """Test 2D array * 2D array element-wise multiplication"""
-        arr1 = ArrayLiteral([[2, 3], [4, 5]], Array[2, 2, i32])
-        arr2 = ArrayLiteral([[10, 10], [10, 10]], Array[2, 2, i32])
+        arr1 = ArrayLiteral([[2, 3], [4, 5]], Array[i32, 2, 2])
+        arr2 = ArrayLiteral([[10, 10], [10, 10]], Array[i32, 2, 2])
 
         result = arr1 * arr2
 
@@ -298,8 +298,8 @@ class TestArray2DElementwise:
 
     def test_2d_shape_mismatch(self):
         """Test that mismatched shapes are rejected"""
-        arr1 = ArrayLiteral([[1, 2]], Array[1, 2, i32])  # 1x2
-        arr2 = ArrayLiteral([[1], [2]], Array[2, 1, i32])  # 2x1
+        arr1 = ArrayLiteral([[1, 2]], Array[i32, 1, 2])  # 1x2
+        arr2 = ArrayLiteral([[1], [2]], Array[i32, 2, 1])  # 2x1
 
         with pytest.raises(TypeError, match="Array shapes must match"):
             arr1 + arr2
@@ -314,7 +314,7 @@ class TestArray2DMLIRGeneration:
         """Test that 2D array literal compiles and generates memref type"""
         @ml_function
         def create_2d_array() -> i32:
-            arr = Array[2, 3, i32]([
+            arr = Array[i32, 2, 3]([
                 [1, 2, 3],
                 [4, 5, 6]
             ])
@@ -327,7 +327,7 @@ class TestArray2DMLIRGeneration:
         """Test that 2D array access compiles and generates memref.load with 2 indices"""
         @ml_function
         def access_2d_element() -> i32:
-            arr = Array[2, 2, i32]([[1, 2], [3, 4]])
+            arr = Array[i32, 2, 2]([[1, 2], [3, 4]])
             return arr[1, 0]
 
         # Should compile without errors - IR contains memref.load with 2 indices
@@ -337,7 +337,7 @@ class TestArray2DMLIRGeneration:
         """Test that 2D array store compiles correctly"""
         @ml_function
         def store_2d_element() -> i32:
-            arr = Array[2, 2, i32]([[1, 2], [3, 4]])
+            arr = Array[i32, 2, 2]([[1, 2], [3, 4]])
             arr = arr.at[0, 1].set(99)
             return arr[0, 1]
 
@@ -354,7 +354,7 @@ class TestArray2DExecution:
         """Test executing 2D array element access"""
         @ml_function
         def get_element() -> i32:
-            arr = Array[2, 3, i32]([
+            arr = Array[i32, 2, 3]([
                 [10, 20, 30],
                 [40, 50, 60]
             ])
@@ -367,8 +367,8 @@ class TestArray2DExecution:
         """Test executing 2D array addition"""
         @ml_function
         def add_arrays() -> i32:
-            arr1 = Array[2, 2, i32]([[1, 2], [3, 4]])
-            arr2 = Array[2, 2, i32]([[10, 20], [30, 40]])
+            arr1 = Array[i32, 2, 2]([[1, 2], [3, 4]])
+            arr2 = Array[i32, 2, 2]([[10, 20], [30, 40]])
             res = arr1 + arr2
             return res[0, 0] + res[0, 1] + res[1, 0] + res[1, 1]
 
@@ -380,7 +380,7 @@ class TestArray2DExecution:
         """Test executing 2D array + scalar broadcasting"""
         @ml_function
         def add_scalar() -> i32:
-            arr = Array[2, 2, i32]([[1, 2], [3, 4]])
+            arr = Array[i32, 2, 2]([[1, 2], [3, 4]])
             res = arr + 10
             return res[1, 1]  # Should be 4 + 10 = 14
 

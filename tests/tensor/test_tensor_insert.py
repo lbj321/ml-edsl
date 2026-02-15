@@ -22,7 +22,7 @@ class TestTensorInsertCreation:
 
     def test_tensor_insert_creation(self):
         """Test creating TensorInsert node"""
-        t = Tensor[4, i32]([1, 2, 3, 4])
+        t = Tensor[i32, 4]([1, 2, 3, 4])
         insert = TensorInsert(t, 1, 99)
 
         assert isinstance(insert, TensorInsert)
@@ -32,7 +32,7 @@ class TestTensorInsertCreation:
 
     def test_tensor_insert_with_value_index(self):
         """Test TensorInsert with Value node as index"""
-        t = Tensor[3, f32]([1.0, 2.0, 3.0])
+        t = Tensor[f32, 3]([1.0, 2.0, 3.0])
         idx = Constant(2, i32)
         insert = TensorInsert(t, idx, 9.0)
 
@@ -40,7 +40,7 @@ class TestTensorInsertCreation:
 
     def test_tensor_insert_2d(self):
         """Test TensorInsert for 2D tensor"""
-        t = Tensor[2, 3, i32]([[1, 2, 3],
+        t = Tensor[i32, 2, 3]([[1, 2, 3],
                                 [4, 5, 6]])
         insert = TensorInsert(t, (1, 2), 99)
 
@@ -63,7 +63,7 @@ class TestTensorInsertTypeChecking:
 
     def test_tensor_insert_index_must_be_i32(self):
         """Test that index must be i32"""
-        t = Tensor[2, f32]([1.0, 2.0])
+        t = Tensor[f32, 2]([1.0, 2.0])
         float_idx = Constant(1.5, f32)
 
         with pytest.raises(TypeError, match="Tensor index .* must be i32"):
@@ -71,7 +71,7 @@ class TestTensorInsertTypeChecking:
 
     def test_tensor_insert_dimension_mismatch(self):
         """Test that 2D tensor requires 2 indices"""
-        t = Tensor[2, 3, i32]([[1, 2, 3],
+        t = Tensor[i32, 2, 3]([[1, 2, 3],
                                 [4, 5, 6]])
 
         with pytest.raises(TypeError, match="2D tensor requires 2 indices"):
@@ -79,14 +79,14 @@ class TestTensorInsertTypeChecking:
 
     def test_tensor_insert_value_type_must_match(self):
         """Test that value type must match tensor element type"""
-        t = Tensor[3, i32]([1, 2, 3])
+        t = Tensor[i32, 3]([1, 2, 3])
 
         with pytest.raises(TypeError, match="Cannot insert f32 into.*i32"):
             TensorInsert(t, 1, 9.0)  # float into i32 tensor
 
     def test_tensor_insert_i32_into_f32_fails(self):
         """Test that i32 cannot be inserted into f32 tensor"""
-        t = Tensor[3, f32]([1.0, 2.0, 3.0])
+        t = Tensor[f32, 3]([1.0, 2.0, 3.0])
 
         with pytest.raises(TypeError, match="Cannot insert i32 into.*f32"):
             TensorInsert(t, 1, 99)  # int into f32 tensor
@@ -99,16 +99,16 @@ class TestTensorInsertTypeInference:
 
     def test_tensor_insert_returns_same_tensor_type(self):
         """Test that TensorInsert.infer_type() returns the same TensorType"""
-        t = Tensor[4, i32]([1, 2, 3, 4])
+        t = Tensor[i32, 4]([1, 2, 3, 4])
         insert = TensorInsert(t, 1, 99)
 
         inferred = insert.infer_type()
         assert isinstance(inferred, TensorType)
-        assert inferred == Tensor[4, i32]
+        assert inferred == Tensor[i32, 4]
 
     def test_tensor_insert_preserves_shape(self):
         """Test that inferred type has same shape"""
-        t = Tensor[2, 3, f32]([[1.0, 2.0, 3.0],
+        t = Tensor[f32, 2, 3]([[1.0, 2.0, 3.0],
                                 [4.0, 5.0, 6.0]])
         insert = TensorInsert(t, (0, 1), 9.0)
 
@@ -124,7 +124,7 @@ class TestAtSetDispatch:
 
     def test_tensor_at_set_creates_tensor_insert(self):
         """Test that tensor.at[i].set(v) creates TensorInsert"""
-        t = Tensor[4, i32]([1, 2, 3, 4])
+        t = Tensor[i32, 4]([1, 2, 3, 4])
         result = t.at[1].set(99)
 
         assert isinstance(result, TensorInsert)
@@ -132,7 +132,7 @@ class TestAtSetDispatch:
 
     def test_array_at_set_still_creates_array_store(self):
         """Test that array.at[i].set(v) still creates ArrayStore"""
-        arr = Array[4, i32]([1, 2, 3, 4])
+        arr = Array[i32, 4]([1, 2, 3, 4])
         result = arr.at[1].set(99)
 
         assert isinstance(result, ArrayStore)
@@ -140,14 +140,14 @@ class TestAtSetDispatch:
 
     def test_tensor_at_set_type_inference(self):
         """Test that tensor.at[i].set(v) has correct type inference"""
-        t = Tensor[4, f32]([1.0, 2.0, 3.0, 4.0])
+        t = Tensor[f32, 4]([1.0, 2.0, 3.0, 4.0])
         result = t.at[0].set(9.0)
 
-        assert result.infer_type() == Tensor[4, f32]
+        assert result.infer_type() == Tensor[f32, 4]
 
     def test_tensor_at_set_2d(self):
         """Test .at[i,j].set() for 2D tensor"""
-        t = Tensor[2, 3, i32]([[1, 2, 3],
+        t = Tensor[i32, 2, 3]([[1, 2, 3],
                                 [4, 5, 6]])
         result = t.at[1, 2].set(99)
 
@@ -169,7 +169,7 @@ class TestAtGetDispatch:
 
     def test_tensor_at_get_creates_tensor_extract(self):
         """Test that tensor.at[i].get() creates TensorExtract"""
-        t = Tensor[4, i32]([1, 2, 3, 4])
+        t = Tensor[i32, 4]([1, 2, 3, 4])
         result = t.at[1].get()
 
         assert isinstance(result, TensorExtract)
@@ -189,7 +189,7 @@ class TestTensorInsertGetChildren:
 
     def test_tensor_insert_get_children(self):
         """Test that TensorInsert.get_children() returns [tensor, indices..., value]"""
-        t = Tensor[3, i32]([1, 2, 3])
+        t = Tensor[i32, 3]([1, 2, 3])
         insert = TensorInsert(t, 1, 99)
         children = insert.get_children()
 
@@ -200,7 +200,7 @@ class TestTensorInsertGetChildren:
 
     def test_tensor_insert_2d_get_children(self):
         """Test get_children for 2D tensor insert"""
-        t = Tensor[2, 3, i32]([[1, 2, 3],
+        t = Tensor[i32, 2, 3]([[1, 2, 3],
                                 [4, 5, 6]])
         insert = TensorInsert(t, (1, 2), 99)
         children = insert.get_children()
@@ -215,7 +215,7 @@ class TestTensorInsertProtobuf:
 
     def test_tensor_insert_to_proto(self):
         """Test that TensorInsert serializes to protobuf"""
-        t = Tensor[3, i32]([1, 2, 3])
+        t = Tensor[i32, 3]([1, 2, 3])
         insert = TensorInsert(t, 1, 99)
         context = SerializationContext()
         pb = insert.to_proto(context)
@@ -228,7 +228,7 @@ class TestTensorInsertProtobuf:
 
     def test_tensor_insert_proto_has_result_type(self):
         """Test that TensorInsert proto includes result type"""
-        t = Tensor[4, f32]([1.0, 2.0, 3.0, 4.0])
+        t = Tensor[f32, 4]([1.0, 2.0, 3.0, 4.0])
         insert = TensorInsert(t, 0, 9.0)
         context = SerializationContext()
         pb = insert.to_proto(context)
@@ -247,7 +247,7 @@ class TestTensorInsertExecution:
         """Test basic tensor insert and extract"""
         @ml_function
         def insert_and_extract() -> i32:
-            t = Tensor[4, i32]([10, 20, 30, 40])
+            t = Tensor[i32, 4]([10, 20, 30, 40])
             t = t.at[1].set(99)
             return t[1]
 
@@ -258,7 +258,7 @@ class TestTensorInsertExecution:
         """Test that insert preserves other elements"""
         @ml_function
         def insert_check_others() -> i32:
-            t = Tensor[4, i32]([10, 20, 30, 40])
+            t = Tensor[i32, 4]([10, 20, 30, 40])
             t = t.at[1].set(99)
             # Sum of unchanged elements
             return t[0] + t[2] + t[3]
@@ -270,7 +270,7 @@ class TestTensorInsertExecution:
         """Test multiple inserts"""
         @ml_function
         def multiple_inserts() -> i32:
-            t = Tensor[4, i32]([1, 2, 3, 4])
+            t = Tensor[i32, 4]([1, 2, 3, 4])
             t = t.at[0].set(10)
             t = t.at[3].set(40)
             return t[0] + t[3]
@@ -282,7 +282,7 @@ class TestTensorInsertExecution:
         """Test tensor insert with f32"""
         @ml_function
         def insert_f32() -> f32:
-            t = Tensor[3, f32]([1.0, 2.0, 3.0])
+            t = Tensor[f32, 3]([1.0, 2.0, 3.0])
             t = t.at[1].set(9.5)
             return t[1]
 
@@ -293,7 +293,7 @@ class TestTensorInsertExecution:
         """Test 2D tensor insert"""
         @ml_function
         def insert_2d() -> i32:
-            t = Tensor[2, 3, i32]([[1, 2, 3],
+            t = Tensor[i32, 2, 3]([[1, 2, 3],
                                     [4, 5, 6]])
             t = t.at[1, 2].set(99)
             return t[1, 2]
@@ -305,7 +305,7 @@ class TestTensorInsertExecution:
         """Test inserting a computed value"""
         @ml_function
         def insert_computed() -> i32:
-            t = Tensor[3, i32]([10, 20, 30])
+            t = Tensor[i32, 3]([10, 20, 30])
             val = t[0] + t[1]  # 30
             t = t.at[2].set(val)
             return t[2]
@@ -317,7 +317,7 @@ class TestTensorInsertExecution:
         """Test chained inserts"""
         @ml_function
         def chain_inserts() -> i32:
-            t = Tensor[4, i32]([0, 0, 0, 0])
+            t = Tensor[i32, 4]([0, 0, 0, 0])
             t = t.at[0].set(1)
             t = t.at[1].set(2)
             t = t.at[2].set(3)

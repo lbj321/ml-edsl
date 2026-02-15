@@ -51,7 +51,7 @@ def _to_scalar_node(value):
 
 class ArrayLiteral(Value):
     """
-    Array creation: Array[4, i32]([1, 2, 3, 4])
+    Array creation: Array[i32, 4]([1, 2, 3, 4])
 
     Compile-time type checking:
     - Validates size matches number of elements
