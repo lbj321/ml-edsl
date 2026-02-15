@@ -29,6 +29,39 @@ class TestDialectBoundaryIR:
         """)
 
 
+class TestAllocationStrategyIR:
+    """Test that arrays use stack allocation, not heap"""
+
+    def test_array_uses_alloca_not_alloc(self, check_ir):
+        """Test that arrays use memref.alloca (stack), not memref.alloc (heap)"""
+        @ml_function
+        def array_stack() -> i32:
+            arr = Array[i32, 4]([1, 2, 3, 4])
+            return arr[0]
+
+        array_stack()
+
+        check_ir("""
+        // CHECK: memref.alloca
+        // CHECK-NOT: memref.alloc()
+        """)
+
+    def test_array_no_dealloc(self, check_lowered_ir):
+        """Test that stack-allocated arrays don't get dealloc after lowering"""
+        @ml_function
+        def array_no_dealloc() -> i32:
+            arr = Array[i32, 4]([1, 2, 3, 4])
+            return arr[0]
+
+        array_no_dealloc()
+
+        check_lowered_ir("""
+        // CHECK: memref.alloca
+        // CHECK-NOT: memref.dealloc
+        // CHECK-NOT: bufferization.dealloc
+        """, after="ownership-based-buffer-deallocation")
+
+
 class TestShapeRepresentationIR:
     """Test that multi-dimensional arrays preserve shape in IR (not flattened)"""
 

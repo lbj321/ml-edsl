@@ -106,8 +106,12 @@ class CppMLIRBackend:
         return self.compiler.get_module_ir()
 
     def get_lowering_snapshots(self) -> list[tuple[str, str]]:
-        """Get IR snapshots from lowering pipeline. Only populated with SAVE_IR=1."""
+        """Get IR snapshots from lowering pipeline."""
         return self.compiler.get_lowering_snapshots()
+
+    def enable_snapshot_capture(self):
+        """Enable IR snapshot capture for lowering passes."""
+        self.compiler.enable_snapshot_capture()
 
     def clear_module(self):
         """Clear all functions and reset completely."""

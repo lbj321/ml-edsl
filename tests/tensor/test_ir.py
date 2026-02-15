@@ -30,6 +30,67 @@ class TestDialectBoundaryIR:
         """)
 
 
+class TestBufferizationIR:
+    """Test that tensor bufferization produces correct memref ops"""
+
+    def test_tensor_bufferizes_to_memref(self, check_lowered_ir):
+        """Test that tensor ops become memref ops after bufferization"""
+        @ml_function
+        def tensor_buf() -> i32:
+            t = Tensor[i32, 4]([1, 2, 3, 4])
+            return t[0]
+
+        tensor_buf()
+
+        check_lowered_ir("""
+        // CHECK: memref.alloc
+        // CHECK-NOT: tensor.from_elements
+        // CHECK-NOT: tensor.extract
+        """, after="one-shot-bufferize")
+
+    def test_tensor_bufferizes_to_heap_alloc(self, check_lowered_ir):
+        """Test that tensor bufferization uses memref.alloc (heap), not alloca (stack)"""
+        @ml_function
+        def tensor_heap() -> i32:
+            t = Tensor[i32, 4]([1, 2, 3, 4])
+            return t[0]
+
+        tensor_heap()
+
+        check_lowered_ir("""
+        // CHECK: memref.alloc
+        // CHECK-NOT: memref.alloca
+        """, after="one-shot-bufferize")
+
+    def test_2d_tensor_shape_preserved_through_bufferization(self, check_lowered_ir):
+        """Test that tensor<2x3xi32> becomes memref<2x3xi32>, not memref<6xi32>"""
+        @ml_function
+        def tensor_2d_buf() -> i32:
+            t = Tensor[i32, 2, 3]([[1, 2, 3], [4, 5, 6]])
+            return t[0, 0]
+
+        tensor_2d_buf()
+
+        check_lowered_ir("""
+        // CHECK: memref.alloc() {{.*}} : memref<2x3xi32>
+        // CHECK-NOT: memref<6xi32>
+        """, after="one-shot-bufferize")
+
+    def test_buffer_deallocation_inserted(self, check_lowered_ir):
+        """Test that deallocation pass inserts memref.dealloc"""
+        @ml_function
+        def tensor_dealloc() -> i32:
+            t = Tensor[i32, 4]([1, 2, 3, 4])
+            return t[0]
+
+        tensor_dealloc()
+
+        check_lowered_ir("""
+        // CHECK: memref.alloc
+        // CHECK: bufferization.dealloc
+        """, after="ownership-based-buffer-deallocation")
+
+
 class TestShapeRepresentationIR:
     """Test that multi-dimensional tensors preserve shape in IR (not flattened)"""
 

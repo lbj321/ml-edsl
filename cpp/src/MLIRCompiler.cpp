@@ -158,9 +158,10 @@ void MLIRCompiler::ensureFinalized() {
 
   // Lower MLIR to LLVM module
   const bool saveIR = std::getenv("SAVE_IR") != nullptr;
-  MLIRLowering lowering(mlirContext.get(), /*captureSnapshots=*/saveIR);
+  const bool doCapture = saveIR || captureSnapshots;
+  MLIRLowering lowering(mlirContext.get(), /*captureSnapshots=*/doCapture);
   auto lowered = lowering.lowerToLLVMModule(*module);
-  if (saveIR) {
+  if (doCapture) {
     loweringSnapshots = lowering.takeSnapshots();
   }
 

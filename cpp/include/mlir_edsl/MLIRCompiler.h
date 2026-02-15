@@ -59,6 +59,7 @@ public:
 
   // ==================== CONFIGURATION ====================
   void setOptimizationLevel(OptLevel level);
+  void enableSnapshotCapture() { captureSnapshots = true; }
 
 private:
   State state;
@@ -84,6 +85,7 @@ private:
 
   // ==================== IR SNAPSHOTS ====================
   SnapshotList loweringSnapshots;
+  bool captureSnapshots = false;
 
   // ==================== INTERNAL METHODS ====================
   void ensureFinalized();

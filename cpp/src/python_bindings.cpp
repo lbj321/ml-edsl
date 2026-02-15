@@ -34,8 +34,10 @@ PYBIND11_MODULE(_mlir_backend, m) {
            "Reset to Building state, clear all compiled functions")
       .def("get_lowering_snapshots",
            &mlir_edsl::MLIRCompiler::getLoweringSnapshots,
-           "Get IR snapshots after each lowering pass (populated when "
-           "SAVE_IR is set)")
+           "Get IR snapshots after each lowering pass")
+      .def("enable_snapshot_capture",
+           &mlir_edsl::MLIRCompiler::enableSnapshotCapture,
+           "Enable IR snapshot capture for lowering passes")
       .def(
           "set_optimization_level",
           [](mlir_edsl::MLIRCompiler &self, int level) {

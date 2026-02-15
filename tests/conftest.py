@@ -378,3 +378,74 @@ def check_ir(backend):
             os.unlink(check_file)
 
     return _check
+
+
+@pytest.fixture
+def check_lowered_ir(backend):
+    """FileCheck-based IR assertion against lowered IR after a specific pass.
+
+    Usage:
+        def test_something(check_lowered_ir):
+            @ml_function
+            def my_func(...) -> ...:
+                ...
+
+            my_func(...)  # triggers compilation
+
+            check_lowered_ir('''
+                // CHECK: memref.alloc
+                // CHECK: memref.dealloc
+            ''', after="one-shot-bufferize")
+    """
+    filecheck_bin = _find_filecheck()
+    if filecheck_bin is None:
+        pytest.skip("FileCheck binary not found")
+
+    # Enable snapshot capture for this test
+    backend.enable_snapshot_capture()
+
+    def _check(pattern: str, after: str):
+        # Ensure lowering has run (idempotent if already finalized)
+        functions = backend.list_functions()
+        if functions:
+            backend.compiler.get_function_pointer(functions[0])
+
+        snapshots = backend.get_lowering_snapshots()
+        if not snapshots:
+            pytest.fail("No lowering snapshots captured")
+
+        # Find the snapshot after the named pass
+        ir = None
+        for pass_name, pass_ir in snapshots:
+            if after in pass_name:
+                ir = pass_ir
+                break
+
+        if ir is None:
+            available = [name for name, _ in snapshots]
+            pytest.fail(f"Pass '{after}' not found. Available: {available}")
+
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.check', delete=False
+        ) as f:
+            f.write(pattern)
+            check_file = f.name
+
+        try:
+            result = subprocess.run(
+                [filecheck_bin, check_file],
+                input=ir,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                pytest.fail(
+                    f"FileCheck failed (after pass '{after}'):\n"
+                    f"--- Pattern ---\n{pattern}\n"
+                    f"--- Lowered IR ---\n{ir}\n"
+                    f"--- FileCheck stderr ---\n{result.stderr}"
+                )
+        finally:
+            os.unlink(check_file)
+
+    return _check
