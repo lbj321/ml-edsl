@@ -10,7 +10,7 @@ except ImportError:
     ast_pb2 = None
 
 from ..serialization import SerializationContext
-from .arrays import _normalize_indices, _to_scalar_node
+from .arrays import _normalize_indices, _to_scalar_node, _validate_and_flatten
 
 
 class TensorFromElements(Value):
@@ -37,58 +37,7 @@ class TensorFromElements(Value):
 
     def _validate_size(self):
         """Ensure element count matches tensor shape."""
-        if self.tensor_type.ndim == 1:
-            if len(self.elements) != self.tensor_type.shape[0]:
-                raise TypeError(
-                    f"Tensor size mismatch: declared Tensor[{self.tensor_type.shape[0]}, ...] "
-                    f"but got {len(self.elements)} elements"
-                )
-        elif self.tensor_type.ndim == 2:
-            self.elements = self._validate_and_flatten_2d(self.elements)
-        elif self.tensor_type.ndim == 3:
-            self.elements = self._validate_and_flatten_3d(self.elements)
-
-    def _validate_and_flatten_2d(self, elements):
-        """Validate 2D structure and flatten to row-major order."""
-        rows, cols = self.tensor_type.shape
-        if not isinstance(elements, list) or len(elements) != rows:
-            raise TypeError(
-                f"2D tensor expects {rows} rows, got "
-                f"{len(elements) if isinstance(elements, list) else 'non-list'}"
-            )
-        flat = []
-        for i, row in enumerate(elements):
-            if not isinstance(row, list) or len(row) != cols:
-                raise TypeError(
-                    f"Row {i}: expected {cols} elements, got "
-                    f"{len(row) if isinstance(row, list) else 'non-list'}"
-                )
-            flat.extend(row)
-        return flat
-
-    def _validate_and_flatten_3d(self, elements):
-        """Validate 3D structure and flatten to row-major order."""
-        d0, d1, d2 = self.tensor_type.shape
-        if not isinstance(elements, list) or len(elements) != d0:
-            raise TypeError(
-                f"3D tensor expects {d0} matrices, got "
-                f"{len(elements) if isinstance(elements, list) else 'non-list'}"
-            )
-        flat = []
-        for i, matrix in enumerate(elements):
-            if not isinstance(matrix, list) or len(matrix) != d1:
-                raise TypeError(
-                    f"Matrix {i}: expected {d1} rows, got "
-                    f"{len(matrix) if isinstance(matrix, list) else 'non-list'}"
-                )
-            for j, row in enumerate(matrix):
-                if not isinstance(row, list) or len(row) != d2:
-                    raise TypeError(
-                        f"Matrix {i}, row {j}: expected {d2} elements, got "
-                        f"{len(row) if isinstance(row, list) else 'non-list'}"
-                    )
-                flat.extend(row)
-        return flat
+        self.elements = _validate_and_flatten(self.elements, self.tensor_type.shape)
 
     def _validate_element_types(self):
         """Ensure all elements match the declared element type (strict!)."""

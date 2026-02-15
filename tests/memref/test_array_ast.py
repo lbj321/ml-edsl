@@ -57,7 +57,7 @@ class TestArrayLiteralTypeChecking:
         """Test that size mismatch is caught"""
         arr_type = Array[i32, 4]
 
-        with pytest.raises(TypeError, match="Array size mismatch"):
+        with pytest.raises(TypeError, match="expected 4 elements, got 3"):
             ArrayLiteral([1, 2, 3], arr_type)  # Only 3 elements, expected 4
 
     def test_array_element_type_mismatch(self):
@@ -444,7 +444,7 @@ class TestArrayTypeIntegration:
     def test_array_construction_validates_size(self):
         """Test that Array construction validates size"""
         # This should fail - 2 elements when 3 expected
-        with pytest.raises(TypeError, match="size mismatch"):
+        with pytest.raises(TypeError, match="expected 3 elements, got 2"):
             Array[i32, 3]([1, 2])
 
 

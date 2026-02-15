@@ -69,7 +69,7 @@ class TestArray3DLiteralValidation:
         """Test that wrong first dimension is caught"""
         arr_type = Array[i32, 2, 2, 2]  # Expect 2x2x2
 
-        with pytest.raises(TypeError, match="3D array expects 2 matrices, got 3"):
+        with pytest.raises(TypeError, match="expected 2 elements, got 3"):
             ArrayLiteral([
                 [[1, 2], [3, 4]],
                 [[5, 6], [7, 8]],
@@ -80,7 +80,7 @@ class TestArray3DLiteralValidation:
         """Test that wrong second dimension is caught"""
         arr_type = Array[i32, 2, 2, 2]
 
-        with pytest.raises(TypeError, match="Matrix 0: expected 2 rows, got 3"):
+        with pytest.raises(TypeError, match="\\[0\\]: expected 2 elements, got 3"):
             ArrayLiteral([
                 [[1, 2], [3, 4], [5, 6]],  # 3 rows instead of 2
                 [[7, 8], [9, 10]]
@@ -90,7 +90,7 @@ class TestArray3DLiteralValidation:
         """Test that wrong third dimension is caught"""
         arr_type = Array[i32, 2, 2, 3]  # Expect 3 columns
 
-        with pytest.raises(TypeError, match="Matrix 1, row 0: expected 3 elements"):
+        with pytest.raises(TypeError, match="\\[1\\]\\[0\\]: expected 3 elements"):
             ArrayLiteral([
                 [[1, 2, 3], [4, 5, 6]],
                 [[7, 8], [9, 10, 11]]  # Row 0 has only 2 elements

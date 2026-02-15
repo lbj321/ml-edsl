@@ -70,7 +70,7 @@ class TestArray2DLiteralValidation:
         """Test that wrong number of rows is caught"""
         arr_type = Array[i32, 2, 3]  # Expect 2 rows
 
-        with pytest.raises(TypeError, match="2D array expects 2 rows, got 3"):
+        with pytest.raises(TypeError, match="expected 2 elements, got 3"):
             ArrayLiteral([
                 [1, 2, 3],
                 [4, 5, 6],
@@ -81,7 +81,7 @@ class TestArray2DLiteralValidation:
         """Test that wrong number of columns is caught"""
         arr_type = Array[i32, 2, 3]  # Expect 3 columns
 
-        with pytest.raises(TypeError, match="Row 1: expected 3 elements"):
+        with pytest.raises(TypeError, match="\\[1\\]: expected 3 elements"):
             ArrayLiteral([
                 [1, 2, 3],
                 [4, 5]  # Only 2 columns
@@ -101,7 +101,7 @@ class TestArray2DLiteralValidation:
         """Test that flat list is rejected for 2D array"""
         arr_type = Array[i32, 2, 2]
 
-        with pytest.raises(TypeError, match="2D array expects 2 rows, got 4"):
+        with pytest.raises(TypeError, match="expected 2 elements, got 4"):
             ArrayLiteral([1, 2, 3, 4], arr_type)
 
 

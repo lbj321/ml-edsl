@@ -69,7 +69,7 @@ class TestTensorFromElementsTypeChecking:
 
     def test_tensor_size_mismatch(self):
         """Test that size mismatch is caught"""
-        with pytest.raises(TypeError, match="Tensor size mismatch"):
+        with pytest.raises(TypeError, match="expected 4 elements, got 3"):
             Tensor[f32, 4]([1.0, 2.0, 3.0])  # 3 elements, expected 4
 
     def test_tensor_element_type_mismatch(self):
@@ -84,7 +84,7 @@ class TestTensorFromElementsTypeChecking:
 
     def test_tensor_2d_row_count_mismatch(self):
         """Test that 2D tensor validates row count"""
-        with pytest.raises(TypeError, match="2D tensor expects 2 rows"):
+        with pytest.raises(TypeError, match="expected 2 elements, got 1"):
             Tensor[i32, 2, 3]([[1, 2, 3]])  # 1 row, expected 2
 
     def test_tensor_2d_column_count_mismatch(self):
@@ -94,7 +94,7 @@ class TestTensorFromElementsTypeChecking:
 
     def test_tensor_3d_structure_mismatch(self):
         """Test that 3D tensor validates structure"""
-        with pytest.raises(TypeError, match="3D tensor expects 2 matrices"):
+        with pytest.raises(TypeError, match="expected 2 elements, got 1"):
             Tensor[i32, 2, 2, 2]([[[1, 2], [3, 4]]])  # 1 matrix, expected 2
 
 
@@ -356,7 +356,7 @@ class TestTensorConstructionSyntax:
 
     def test_tensor_construction_validates_size(self):
         """Test that Tensor construction validates size"""
-        with pytest.raises(TypeError, match="size mismatch"):
+        with pytest.raises(TypeError, match="expected 3 elements, got 2"):
             Tensor[f32, 3]([1.0, 2.0])  # 2 elements when 3 expected
 
     def test_tensor_construction_then_extract(self):
