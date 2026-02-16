@@ -149,7 +149,7 @@ message TensorNode {
     TensorFromElements from_elements = 1;
     TensorExtract extract = 2;
     TensorInsert insert = 3;
-    // Future: TensorBinaryOp binary_op = 4;
+    TensorEmpty empty = 4;
   }
 }
 
@@ -299,6 +299,11 @@ message TensorInsert {
   repeated ASTNode indices = 2;    // Index values
   ASTNode value = 3;               // Value to insert
   TypeSpec result_type = 4;        // Result tensor type (TensorTypeSpec)
+}
+
+// Create uninitialized tensor: tensor.empty
+message TensorEmpty {
+  TypeSpec type = 1;               // Tensor type (TensorTypeSpec with shape + element type)
 }
 
 // ============================================================================

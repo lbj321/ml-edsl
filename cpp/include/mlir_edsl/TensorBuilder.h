@@ -25,6 +25,9 @@ public:
   /// Build tensor insert: tensor.insert (returns new tensor)
   mlir::Value buildInsert(const TensorInsert &node);
 
+  /// Build empty tensor: tensor.empty
+  mlir::Value buildEmpty(const TensorEmpty &node);
+
 private:
   mlir::OpBuilder &builder;
   mlir::MLIRContext *context;

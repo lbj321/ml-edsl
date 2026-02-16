@@ -10,7 +10,7 @@ This test suite validates:
 
 import pytest
 from mlir_edsl.types import Tensor, TensorType, ScalarType, i32, f32, i1, Array
-from mlir_edsl.ast import TensorFromElements, TensorExtract, Constant, ArrayAccess
+from mlir_edsl.ast import TensorFromElements, TensorExtract, TensorEmpty, Constant, ArrayAccess
 from mlir_edsl.ast.serialization import SerializationContext
 
 
@@ -366,6 +366,66 @@ class TestTensorConstructionSyntax:
 
         assert isinstance(val, TensorExtract)
         assert val.infer_type() == i32
+
+
+# ==================== TENSOR EMPTY ====================
+
+class TestTensorEmptyCreation:
+    """Test TensorEmpty AST node creation"""
+
+    def test_tensor_empty_1d(self):
+        """Test creating 1D empty tensor"""
+        t = Tensor.empty(f32, 4)
+
+        assert isinstance(t, TensorEmpty)
+        assert t.tensor_type == Tensor[f32, 4]
+
+    def test_tensor_empty_2d(self):
+        """Test creating 2D empty tensor"""
+        t = Tensor.empty(i32, 2, 3)
+
+        assert isinstance(t, TensorEmpty)
+        assert t.tensor_type == Tensor[i32, 2, 3]
+
+    def test_tensor_empty_3d(self):
+        """Test creating 3D empty tensor"""
+        t = Tensor.empty(i32, 2, 3, 4)
+
+        assert isinstance(t, TensorEmpty)
+        assert t.tensor_type.shape == (2, 3, 4)
+
+    def test_tensor_empty_infer_type(self):
+        """Test that TensorEmpty.infer_type() returns TensorType"""
+        t = Tensor.empty(f32, 4)
+
+        inferred = t.infer_type()
+        assert isinstance(inferred, TensorType)
+        assert inferred == Tensor[f32, 4]
+
+    def test_tensor_empty_get_children_empty(self):
+        """Test that TensorEmpty has no children"""
+        t = Tensor.empty(i32, 3)
+
+        assert t.get_children() == []
+
+    def test_tensor_empty_to_proto(self):
+        """Test that TensorEmpty serializes to protobuf"""
+        t = Tensor.empty(f32, 4)
+        context = SerializationContext()
+        pb = t.to_proto(context)
+
+        assert pb.HasField("tensor")
+        assert pb.tensor.HasField("empty")
+        assert pb.tensor.empty.type.HasField("tensor")
+        assert list(pb.tensor.empty.type.tensor.shape) == [4]
+
+    def test_tensor_empty_2d_to_proto(self):
+        """Test that 2D TensorEmpty serializes shape correctly"""
+        t = Tensor.empty(i32, 2, 3)
+        context = SerializationContext()
+        pb = t.to_proto(context)
+
+        assert list(pb.tensor.empty.type.tensor.shape) == [2, 3]
 
 
 if __name__ == "__main__":

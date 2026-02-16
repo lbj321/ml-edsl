@@ -1,4 +1,4 @@
-"""Tensor AST nodes: TensorFromElements, TensorExtract"""
+"""Tensor AST nodes: TensorFromElements, TensorExtract, TensorInsert, TensorEmpty"""
 
 from ..base import Value
 from ...types import Type, ScalarType, TensorType
@@ -227,4 +227,33 @@ class TensorInsert(Value):
             pb_node.tensor.insert.indices.append(idx.to_proto(context))
         pb_node.tensor.insert.value.CopyFrom(self.value.to_proto(context))
         pb_node.tensor.insert.result_type.CopyFrom(self._tensor_type.to_proto())
+        return pb_node
+
+
+class TensorEmpty(Value):
+    """Create uninitialized tensor of a given shape/type.
+
+    Maps to MLIR tensor.empty op. Useful for allocating tensor storage
+    that gets filled at runtime (via loops or .at[].set() inserts).
+
+    Example:
+        t = Tensor.empty(f32, 4)
+        t = Tensor.empty(i32, 2, 3)
+    """
+
+    def __init__(self, tensor_type: TensorType):
+        super().__init__()
+        self.tensor_type = tensor_type
+
+    def infer_type(self) -> Type:
+        """TensorEmpty returns its full TensorType."""
+        return self.tensor_type
+
+    def get_children(self) -> list['Value']:
+        """No child nodes — just a type."""
+        return []
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.tensor.empty.type.CopyFrom(self.tensor_type.to_proto())
         return pb_node

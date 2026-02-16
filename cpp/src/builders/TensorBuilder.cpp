@@ -65,4 +65,16 @@ mlir::Value TensorBuilder::buildInsert(const TensorInsert &node) {
   return builder.create<mlir::tensor::InsertOp>(loc, scalar, tensor, indices);
 }
 
+mlir::Value TensorBuilder::buildEmpty(const TensorEmpty &node) {
+  auto loc = builder.getUnknownLoc();
+
+  // Extract shape and element type directly from protobuf
+  const auto &tensorSpec = node.type().tensor();
+  llvm::SmallVector<int64_t> shape(tensorSpec.shape().begin(),
+                                   tensorSpec.shape().end());
+  mlir::Type elemType = parent->convertType(tensorSpec.element_type());
+
+  return builder.create<mlir::tensor::EmptyOp>(loc, shape, elemType);
+}
+
 } // namespace mlir_edsl

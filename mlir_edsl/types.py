@@ -557,8 +557,29 @@ class Tensor(metaclass=TensorMeta):
     Usage for construction (inside @ml_function):
         t = Tensor[f32, 4]([1.0, 2.0, 3.0, 4.0])
         val = t[2]  # Extract element
+
+    Usage for empty tensor:
+        t = Tensor.empty(f32, 4)
+        t = Tensor.empty(i32, 2, 3)
     """
-    pass
+
+    @staticmethod
+    def empty(dtype, *shape):
+        """Create an uninitialized tensor of the given shape and element type.
+
+        Args:
+            dtype: Element type (i32, f32, etc.)
+            *shape: Dimension sizes (e.g., 4 for 1D, 2, 3 for 2D)
+
+        Returns:
+            TensorEmpty AST node
+        """
+        from .ast import TensorEmpty
+        if len(shape) == 1:
+            tensor_type = TensorType(shape[0], dtype)
+        else:
+            tensor_type = TensorType(shape, dtype)
+        return TensorEmpty(tensor_type)
 
 
 # ============================================================================

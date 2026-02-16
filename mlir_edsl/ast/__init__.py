@@ -12,7 +12,7 @@ from .nodes import (
     # Arrays
     ArrayLiteral, ArrayAccess, ArrayStore, ArrayBinaryOp,
     # Tensors
-    TensorFromElements, TensorExtract, TensorInsert,
+    TensorFromElements, TensorExtract, TensorInsert, TensorEmpty,
     # Control flow
     IfOp, ForLoopOp,
     # Functions
@@ -23,7 +23,7 @@ __all__ = [
     'Value', 'SerializationContext', 'to_value',
     'Constant', 'BinaryOp', 'CompareOp', 'CastOp',
     'ArrayLiteral', 'ArrayAccess', 'ArrayStore', 'ArrayBinaryOp',
-    'TensorFromElements', 'TensorExtract', 'TensorInsert',
+    'TensorFromElements', 'TensorExtract', 'TensorInsert', 'TensorEmpty',
     'IfOp', 'ForLoopOp',
     'Parameter', 'CallOp',
 ]

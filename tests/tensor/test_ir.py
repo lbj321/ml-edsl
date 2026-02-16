@@ -125,5 +125,70 @@ class TestShapeRepresentationIR:
         """)
 
 
+class TestTensorEmptyIR:
+    """Test that tensor.empty emits correct IR"""
+
+    def test_tensor_empty_op_in_ir(self, check_ir):
+        """Test tensor.empty appears in IR"""
+        @ml_function
+        def empty_tensor() -> i32:
+            t = Tensor.empty(i32, 4)
+            t = t.at[0].set(1)
+            return t[0]
+
+        empty_tensor()
+
+        check_ir("""
+        // CHECK: func.func @empty_tensor
+        // CHECK: tensor.empty
+        // CHECK: tensor.insert
+        // CHECK: tensor.extract
+        """)
+
+    def test_tensor_empty_no_from_elements(self, check_ir):
+        """Test tensor.empty does not emit tensor.from_elements"""
+        @ml_function
+        def empty_no_from() -> i32:
+            t = Tensor.empty(i32, 3)
+            t = t.at[0].set(1)
+            return t[0]
+
+        empty_no_from()
+
+        check_ir("""
+        // CHECK: tensor.empty
+        // CHECK-NOT: tensor.from_elements
+        """)
+
+    def test_tensor_empty_2d_shape(self, check_ir):
+        """Test 2D tensor.empty preserves shape"""
+        @ml_function
+        def empty_2d_shape() -> i32:
+            t = Tensor.empty(i32, 2, 3)
+            t = t.at[0, 0].set(1)
+            return t[0, 0]
+
+        empty_2d_shape()
+
+        check_ir("""
+        // CHECK: tensor.empty() : tensor<2x3xi32>
+        """)
+
+    def test_tensor_empty_bufferizes(self, check_lowered_ir):
+        """Test that tensor.empty bufferizes correctly"""
+        @ml_function
+        def empty_buf() -> i32:
+            t = Tensor.empty(i32, 4)
+            t = t.at[0].set(1)
+            return t[0]
+
+        empty_buf()
+
+        check_lowered_ir("""
+        // CHECK: memref.alloc
+        // CHECK-NOT: tensor.empty
+        """, after="one-shot-bufferize")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
