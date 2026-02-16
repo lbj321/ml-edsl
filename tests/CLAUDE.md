@@ -21,7 +21,10 @@ class TestFeatureExecution:
 - **This is the primary correctness layer** — if the function produces the right answer, the IR was good enough
 
 ### 2. IR Structure Tests (`test_ir.py`)
-Verify MLIR properties that **cannot be caught by runtime tests**.
+Verify MLIR properties that **cannot be caught by runtime tests**. There are two kinds:
+
+#### Pre-lowering IR (`check_ir`)
+Check the MLIR IR as emitted by MLIRBuilder, before any lowering passes.
 
 ```python
 class TestFeatureIR:
@@ -37,14 +40,46 @@ class TestFeatureIR:
 ```
 
 - **Requires**: `check_ir` fixture (depends on FileCheck binary)
-- **Asserts**: IR structure via FileCheck patterns
+- **Asserts**: IR structure via FileCheck patterns on pre-lowering MLIR
 
-**Good IR tests** check things invisible to runtime:
+#### Post-lowering IR (`check_lowered_ir`)
+Check the IR **after** a specific lowering pass (bufferization, deallocation, etc.).
+Use the `after` parameter to specify the pass name (substring match).
+
+```python
+class TestBufferizationIR:
+    def test_tensor_bufferizes_to_memref(self, check_lowered_ir):
+        @ml_function
+        def tensor_buf() -> i32:
+            t = Tensor[i32, 4]([1, 2, 3, 4])
+            return t[0]
+        tensor_buf()
+        check_lowered_ir("""
+        // CHECK: memref.alloc
+        // CHECK-NOT: tensor.from_elements
+        """, after="one-shot-bufferize")
+```
+
+- **Requires**: `check_lowered_ir` fixture (depends on FileCheck binary)
+- **Asserts**: IR structure via FileCheck patterns on lowered IR
+- **`after` parameter**: pass name to inspect IR after (e.g., `"one-shot-bufferize"`, `"ownership-based-buffer-deallocation"`)
+
+#### When to use which
+
+- **`check_ir`**: Verify what the frontend *emits* — dialect choice, type representation, structural invariants. Answers: "Did MLIRBuilder produce the right ops?"
+- **`check_lowered_ir`**: Verify what lowering passes *transform* — that high-level ops are correctly replaced by lower-level ops. Answers: "Did the lowering pipeline do its job?" Use `CHECK-NOT` to confirm the higher-level ops are gone, and `CHECK` to confirm the expected lower-level replacements appeared.
+
+**Good `check_ir` tests:**
 - Dialect boundary enforcement (no `tensor` ops in memref code, no `memref` ops in tensor code)
+- Correct type representation (`tensor<2x3xf32>` not `tensor<6xf32>`)
 - Optimization properties (no duplicate comparisons, no redundant allocations)
-- Allocation strategy (`alloca` vs `alloc`)
-- Correct type representation (`memref<2x3xf32>` not `memref<6xf32>`)
 - Structural invariants (function signatures, block structure)
+
+**Good `check_lowered_ir` tests:**
+- Bufferization correctness — tensor ops become memref ops after `one-shot-bufferize`
+- Allocation strategy — `alloc` vs `alloca` after bufferization
+- Shape preservation through lowering — `tensor<2x3xi32>` becomes `memref<2x3xi32>`, not `memref<6xi32>`
+- Deallocation insertion — `bufferization.dealloc` appears after `ownership-based-buffer-deallocation`
 
 **Bad IR tests** (don't write these — they duplicate runtime tests):
 - "Does `add(x, y)` emit `arith.addi`?" — if it didn't, the runtime test would fail too
@@ -123,11 +158,12 @@ tests/
 │   ├── test_array_3d.py         # Mixed: 3D array AST + runtime
 │   └── test_ir.py               # IR: memref structural checks
 └── tensor/                  # Tensor operations (tensor dialect)
-    ├── test_tensor_ast.py       # AST: TensorFromElements, TensorExtract
+    ├── test_tensor_ast.py       # AST: TensorFromElements, TensorExtract, TensorEmpty
     ├── test_tensor_types.py     # Type system: TensorType creation, validation
     ├── test_tensor_execution.py # Runtime: tensor ops end-to-end
+    ├── test_tensor_empty.py     # Runtime: tensor.empty end-to-end
     ├── test_tensor_insert.py    # Mixed: TensorInsert AST + runtime
-    └── test_ir.py               # IR: tensor structural checks
+    └── test_ir.py               # IR: tensor structural checks (pre-lowering + post-lowering)
 ```
 
 ## Fixtures (defined in `conftest.py`)
@@ -136,7 +172,8 @@ tests/
 |---|---|---|
 | `backend` | session | C++ backend instance; auto-skips if unavailable |
 | `clean_module` | function (autouse) | Clears module before each test; saves IR after if `SAVE_IR=1` |
-| `check_ir` | function | FileCheck-based IR assertions; skips if FileCheck not found |
+| `check_ir` | function | FileCheck-based IR assertions on pre-lowering MLIR; skips if FileCheck not found |
+| `check_lowered_ir` | function | FileCheck-based IR assertions on post-lowering IR; takes `after` param for pass name |
 
 ## IR Inspection Workflow
 
