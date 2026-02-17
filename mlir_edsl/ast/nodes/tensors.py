@@ -1,7 +1,7 @@
 """Tensor AST nodes: TensorFromElements, TensorExtract, TensorInsert, TensorEmpty"""
 
 from ..base import Value
-from ...types import Type, ScalarType, TensorType
+from ...types import Type, ScalarType, TensorType, DYN
 
 # Import generated protobuf code
 try:
@@ -236,24 +236,37 @@ class TensorEmpty(Value):
     Maps to MLIR tensor.empty op. Useful for allocating tensor storage
     that gets filled at runtime (via loops or .at[].set() inserts).
 
-    Example:
+    For static tensors, no dynamic_dims are needed:
         t = Tensor.empty(f32, 4)
-        t = Tensor.empty(i32, 2, 3)
+
+    For dynamic tensors, runtime Values fill in the DYN dimensions:
+        t = Tensor.empty(f32, n)   # n is a runtime Value → tensor<?xf32>
     """
 
-    def __init__(self, tensor_type: TensorType):
+    def __init__(self, tensor_type: TensorType, dynamic_dims: list = None):
         super().__init__()
         self.tensor_type = tensor_type
+        self.dynamic_dims = dynamic_dims or []
+
+        # Validate: number of dynamic_dims must match number of DYN in shape
+        num_dyn = sum(1 for d in tensor_type.shape if d == DYN)
+        if len(self.dynamic_dims) != num_dyn:
+            raise ValueError(
+                f"TensorEmpty: expected {num_dyn} dynamic dimension values "
+                f"for shape {tensor_type.shape}, got {len(self.dynamic_dims)}"
+            )
 
     def infer_type(self) -> Type:
         """TensorEmpty returns its full TensorType."""
         return self.tensor_type
 
     def get_children(self) -> list['Value']:
-        """No child nodes — just a type."""
-        return []
+        """Return dynamic dimension nodes."""
+        return list(self.dynamic_dims)
 
     def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
         pb_node.tensor.empty.type.CopyFrom(self.tensor_type.to_proto())
+        for dim_val in self.dynamic_dims:
+            pb_node.tensor.empty.dynamic_dims.append(dim_val.to_proto(context))
         return pb_node

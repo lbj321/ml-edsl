@@ -304,6 +304,7 @@ message TensorInsert {
 // Create uninitialized tensor: tensor.empty
 message TensorEmpty {
   TypeSpec type = 1;               // Tensor type (TensorTypeSpec with shape + element type)
+  repeated ASTNode dynamic_dims = 2; // Runtime values for dynamic (?) dimensions, in order
 }
 
 // ============================================================================

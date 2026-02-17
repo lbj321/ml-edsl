@@ -5,7 +5,7 @@ See tests/CLAUDE.md for guidelines on what belongs here.
 """
 
 import pytest
-from mlir_edsl import ml_function, Tensor, i32
+from mlir_edsl import ml_function, Tensor, i32, f32, cast
 
 
 class TestDialectBoundaryIR:
@@ -186,6 +186,41 @@ class TestTensorEmptyIR:
 
         check_lowered_ir("""
         // CHECK: memref.alloc
+        // CHECK-NOT: tensor.empty
+        """, after="one-shot-bufferize")
+
+
+class TestDynamicTensorIR:
+    """Test IR for dynamic tensor operations"""
+
+    def test_dynamic_empty_has_dynamic_dim(self, check_ir):
+        """Test tensor.empty with dynamic dim emits tensor<?x...> type"""
+        @ml_function
+        def dyn_empty(n: int) -> i32:
+            t = Tensor.empty(i32, n)
+            t = t.at[0].set(42)
+            return t[0]
+
+        dyn_empty(4)
+
+        check_ir("""
+        // CHECK: tensor.empty
+        // CHECK-SAME: tensor<?xi32>
+        """)
+
+    def test_dynamic_empty_bufferizes(self, check_lowered_ir):
+        """Test dynamic tensor.empty bufferizes to memref.alloc with dynamic dim"""
+        @ml_function
+        def dyn_buf(n: int) -> i32:
+            t = Tensor.empty(i32, n)
+            t = t.at[0].set(1)
+            return t[0]
+
+        dyn_buf(4)
+
+        check_lowered_ir("""
+        // CHECK: memref.alloc
+        // CHECK-SAME: memref<?xi32>
         // CHECK-NOT: tensor.empty
         """, after="one-shot-bufferize")
 

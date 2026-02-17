@@ -9,7 +9,7 @@ This test suite validates:
 """
 
 import pytest
-from mlir_edsl.types import Tensor, TensorType, ScalarType, i32, f32, i1, Array
+from mlir_edsl.types import Tensor, TensorType, ScalarType, DYN, i32, f32, i1, Array
 from mlir_edsl.ast import TensorFromElements, TensorExtract, TensorEmpty, Constant, ArrayAccess
 from mlir_edsl.ast.serialization import SerializationContext
 
@@ -426,6 +426,103 @@ class TestTensorEmptyCreation:
         pb = t.to_proto(context)
 
         assert list(pb.tensor.empty.type.tensor.shape) == [2, 3]
+
+
+# ==================== DYNAMIC TENSOR EMPTY ====================
+
+class TestDynamicTensorEmpty:
+    """Test TensorEmpty AST node with dynamic dimensions"""
+
+    def test_dynamic_empty_from_value(self):
+        """Test Tensor.empty with a Value node as dimension"""
+        n = Constant(5, i32)
+        t = Tensor.empty(f32, n)
+
+        assert isinstance(t, TensorEmpty)
+        assert t.tensor_type.shape == (-1,)
+        assert t.tensor_type.is_dynamic
+        assert len(t.dynamic_dims) == 1
+        assert t.dynamic_dims[0] is n
+
+    def test_dynamic_empty_infer_type(self):
+        """Test that dynamic TensorEmpty infers dynamic TensorType"""
+        n = Constant(4, i32)
+        t = Tensor.empty(i32, n)
+
+        inferred = t.infer_type()
+        assert isinstance(inferred, TensorType)
+        assert inferred.shape == (-1,)
+        assert inferred.is_dynamic
+
+    def test_dynamic_empty_get_children(self):
+        """Test that dynamic TensorEmpty returns dynamic dims as children"""
+        n = Constant(3, i32)
+        t = Tensor.empty(f32, n)
+
+        children = t.get_children()
+        assert len(children) == 1
+        assert children[0] is n
+
+    def test_dynamic_empty_mixed_dims(self):
+        """Test mixed static/dynamic dimensions"""
+        n = Constant(4, i32)
+        t = Tensor.empty(i32, n, 3)
+
+        assert t.tensor_type.shape == (-1, 3)
+        assert len(t.dynamic_dims) == 1
+        assert t.dynamic_dims[0] is n
+
+    def test_dynamic_empty_multiple_dynamic_dims(self):
+        """Test multiple dynamic dimensions"""
+        m = Constant(2, i32)
+        n = Constant(3, i32)
+        t = Tensor.empty(f32, m, n)
+
+        assert t.tensor_type.shape == (-1, -1)
+        assert len(t.dynamic_dims) == 2
+        assert t.dynamic_dims[0] is m
+        assert t.dynamic_dims[1] is n
+
+    def test_dynamic_empty_to_proto(self):
+        """Test protobuf serialization with dynamic dims"""
+        n = Constant(4, i32)
+        t = Tensor.empty(f32, n)
+        context = SerializationContext()
+        pb = t.to_proto(context)
+
+        assert pb.HasField("tensor")
+        assert pb.tensor.HasField("empty")
+        assert list(pb.tensor.empty.type.tensor.shape) == [-1]
+        assert len(pb.tensor.empty.dynamic_dims) == 1
+
+    def test_dynamic_empty_mixed_to_proto(self):
+        """Test protobuf serialization with mixed static/dynamic"""
+        n = Constant(4, i32)
+        t = Tensor.empty(i32, n, 3)
+        context = SerializationContext()
+        pb = t.to_proto(context)
+
+        assert list(pb.tensor.empty.type.tensor.shape) == [-1, 3]
+        assert len(pb.tensor.empty.dynamic_dims) == 1
+
+    def test_static_empty_no_dynamic_dims(self):
+        """Test that static Tensor.empty still has empty dynamic_dims"""
+        t = Tensor.empty(f32, 4)
+
+        assert t.dynamic_dims == []
+        assert not t.tensor_type.is_dynamic
+
+    def test_dynamic_empty_bad_dim_type_rejected(self):
+        """Test that non-int/non-Value dimensions are rejected"""
+        with pytest.raises(TypeError, match="int or Value"):
+            Tensor.empty(f32, "4")
+
+    def test_dynamic_empty_dim_count_mismatch(self):
+        """Test that mismatched dynamic dim count raises"""
+        dyn_type = TensorType((-1, -1), f32)
+        n = Constant(3, i32)
+        with pytest.raises(ValueError, match="expected 2 dynamic dimension values"):
+            TensorEmpty(dyn_type, [n])
 
 
 if __name__ == "__main__":

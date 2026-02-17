@@ -358,6 +358,11 @@ mlir::Type MLIRBuilder::convertTensorType(
       tensorSpec.shape().end()
   );
 
+  // Map protobuf sentinel (-1) to MLIR's kDynamic
+  for (auto &d : shape) {
+    if (d == -1) d = mlir::ShapedType::kDynamic;
+  }
+
   if (shape.empty() || shape.size() > 3) {
     throw std::runtime_error("Only 1D, 2D, and 3D tensors supported, got " +
                              std::to_string(shape.size()) + "D");

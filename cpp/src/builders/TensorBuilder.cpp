@@ -72,9 +72,21 @@ mlir::Value TensorBuilder::buildEmpty(const TensorEmpty &node) {
   const auto &tensorSpec = node.type().tensor();
   llvm::SmallVector<int64_t> shape(tensorSpec.shape().begin(),
                                    tensorSpec.shape().end());
+  // Map protobuf sentinel (-1) to MLIR's kDynamic
+  for (auto &d : shape) {
+    if (d == -1) d = mlir::ShapedType::kDynamic;
+  }
   mlir::Type elemType = parent->convertType(tensorSpec.element_type());
 
-  return builder.create<mlir::tensor::EmptyOp>(loc, shape, elemType);
+  // Build runtime values for dynamic (?) dimensions
+  llvm::SmallVector<mlir::Value> dynamicSizes;
+  for (int i = 0; i < node.dynamic_dims_size(); ++i) {
+    mlir::Value dimVal = parent->buildFromProtobufNode(node.dynamic_dims(i));
+    dynamicSizes.push_back(parent->castToIndexType(dimVal));
+  }
+
+  auto tensorType = mlir::RankedTensorType::get(shape, elemType);
+  return builder.create<mlir::tensor::EmptyOp>(loc, tensorType, dynamicSizes);
 }
 
 } // namespace mlir_edsl

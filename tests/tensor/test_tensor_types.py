@@ -10,7 +10,7 @@ This test suite validates:
 """
 
 import pytest
-from mlir_edsl.types import Tensor, TensorType, ArrayType, ScalarType, TypeSystem
+from mlir_edsl.types import Tensor, TensorType, ArrayType, ScalarType, TypeSystem, DYN
 from mlir_edsl import i32, f32, i1, Array
 
 
@@ -351,6 +351,156 @@ class TestTensorTypeProtobuf:
 
         assert a_proto.HasField("memref")
         assert not a_proto.HasField("tensor")
+
+
+# ==================== DYNAMIC TENSOR TYPES ====================
+
+class TestDynamicTensorTypeCreation:
+    """Test Tensor[dtype, DYN] dynamic dimension syntax"""
+
+    def test_dynamic_1d(self):
+        """Test creating Tensor[f32, DYN] type"""
+        t_type = Tensor[f32, DYN]
+
+        assert isinstance(t_type, TensorType)
+        assert t_type.shape == (-1,)
+        assert t_type.element_type == f32
+
+    def test_dynamic_2d_all(self):
+        """Test fully dynamic 2D tensor"""
+        t_type = Tensor[i32, DYN, DYN]
+
+        assert t_type.shape == (-1, -1)
+        assert t_type.ndim == 2
+
+    def test_dynamic_2d_mixed(self):
+        """Test mixed static/dynamic 2D tensor"""
+        t_type = Tensor[f32, DYN, 3]
+
+        assert t_type.shape == (-1, 3)
+        assert t_type.ndim == 2
+
+    def test_dynamic_3d_mixed(self):
+        """Test mixed static/dynamic 3D tensor"""
+        t_type = Tensor[i32, DYN, 3, DYN]
+
+        assert t_type.shape == (-1, 3, -1)
+        assert t_type.ndim == 3
+
+
+class TestDynamicTensorProperties:
+    """Test is_dynamic property and related behavior"""
+
+    def test_is_dynamic_true(self):
+        """Test is_dynamic for dynamic tensors"""
+        assert Tensor[f32, DYN].is_dynamic
+        assert Tensor[i32, DYN, 3].is_dynamic
+        assert Tensor[f32, DYN, DYN].is_dynamic
+
+    def test_is_dynamic_false_for_static(self):
+        """Test is_dynamic is False for static tensors"""
+        assert not Tensor[f32, 4].is_dynamic
+        assert not Tensor[i32, 2, 3].is_dynamic
+
+    def test_total_elements_raises_for_dynamic(self):
+        """Test total_elements raises ValueError for dynamic tensors"""
+        t = Tensor[f32, DYN]
+        with pytest.raises(ValueError, match="Cannot compute total_elements"):
+            _ = t.total_elements
+
+    def test_total_elements_raises_mixed_dynamic(self):
+        """Test total_elements raises even if only one dim is dynamic"""
+        t = Tensor[i32, DYN, 3]
+        with pytest.raises(ValueError, match="Cannot compute total_elements"):
+            _ = t.total_elements
+
+
+class TestDynamicTensorMLIRString:
+    """Test MLIR string generation for dynamic tensors"""
+
+    def test_dynamic_1d_mlir_string(self):
+        """Test Tensor[f32, DYN] -> tensor<?xf32>"""
+        assert Tensor[f32, DYN].to_mlir_string() == "tensor<?xf32>"
+
+    def test_dynamic_2d_mlir_string(self):
+        """Test Tensor[i32, DYN, DYN] -> tensor<?x?xi32>"""
+        assert Tensor[i32, DYN, DYN].to_mlir_string() == "tensor<?x?xi32>"
+
+    def test_mixed_dynamic_mlir_string(self):
+        """Test Tensor[f32, DYN, 3] -> tensor<?x3xf32>"""
+        assert Tensor[f32, DYN, 3].to_mlir_string() == "tensor<?x3xf32>"
+
+    def test_mixed_dynamic_3d_mlir_string(self):
+        """Test Tensor[i32, 2, DYN, 4] -> tensor<2x?x4xi32>"""
+        assert Tensor[i32, 2, DYN, 4].to_mlir_string() == "tensor<2x?x4xi32>"
+
+
+class TestDynamicTensorRepr:
+    """Test __repr__ for dynamic tensors"""
+
+    def test_dynamic_1d_repr(self):
+        """Test repr of Tensor[f32, DYN]"""
+        assert repr(Tensor[f32, DYN]) == "Tensor[f32, DYN]"
+
+    def test_mixed_dynamic_repr(self):
+        """Test repr of Tensor[i32, DYN, 3]"""
+        assert repr(Tensor[i32, DYN, 3]) == "Tensor[i32, DYN, 3]"
+
+
+class TestDynamicTensorEquality:
+    """Test equality and hashing for dynamic tensor types"""
+
+    def test_dynamic_types_equal(self):
+        """Test that same dynamic types are equal"""
+        assert Tensor[f32, DYN] == Tensor[f32, DYN]
+        assert Tensor[i32, DYN, 3] == Tensor[i32, DYN, 3]
+
+    def test_dynamic_not_equal_to_static(self):
+        """Test that dynamic and static types differ"""
+        assert Tensor[f32, DYN] != Tensor[f32, 4]
+
+    def test_dynamic_types_hashable(self):
+        """Test that dynamic types work in sets"""
+        type_set = {Tensor[f32, DYN], Tensor[f32, DYN], Tensor[f32, 4]}
+        assert len(type_set) == 2
+
+
+class TestDynamicTensorProtobuf:
+    """Test protobuf serialization of dynamic tensor types"""
+
+    def test_dynamic_type_to_proto(self):
+        """Test dynamic TensorType serializes with -1 in shape"""
+        t_type = Tensor[f32, DYN]
+        proto = t_type.to_proto()
+
+        assert proto.HasField("tensor")
+        assert list(proto.tensor.shape) == [-1]
+
+    def test_mixed_dynamic_type_to_proto(self):
+        """Test mixed dynamic/static shape serializes correctly"""
+        t_type = Tensor[i32, DYN, 3]
+        proto = t_type.to_proto()
+
+        assert list(proto.tensor.shape) == [-1, 3]
+
+
+class TestDynamicTensorValidation:
+    """Test that invalid dynamic dimension values are rejected"""
+
+    def test_negative_non_dyn_rejected(self):
+        """Test that negative values other than DYN (-1) are rejected"""
+        with pytest.raises(TypeError, match="positive integer or DYN"):
+            Tensor[f32, -2]
+
+    def test_zero_still_rejected(self):
+        """Test that zero dimension is still rejected"""
+        with pytest.raises(TypeError, match="positive integer or DYN"):
+            Tensor[f32, 0]
+
+    def test_string_still_rejected(self):
+        """Test that string dimensions are still rejected"""
+        with pytest.raises(TypeError, match="positive integer or DYN"):
+            Tensor[f32, "?"]
 
 
 if __name__ == "__main__":

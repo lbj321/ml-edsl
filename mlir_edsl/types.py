@@ -164,6 +164,9 @@ i32 = ScalarType(ScalarType.I32)
 f32 = ScalarType(ScalarType.F32)
 i1 = ScalarType(ScalarType.I1)
 
+# Dynamic dimension sentinel (matches MLIR's ShapedType::kDynamic)
+DYN = -1
+
 # All scalar types - add new types here
 SCALAR_TYPES = (i32, f32, i1)
 
@@ -336,8 +339,8 @@ class TensorType(Type):
             raise TypeError(f"Tensor shape must be int or tuple, got {type(shape).__name__}")
 
         # Validate dimensions
-        if not all(isinstance(d, int) and d > 0 for d in self.shape):
-            raise TypeError(f"All dimensions must be positive integers, got {self.shape}")
+        if not all(isinstance(d, int) and (d > 0 or d == DYN) for d in self.shape):
+            raise TypeError(f"All dimensions must be positive integers or DYN, got {self.shape}")
 
         # Validate dimensionality (1D, 2D, 3D only)
         if len(self.shape) == 0 or len(self.shape) > 3:
@@ -366,8 +369,15 @@ class TensorType(Type):
         return len(self.shape)
 
     @property
+    def is_dynamic(self) -> bool:
+        """True if any dimension is dynamic."""
+        return DYN in self.shape
+
+    @property
     def total_elements(self) -> int:
         """Total number of elements (product of all dimensions)."""
+        if self.is_dynamic:
+            raise ValueError("Cannot compute total_elements for dynamic tensor")
         result = 1
         for dim in self.shape:
             result *= dim
@@ -406,7 +416,7 @@ class TensorType(Type):
 
     def to_mlir_string(self) -> str:
         """Convert to MLIR type string: tensor<4xf32>, tensor<2x3xi32>, etc."""
-        dims = 'x'.join(str(d) for d in self.shape)
+        dims = 'x'.join('?' if d == DYN else str(d) for d in self.shape)
         return f"tensor<{dims}x{self.element_type.name}>"
 
     # Equality and hashing
@@ -419,7 +429,7 @@ class TensorType(Type):
         return hash(('tensor', self.shape, self.element_type))
 
     def __repr__(self) -> str:
-        dims = ', '.join(str(d) for d in self.shape)
+        dims = ', '.join('DYN' if d == DYN else str(d) for d in self.shape)
         return f"Tensor[{self.element_type.name}, {dims}]"
 
     def __call__(self, elements: list):
@@ -539,10 +549,10 @@ class TensorMeta(type):
                 f"Only 1D, 2D, and 3D tensors supported, got {len(dims)}D"
             )
 
-        # Validate dimensions are positive integers
+        # Validate dimensions are positive integers or DYN
         for i, dim in enumerate(dims):
-            if not isinstance(dim, int) or dim <= 0:
-                raise TypeError(f"Dimension {i} must be positive integer, got {dim!r}")
+            if not isinstance(dim, int) or (dim <= 0 and dim != DYN):
+                raise TypeError(f"Dimension {i} must be positive integer or DYN, got {dim!r}")
 
         # Create TensorType
         if len(dims) == 1:
@@ -569,17 +579,33 @@ class Tensor(metaclass=TensorMeta):
 
         Args:
             dtype: Element type (i32, f32, etc.)
-            *shape: Dimension sizes (e.g., 4 for 1D, 2, 3 for 2D)
+            *shape: Dimension sizes — integers for static, Value nodes for dynamic.
+                    e.g., (4,) for static 1D, (n,) where n is a Value for dynamic 1D.
 
         Returns:
             TensorEmpty AST node
         """
-        from .ast import TensorEmpty
-        if len(shape) == 1:
-            tensor_type = TensorType(shape[0], dtype)
+        from .ast import TensorEmpty, Value
+
+        # Separate static shape (with DYN markers) from dynamic Value operands
+        static_shape = []
+        dynamic_dims = []
+        for dim in shape:
+            if isinstance(dim, int):
+                static_shape.append(dim)
+            elif isinstance(dim, Value):
+                static_shape.append(DYN)
+                dynamic_dims.append(dim)
+            else:
+                raise TypeError(
+                    f"Tensor.empty() dimensions must be int or Value, got {type(dim).__name__}"
+                )
+
+        if len(static_shape) == 1:
+            tensor_type = TensorType(static_shape[0], dtype)
         else:
-            tensor_type = TensorType(shape, dtype)
-        return TensorEmpty(tensor_type)
+            tensor_type = TensorType(tuple(static_shape), dtype)
+        return TensorEmpty(tensor_type, dynamic_dims)
 
 
 # ============================================================================
