@@ -74,7 +74,7 @@ mlir::Value TensorBuilder::buildEmpty(const TensorEmpty &node) {
                                    tensorSpec.shape().end());
   // Map protobuf sentinel (-1) to MLIR's kDynamic
   for (auto &d : shape) {
-    if (d == -1) d = mlir::ShapedType::kDynamic;
+    if (d == kProtoDynamicDim) d = mlir::ShapedType::kDynamic;
   }
   mlir::Type elemType = parent->convertType(tensorSpec.element_type());
 

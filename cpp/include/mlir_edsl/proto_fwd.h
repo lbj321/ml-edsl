@@ -1,6 +1,13 @@
 #pragma once
 
+#include <cstdint>
+
 namespace mlir_edsl {
+
+// Protobuf uses -1 as the sentinel for dynamic tensor dimensions.
+// C++ code should compare against this constant, then map to
+// mlir::ShapedType::kDynamic before creating MLIR types.
+constexpr int64_t kProtoDynamicDim = -1;
 
 // Enums
 enum ComparisonPredicate : int;
