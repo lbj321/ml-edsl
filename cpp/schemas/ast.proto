@@ -158,6 +158,8 @@ message ControlFlowNode {
   oneof value {
     IfOp if_op = 1;
     ForLoopOp for_loop = 2;
+    ForIndex for_index = 3;
+    ForIterArg for_iter_arg = 4;
   }
 }
 
@@ -232,14 +234,27 @@ message CastOp {
 // CONTROL FLOW
 // ============================================================================
 
-// For loop operation (scf.for)
+// For loop operation (scf.for) with lambda body
 message ForLoopOp {
   ASTNode start = 1;          // Loop start bound (inclusive)
   ASTNode end = 2;            // Loop end bound (exclusive)
   ASTNode step = 3;           // Loop step/increment
   ASTNode init_value = 4;     // Initial accumulator value
-  BinaryOpType operation = 5; // Loop body operation
+  reserved 5;                 // Was: BinaryOpType operation (removed)
   TypeSpec result_type = 6;   // Result type (validated by Python)
+  int64 loop_id = 7;          // Unique ID for matching ForIndex/ForIterArg placeholders
+  ASTNode body = 8;           // Lambda body AST (references ForIndex/ForIterArg nodes)
+}
+
+// For loop induction variable placeholder (leaf node, resolved at IR build time)
+message ForIndex {
+  int64 node_id = 1;          // Unique ID matching ForLoopOp.loop_id via valueCache
+}
+
+// For loop iter_arg placeholder (leaf node, resolved at IR build time)
+message ForIterArg {
+  int64 node_id = 1;          // Unique ID for valueCache lookup
+  int32 arg_index = 2;        // Which iter_arg (0 for single accumulator)
 }
 
 // ============================================================================

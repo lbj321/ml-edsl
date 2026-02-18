@@ -89,10 +89,17 @@ private:
   mlir::Value handleCompareOp(const mlir_edsl::CompareOp &op);
   mlir::Value handleCastOp(const mlir_edsl::CastOp &op);
   mlir::Value handleIfOp(const mlir_edsl::IfOp &op);
+  mlir::Value handleForLoopOp(const mlir_edsl::ForLoopOp &op);
+  mlir::Value handleForIndex(const mlir_edsl::ForIndex &node);
+  mlir::Value handleForIterArg(const mlir_edsl::ForIterArg &node);
   mlir::Value handleParameter(const mlir_edsl::Parameter &param);
   mlir::Value handleCallOp(const mlir_edsl::CallOp &op);
   mlir::Value handleLetBinding(const mlir_edsl::LetBinding &binding);
   mlir::Value handleValueRef(const mlir_edsl::ValueReference &ref);
+
+  // For loop helpers
+  void injectForPlaceholders(const mlir_edsl::ASTNode &node,
+                             mlir::Value iv, mlir::Value iterArg);
 
   // Internal helpers
   mlir::Value getParameter(const std::string &name);

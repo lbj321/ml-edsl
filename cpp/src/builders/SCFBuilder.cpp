@@ -59,4 +59,26 @@ void SCFBuilder::buildForEach(
   builder.setInsertionPointAfter(forOp);
 }
 
+mlir::Value SCFBuilder::buildForWithIterArgs(
+    mlir::Value start, mlir::Value end, mlir::Value step,
+    mlir::ValueRange initValues,
+    std::function<mlir::Value(mlir::Value iv, mlir::Value iterArg)> body_fn) {
+
+  auto loc = builder.getUnknownLoc();
+
+  auto forOp = builder.create<mlir::scf::ForOp>(
+      loc, start, end, step, initValues,
+      [&](mlir::OpBuilder &loopBuilder, mlir::Location loc, mlir::Value iv,
+          mlir::ValueRange iterArgs) {
+        // Call body with induction var and single iter_arg
+        mlir::Value result = body_fn(iv, iterArgs[0]);
+
+        // Yield the new accumulator value
+        loopBuilder.create<mlir::scf::YieldOp>(loc, result);
+      });
+
+  builder.setInsertionPointAfter(forOp);
+  return forOp.getResult(0);
+}
+
 } // namespace mlir_edsl

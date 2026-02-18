@@ -29,7 +29,7 @@ def _label(value) -> str:
     """Compute the display label for a node."""
     from .nodes.scalars import Constant, IndexConstant, BinaryOp, CompareOp, CastOp
     from .nodes.arrays import ArrayLiteral, ArrayAccess, ArrayStore, ArrayBinaryOp
-    from .nodes.control_flow import IfOp, ForLoopOp
+    from .nodes.control_flow import IfOp, ForLoopOp, ForIndex, ForIterArg
     from .nodes.functions import Parameter, CallOp
     from .nodes.tensors import TensorFromElements, TensorExtract, TensorInsert
 
@@ -50,8 +50,12 @@ def _label(value) -> str:
         return f"cast {value.value.infer_type()} -> {value.target_type}"
     if isinstance(value, IfOp):
         return f"if : {t}"
+    if isinstance(value, ForIndex):
+        return f"for.index : {t}"
+    if isinstance(value, ForIterArg):
+        return f"for.iter_arg : {t}"
     if isinstance(value, ForLoopOp):
-        return f"for({OP_NAMES.get(value.operation, value.operation)}) : {t}"
+        return f"for(body) : {t}"
     if isinstance(value, ArrayLiteral):
         return f"array : {t}"
     if isinstance(value, ArrayAccess):

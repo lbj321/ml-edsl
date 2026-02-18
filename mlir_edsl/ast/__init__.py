@@ -14,7 +14,7 @@ from .nodes import (
     # Tensors
     TensorFromElements, TensorExtract, TensorInsert, TensorEmpty,
     # Control flow
-    IfOp, ForLoopOp,
+    IfOp, ForLoopOp, ForIndex, ForIterArg,
     # Functions
     Parameter, CallOp,
 )
@@ -24,6 +24,6 @@ __all__ = [
     'Constant', 'BinaryOp', 'CompareOp', 'CastOp',
     'ArrayLiteral', 'ArrayAccess', 'ArrayStore', 'ArrayBinaryOp',
     'TensorFromElements', 'TensorExtract', 'TensorInsert', 'TensorEmpty',
-    'IfOp', 'ForLoopOp',
+    'IfOp', 'ForLoopOp', 'ForIndex', 'ForIterArg',
     'Parameter', 'CallOp',
 ]

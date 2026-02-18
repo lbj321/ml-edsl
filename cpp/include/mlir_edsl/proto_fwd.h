@@ -38,6 +38,8 @@ class CastOp;
 // Control flow operations
 class IfOp;
 class ForLoopOp;
+class ForIndex;
+class ForIterArg;
 
 // Function operations
 class Parameter;

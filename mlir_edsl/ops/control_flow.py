@@ -1,8 +1,8 @@
 """Control flow operation helpers"""
 
-from typing import Union
+from typing import Callable, Union
 from ..ast import IfOp, ForLoopOp, Value, to_value
-from .. import ast_pb2
+from ..ast.nodes.control_flow import ForIndex, ForIterArg
 
 
 def If(condition: Value, then_value: Union[int, float, Value],
@@ -29,29 +29,43 @@ def If(condition: Value, then_value: Union[int, float, Value],
 def For(start: Union[int, Value],
         end: Union[int, Value],
         init: Union[int, float, Value],
-        operation: int = ast_pb2.ADD,
+        body: Callable[[Value, Value], Value],
         step: Union[int, Value] = 1):
-    """Create a for loop: for(i = start; i < end; i += step) { accumulator op= i }
+    """Create a for loop with lambda body (scf.for with iter_args).
 
     Args:
         start: Loop start value (inclusive)
         end: Loop end value (exclusive)
-        init: Initial accumulator value
-        operation: Operation enum - ast_pb2.ADD, SUB, MUL, or DIV
+        init: Initial accumulator value (scalar or tensor)
+        body: Lambda(index, accumulator) -> new_accumulator
         step: Loop step increment (default: 1)
 
     Returns:
-        ForLoopOp representing the loop
+        ForLoopOp representing the loop result
 
     Examples:
-        # Sum from 0 to 9: result = 0 + 0 + 1 + 2 + ... + 9
-        For(start=0, end=10, init=0, operation=ast_pb2.ADD)
+        # Sum 0..9
+        result = For(0, 10, init=0, body=lambda i, acc: acc + i)
 
-        # Factorial-like: result = 1 * 1 * 2 * 3 * 4
-        For(start=1, end=5, init=1, operation=ast_pb2.MUL)
-
-        # With step: sum even numbers 0 to 8
-        For(start=0, end=10, init=0, operation=ast_pb2.ADD, step=2)
+        # Fill tensor with i*2
+        t = Tensor.empty(i32, 4)
+        t = For(0, 4, init=t, body=lambda i, acc: acc.at[i].set(i * 2))
     """
+    init_val = to_value(init)
+    init_type = init_val.infer_type()
 
-    return ForLoopOp(to_value(start), to_value(end), to_value(step), to_value(init), operation)
+    # Create placeholder nodes
+    index_placeholder = ForIndex()
+    iter_arg_placeholder = ForIterArg(init_type)
+
+    # Call body lambda to build the AST subtree
+    body_result = body(index_placeholder, iter_arg_placeholder)
+
+    # Wrap raw Python values
+    if not isinstance(body_result, Value):
+        body_result = to_value(body_result)
+
+    return ForLoopOp(
+        to_value(start), to_value(end), to_value(step),
+        init_val, body_result
+    )

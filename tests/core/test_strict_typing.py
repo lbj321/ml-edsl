@@ -273,8 +273,8 @@ class TestComplexTypeScenarios:
 
         @ml_function
         def loop_strict(n: int) -> int:
-            # For loop with all i32 values
-            return For(start=0, end=n, init=0, operation="add", step=1)
+            # For loop with lambda body, all i32 values
+            return For(start=0, end=n, init=0, body=lambda i, acc: acc + i, step=1)
 
         assert loop_strict is not None
 
