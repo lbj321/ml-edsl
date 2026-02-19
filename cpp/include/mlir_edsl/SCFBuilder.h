@@ -18,15 +18,12 @@ public:
                       std::function<mlir::Value()> buildElse,
                       mlir::Type resultType);
 
-  /// Build for loop for iteration (no loop-carried values, for side effects)
-  void buildForEach(mlir::Value start, mlir::Value end, mlir::Value step,
-                    std::function<void(mlir::OpBuilder&, mlir::Location, mlir::Value iv)> body_fn);
-
-  /// Build for loop with iter_args (loop-carried values)
-  mlir::Value buildForWithIterArgs(
+  /// Build a for loop. Pass empty initValues for side-effect loops (body returns {}).
+  /// Pass initValues for loop-carried values (body returns new accumulator values).
+  mlir::ResultRange buildFor(
       mlir::Value start, mlir::Value end, mlir::Value step,
       mlir::ValueRange initValues,
-      std::function<mlir::Value(mlir::Value iv, mlir::Value iterArg)> body_fn);
+      std::function<llvm::SmallVector<mlir::Value>(mlir::Value iv, mlir::ValueRange iterArgs)> body_fn);
 
 private:
   mlir::OpBuilder& builder;

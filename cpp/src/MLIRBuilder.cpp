@@ -255,18 +255,20 @@ mlir::Value MLIRBuilder::handleForLoopOp(const mlir_edsl::ForLoopOp &op) {
   int64_t indexId = op.index_node_id();
   int64_t iterArgId = op.iter_arg_node_id();
 
-  return scfBuilder->buildForWithIterArgs(
+  auto results = scfBuilder->buildFor(
       start, end, step, mlir::ValueRange{initValue},
-      [this, &bodyProto, indexId, iterArgId](mlir::Value iv, mlir::Value iterArg) -> mlir::Value {
+      [this, &bodyProto, indexId, iterArgId](mlir::Value iv, mlir::ValueRange iterArgs)
+          -> llvm::SmallVector<mlir::Value> {
         auto loc = builder->getUnknownLoc();
         mlir::Value ivI32 = builder->create<mlir::arith::IndexCastOp>(
             loc, mlir::IntegerType::get(context, 32), iv);
 
         valueCache[indexId] = ivI32;
-        valueCache[iterArgId] = iterArg;
+        valueCache[iterArgId] = iterArgs[0];
 
-        return buildFromProtobufNode(bodyProto);
+        return {buildFromProtobufNode(bodyProto)};
       });
+  return results[0];
 }
 
 mlir::Value MLIRBuilder::handleForIndex(const mlir_edsl::ForIndex &node) {

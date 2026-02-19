@@ -36,49 +36,23 @@ mlir::Value SCFBuilder::buildIf(mlir::Value condition,
   return ifOp.getResult(0);
 }
 
-void SCFBuilder::buildForEach(
-    mlir::Value start, mlir::Value end, mlir::Value step,
-    std::function<void(mlir::OpBuilder &, mlir::Location, mlir::Value iv)>
-        body_fn) {
-
-  auto loc = builder.getUnknownLoc();
-
-  // Create ForOp with lambda body builder (avoids auto-generated yield)
-  auto forOp = builder.create<mlir::scf::ForOp>(
-      loc, start, end, step, mlir::ValueRange{},
-      [&](mlir::OpBuilder &loopBuilder, mlir::Location loc, mlir::Value iv,
-          mlir::ValueRange /*iterArgs*/) {
-        // Execute user's body function
-        body_fn(loopBuilder, loc, iv);
-
-        // Yield with no values (since no iter_args)
-        loopBuilder.create<mlir::scf::YieldOp>(loc);
-      });
-
-  // Restore insertion point after loop
-  builder.setInsertionPointAfter(forOp);
-}
-
-mlir::Value SCFBuilder::buildForWithIterArgs(
+mlir::ResultRange SCFBuilder::buildFor(
     mlir::Value start, mlir::Value end, mlir::Value step,
     mlir::ValueRange initValues,
-    std::function<mlir::Value(mlir::Value iv, mlir::Value iterArg)> body_fn) {
+    std::function<llvm::SmallVector<mlir::Value>(mlir::Value iv, mlir::ValueRange iterArgs)> body_fn) {
 
   auto loc = builder.getUnknownLoc();
 
   auto forOp = builder.create<mlir::scf::ForOp>(
       loc, start, end, step, initValues,
-      [&](mlir::OpBuilder &loopBuilder, mlir::Location loc, mlir::Value iv,
+      [&](mlir::OpBuilder &, mlir::Location loc, mlir::Value iv,
           mlir::ValueRange iterArgs) {
-        // Call body with induction var and single iter_arg
-        mlir::Value result = body_fn(iv, iterArgs[0]);
-
-        // Yield the new accumulator value
-        loopBuilder.create<mlir::scf::YieldOp>(loc, result);
+        llvm::SmallVector<mlir::Value> results = body_fn(iv, iterArgs);
+        builder.create<mlir::scf::YieldOp>(loc, results);
       });
 
   builder.setInsertionPointAfter(forOp);
-  return forOp.getResult(0);
+  return forOp.getResults();
 }
 
 } // namespace mlir_edsl

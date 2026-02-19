@@ -141,9 +141,8 @@ mlir::Value MemRefBuilder::buildArrayBinaryOp(const ArrayBinaryOp &op) {
   llvm::ArrayRef<int64_t> shape = resultType.getShape();
   llvm::SmallVector<mlir::Value, 4> indices;
 
-  auto bodyFn = [&](mlir::OpBuilder &loopBuilder, mlir::Location loc,
-                    llvm::ArrayRef<mlir::Value> loopIndices) {
-    buildArrayBinaryOpElement(loopBuilder, loc, loopIndices, left, right,
+  auto bodyFn = [&](llvm::ArrayRef<mlir::Value> loopIndices) {
+    buildArrayBinaryOpElement(loopIndices, left, right,
                               broadcastMode, opType, resultArray);
   };
 
@@ -168,9 +167,7 @@ MemRefBuilder::flatToMultiIndex(int64_t flatIndex,
 void MemRefBuilder::buildNestedForLoops(
     llvm::ArrayRef<int64_t> shape,
     llvm::SmallVectorImpl<mlir::Value> &indices,
-    std::function<void(mlir::OpBuilder &, mlir::Location,
-                       llvm::ArrayRef<mlir::Value>)>
-        bodyFn) {
+    std::function<void(llvm::ArrayRef<mlir::Value>)> bodyFn) {
   // Pre-build all loop bound constants at the current (outer) scope
   mlir::Value c0 = parent->buildIndexConstant(0);
   mlir::Value c1 = parent->buildIndexConstant(1);
@@ -185,50 +182,48 @@ void MemRefBuilder::buildNestedForLoops(
 void MemRefBuilder::emitNestedForLoops(
     llvm::ArrayRef<int64_t> shape, int dim,
     llvm::SmallVectorImpl<mlir::Value> &indices,
-    std::function<void(mlir::OpBuilder &, mlir::Location,
-                       llvm::ArrayRef<mlir::Value>)>
-        bodyFn,
+    std::function<void(llvm::ArrayRef<mlir::Value>)> bodyFn,
     mlir::Value c0, mlir::Value c1,
     llvm::ArrayRef<mlir::Value> dimSizes) {
   bool isInnermost = (dim == static_cast<int>(shape.size()) - 1);
 
-  auto loopBody = [&](mlir::OpBuilder &loopBuilder, mlir::Location loc,
-                      mlir::Value iv) {
-    indices.push_back(iv);
-    if (isInnermost) {
-      bodyFn(loopBuilder, loc, indices);
-    } else {
-      emitNestedForLoops(shape, dim + 1, indices, bodyFn, c0, c1, dimSizes);
-    }
-    indices.pop_back();
-  };
-
-  scfBuilder->buildForEach(c0, dimSizes[dim], c1, loopBody);
+  scfBuilder->buildFor(c0, dimSizes[dim], c1, {},
+      [&](mlir::Value iv, mlir::ValueRange) -> llvm::SmallVector<mlir::Value> {
+        indices.push_back(iv);
+        if (isInnermost) {
+          bodyFn(indices);
+        } else {
+          emitNestedForLoops(shape, dim + 1, indices, bodyFn, c0, c1, dimSizes);
+        }
+        indices.pop_back();
+        return {};
+      });
 }
 
 // Helper function: handles single iteration of array binary op
 void MemRefBuilder::buildArrayBinaryOpElement(
-    mlir::OpBuilder &loopBuilder, mlir::Location loc,
     llvm::ArrayRef<mlir::Value> indices, mlir::Value left, mlir::Value right,
     BroadcastMode broadcastMode, mlir_edsl::BinaryOpType opType,
     mlir::Value resultArray) {
+
+  auto loc = builder.getUnknownLoc();
 
   // Load elements based on broadcast mode
   mlir::Value leftElem, rightElem;
 
   switch (broadcastMode) {
   case mlir_edsl::NONE:
-    leftElem = loopBuilder.create<mlir::memref::LoadOp>(loc, left, indices);
-    rightElem = loopBuilder.create<mlir::memref::LoadOp>(loc, right, indices);
+    leftElem = builder.create<mlir::memref::LoadOp>(loc, left, indices);
+    rightElem = builder.create<mlir::memref::LoadOp>(loc, right, indices);
     break;
 
   case mlir_edsl::SCALAR_LEFT:
     leftElem = left;
-    rightElem = loopBuilder.create<mlir::memref::LoadOp>(loc, right, indices);
+    rightElem = builder.create<mlir::memref::LoadOp>(loc, right, indices);
     break;
 
   case mlir_edsl::SCALAR_RIGHT:
-    leftElem = loopBuilder.create<mlir::memref::LoadOp>(loc, left, indices);
+    leftElem = builder.create<mlir::memref::LoadOp>(loc, left, indices);
     rightElem = right;
     break;
 
@@ -259,8 +254,7 @@ void MemRefBuilder::buildArrayBinaryOpElement(
     throw std::runtime_error("Unknown binary operation");
   }
 
-  // Store result
-  loopBuilder.create<mlir::memref::StoreOp>(loc, result, resultArray, indices);
+  builder.create<mlir::memref::StoreOp>(loc, result, resultArray, indices);
 }
 
 } // namespace mlir_edsl
