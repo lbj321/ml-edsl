@@ -251,22 +251,20 @@ mlir::Value MLIRBuilder::handleForLoopOp(const mlir_edsl::ForLoopOp &op) {
   mlir::Value step = castToIndexType(buildFromProtobufNode(op.step()));
   mlir::Value initValue = buildFromProtobufNode(op.init_value());
 
-  // Capture the body proto and placeholder node IDs
   const auto &bodyProto = op.body();
+  int64_t indexId = op.index_node_id();
+  int64_t iterArgId = op.iter_arg_node_id();
 
-  // Use SCFBuilder to create scf.for with iter_args
   return scfBuilder->buildForWithIterArgs(
       start, end, step, mlir::ValueRange{initValue},
-      [this, &bodyProto](mlir::Value iv, mlir::Value iterArg) -> mlir::Value {
-        // Cast induction variable from index to i32 for user code
+      [this, &bodyProto, indexId, iterArgId](mlir::Value iv, mlir::Value iterArg) -> mlir::Value {
         auto loc = builder->getUnknownLoc();
         mlir::Value ivI32 = builder->create<mlir::arith::IndexCastOp>(
             loc, mlir::IntegerType::get(context, 32), iv);
 
-        // Scan body AST for ForIndex/ForIterArg node IDs and inject into cache
-        injectForPlaceholders(bodyProto, ivI32, iterArg);
+        valueCache[indexId] = ivI32;
+        valueCache[iterArgId] = iterArg;
 
-        // Build the body AST
         return buildFromProtobufNode(bodyProto);
       });
 }
@@ -421,100 +419,6 @@ mlir::Type MLIRBuilder::convertTensorType(
   }
 
   return mlir::RankedTensorType::get(shape, elementType);
-}
-
-// ==================== FOR LOOP HELPERS ====================
-
-void MLIRBuilder::injectForPlaceholders(const mlir_edsl::ASTNode &node,
-                                        mlir::Value iv, mlir::Value iterArg) {
-  // Recursively scan the AST for ForIndex and ForIterArg nodes
-  // and inject their block argument values into the valueCache.
-  if (node.has_control_flow()) {
-    const auto &cf = node.control_flow();
-    if (cf.has_for_index()) {
-      valueCache[cf.for_index().node_id()] = iv;
-      return;
-    }
-    if (cf.has_for_iter_arg()) {
-      valueCache[cf.for_iter_arg().node_id()] = iterArg;
-      return;
-    }
-    if (cf.has_if_op()) {
-      injectForPlaceholders(cf.if_op().condition(), iv, iterArg);
-      injectForPlaceholders(cf.if_op().then_value(), iv, iterArg);
-      injectForPlaceholders(cf.if_op().else_value(), iv, iterArg);
-      return;
-    }
-    if (cf.has_for_loop()) {
-      // Nested for loop: scan its bounds, init, and body
-      injectForPlaceholders(cf.for_loop().start(), iv, iterArg);
-      injectForPlaceholders(cf.for_loop().end(), iv, iterArg);
-      injectForPlaceholders(cf.for_loop().step(), iv, iterArg);
-      injectForPlaceholders(cf.for_loop().init_value(), iv, iterArg);
-      injectForPlaceholders(cf.for_loop().body(), iv, iterArg);
-      return;
-    }
-  }
-  if (node.has_scalar()) {
-    const auto &s = node.scalar();
-    if (s.has_binary_op()) {
-      injectForPlaceholders(s.binary_op().left(), iv, iterArg);
-      injectForPlaceholders(s.binary_op().right(), iv, iterArg);
-    } else if (s.has_compare_op()) {
-      injectForPlaceholders(s.compare_op().left(), iv, iterArg);
-      injectForPlaceholders(s.compare_op().right(), iv, iterArg);
-    } else if (s.has_cast_op()) {
-      injectForPlaceholders(s.cast_op().value(), iv, iterArg);
-    }
-  }
-  if (node.has_tensor()) {
-    const auto &t = node.tensor();
-    if (t.has_insert()) {
-      injectForPlaceholders(t.insert().tensor(), iv, iterArg);
-      for (const auto &idx : t.insert().indices()) {
-        injectForPlaceholders(idx, iv, iterArg);
-      }
-      injectForPlaceholders(t.insert().value(), iv, iterArg);
-    } else if (t.has_extract()) {
-      injectForPlaceholders(t.extract().tensor(), iv, iterArg);
-      for (const auto &idx : t.extract().indices()) {
-        injectForPlaceholders(idx, iv, iterArg);
-      }
-    } else if (t.has_from_elements()) {
-      for (const auto &elem : t.from_elements().elements()) {
-        injectForPlaceholders(elem, iv, iterArg);
-      }
-    }
-  }
-  if (node.has_binding()) {
-    const auto &b = node.binding();
-    if (b.has_let()) {
-      injectForPlaceholders(b.let().value(), iv, iterArg);
-    }
-    // ValueReference is a leaf — no children to scan
-  }
-  if (node.has_array()) {
-    const auto &a = node.array();
-    if (a.has_access()) {
-      injectForPlaceholders(a.access().array(), iv, iterArg);
-      for (const auto &idx : a.access().indices()) {
-        injectForPlaceholders(idx, iv, iterArg);
-      }
-    } else if (a.has_store()) {
-      injectForPlaceholders(a.store().array(), iv, iterArg);
-      for (const auto &idx : a.store().indices()) {
-        injectForPlaceholders(idx, iv, iterArg);
-      }
-      injectForPlaceholders(a.store().value(), iv, iterArg);
-    } else if (a.has_binary_op()) {
-      injectForPlaceholders(a.binary_op().left(), iv, iterArg);
-      injectForPlaceholders(a.binary_op().right(), iv, iterArg);
-    } else if (a.has_literal()) {
-      for (const auto &elem : a.literal().elements()) {
-        injectForPlaceholders(elem, iv, iterArg);
-      }
-    }
-  }
 }
 
 // ==================== INFRASTRUCTURE UTILITIES ====================

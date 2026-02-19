@@ -120,13 +120,16 @@ class ForLoopOp(Value):
     """
 
     def __init__(self, start: Value, end: Value, step: Value,
-                 init_value: Value, body: Value):
+                 init_value: Value, body: Value,
+                 index_placeholder: 'ForIndex', iter_arg_placeholder: 'ForIterArg'):
         super().__init__()
         self.start = start
         self.end = end
         self.step = step
         self.init_value = init_value
         self.body = body
+        self.index_node_id = index_placeholder.node_id
+        self.iter_arg_node_id = iter_arg_placeholder.node_id
 
         # Get all types
         start_type = start.infer_type()
@@ -174,6 +177,7 @@ class ForLoopOp(Value):
         pb_node.control_flow.for_loop.step.CopyFrom(self.step.to_proto(context))
         pb_node.control_flow.for_loop.init_value.CopyFrom(self.init_value.to_proto(context))
         pb_node.control_flow.for_loop.result_type.CopyFrom(self._inferred_type.to_proto())
-        pb_node.control_flow.for_loop.loop_id = self.id
         pb_node.control_flow.for_loop.body.CopyFrom(self.body.to_proto(context))
+        pb_node.control_flow.for_loop.index_node_id = self.index_node_id
+        pb_node.control_flow.for_loop.iter_arg_node_id = self.iter_arg_node_id
         return pb_node

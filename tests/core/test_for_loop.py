@@ -134,7 +134,8 @@ class TestForLoopSerialization:
         assert fl.HasField("step")
         assert fl.HasField("init_value")
         assert fl.HasField("body")
-        assert fl.loop_id == result.id
+        assert fl.index_node_id == result.index_node_id
+        assert fl.iter_arg_node_id == result.iter_arg_node_id
         assert fl.HasField("result_type")
 
 

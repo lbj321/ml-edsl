@@ -97,10 +97,6 @@ private:
   mlir::Value handleLetBinding(const mlir_edsl::LetBinding &binding);
   mlir::Value handleValueRef(const mlir_edsl::ValueReference &ref);
 
-  // For loop helpers
-  void injectForPlaceholders(const mlir_edsl::ASTNode &node,
-                             mlir::Value iv, mlir::Value iterArg);
-
   // Internal helpers
   mlir::Value getParameter(const std::string &name);
   mlir::Value callFunction(const std::string &name,

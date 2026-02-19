@@ -67,5 +67,6 @@ def For(start: Union[int, Value],
 
     return ForLoopOp(
         to_value(start), to_value(end), to_value(step),
-        init_val, body_result
+        init_val, body_result,
+        index_placeholder, iter_arg_placeholder
     )

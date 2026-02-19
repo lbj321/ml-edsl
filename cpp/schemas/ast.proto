@@ -240,20 +240,22 @@ message ForLoopOp {
   ASTNode end = 2;            // Loop end bound (exclusive)
   ASTNode step = 3;           // Loop step/increment
   ASTNode init_value = 4;     // Initial accumulator value
-  reserved 5;                 // Was: BinaryOpType operation (removed)
-  TypeSpec result_type = 6;   // Result type (validated by Python)
-  int64 loop_id = 7;          // Unique ID for matching ForIndex/ForIterArg placeholders
-  ASTNode body = 8;           // Lambda body AST (references ForIndex/ForIterArg nodes)
+  reserved 5;                  // Was: BinaryOpType operation (removed)
+  TypeSpec result_type = 6;    // Result type (validated by Python)
+  reserved 7;                  // Was: loop_id (removed)
+  ASTNode body = 8;            // Lambda body AST (references ForIndex/ForIterArg nodes)
+  int64 index_node_id = 9;     // ForIndex placeholder node ID → injected as %iv in body
+  int64 iter_arg_node_id = 10; // ForIterArg placeholder node ID → injected as %iter_arg in body
 }
 
 // For loop induction variable placeholder (leaf node, resolved at IR build time)
 message ForIndex {
-  int64 node_id = 1;          // Unique ID matching ForLoopOp.loop_id via valueCache
+  int64 node_id = 1;          // Matches ForLoopOp.index_node_id; resolved to %iv in valueCache
 }
 
 // For loop iter_arg placeholder (leaf node, resolved at IR build time)
 message ForIterArg {
-  int64 node_id = 1;          // Unique ID for valueCache lookup
+  int64 node_id = 1;          // Matches ForLoopOp.iter_arg_node_id; resolved to %iter_arg in valueCache
   int32 arg_index = 2;        // Which iter_arg (0 for single accumulator)
 }
 
