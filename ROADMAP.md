@@ -1,7 +1,7 @@
 # ML-EDSL Development Roadmap
 
 **Architecture**: Python frontend with C++ MLIR backend
-**Current Status**: Phase 7 (Memory & Arrays) - Tensor support in progress
+**Current Status**: Phase 7.4 - aggregate types as function parameters (unblocks Phase 8)
 **Vision**: Comprehensive ML compilation framework supporting modern AI architectures
 
 ---
@@ -46,165 +46,196 @@ result = sum_range(1, 10) # 55 - Native speed!
 
 **Goal**: Add array and tensor support to enable ML workloads, bridging from scalar operations to vectorized/tensor computations.
 
-### Implementation Plan:
+### Completed ✅
 
-#### 1. **Fixed-Size Array Support (memref dialect)**
+#### 1. Fixed-Size Array Support (memref dialect)
+- `Array[N, dtype]` and `Array[M, N, dtype]` (1D/2D/3D)
+- `memref.alloca`, `memref.load`, `memref.store`
+- JAX-style `.at[i].set(v)` functional update semantics
+- Element-wise arithmetic with broadcasting
+
+#### 2. Multi-Dimensional Arrays (2D/3D)
+- `memref<MxNxT>` with multi-index access `matrix[i, j]`
+- Nested list initialization with shape inference
+
+#### 3. Dynamic-Size Tensors (tensor dialect)
+- `tensor<?xf32>` with runtime-determined shapes
+- `tensor.empty`, `tensor.extract`, `tensor.insert`
+- Bufferization pipeline: `tensor` → `memref` → LLVM
+
+### Remaining 🚧
+
+#### 4. Aggregate Types as Function Parameters
 ```python
 @ml_function
-def array_operations() -> i32:
-    # Create a fixed-size array [1, 2, 3, 4]
-    arr = Array[4, i32]([1, 2, 3, 4])
+def dot_product(a: Array[4, f32], b: Array[4, f32]) -> f32:
+    # Lambda-based For with iter_args: (i, acc) -> next_acc
+    return For(start=0, end=4, init=0.0,
+               body=lambda i, acc: acc + a[i] * b[i])
 
-    # Element access (read)
-    value = arr[2]  # Returns 3
-
-    # Element modification (functional style - JAX-like)
-    arr = arr.at[0].set(10)  # Returns new array [10, 2, 3, 4]
-
-    # Array arithmetic (element-wise)
-    doubled = arr * 2  # [20, 4, 6, 8]
-
-    return doubled[0]  # Returns 20
+# Call with Python data
+result = dot_product([1.0, 2.0, 3.0, 4.0], [1.0, 1.0, 1.0, 1.0])
 ```
 
 **Technical Requirements:**
-- `memref` dialect for stack-allocated arrays (fixed size)
-- Array type: `memref<NxT>` (e.g., `memref<4xi32>`)
-- Operations: `memref.alloca`, `memref.load`, `memref.store`
-- Functional update semantics: `.at[index].set(value)` (JAX-style)
-- Index operations: `arith.index_cast` for array indexing
-- Element-wise operations with broadcasting support
+- `TensorType` Python class in `types.py` (mirrors `ArrayType`, uses `?` sentinel for dynamic dims)
+- `TypeSystem.parse_type_hint` recognizes `Tensor[?, f32]` annotations
+- `execute_function` in `backend.py` packs aggregate params as LLVM memref descriptors:
+  `(ptr, ptr, offset, size0, ..., stride0, ...)` — the standard MLIR calling convention
+- Validation: exact shape check for static types, ndim+dtype check for dynamic
 
-#### 2. **Multi-Dimensional Arrays (2D/3D)**
-```python
-@ml_function
-def matrix_operations() -> i32:
-    # 2D matrix [2 rows x 3 cols]
-    matrix = Array[2, 3, i32]([[1, 2, 3],
-                                [4, 5, 6]])
+**Note**: numpy interop is deferred to Phase 8.5. This item only needs Python list/buffer
+input to unblock Phase 8. The LLVM calling convention is identical for all aggregate types
+(Array, static Tensor, dynamic Tensor) — only validation differs.
 
-    # Access element at [row, col]
-    value = matrix[1, 2]  # Returns 6
-
-    # Element modification (functional style)
-    matrix = matrix.at[0, 1].set(99)  # Update element at row 0, col 1
-
-    # Element-wise operations
-    doubled = matrix * 2
-
-    return matrix[0, 1]  # Returns 99
-```
-
-**Technical Requirements:**
-- Multi-dimensional `memref` types: `memref<MxNxT>` (e.g., `memref<2x3xi32>`)
-- Multi-index operations: `memref.load %arr[%i, %j]`, `memref.store`
-- Tuple index support in Python frontend: `matrix[i, j]` and `matrix.at[i, j].set(v)`
-- Nested list validation and flattening for initialization
-- Shape inference from nested Python lists
-
-#### 3. **Dynamic-Size Tensors (tensor dialect)**
-```python
-@ml_function
-def dynamic_tensor(size: int) -> Tensor[?, f32]:
-    # Create tensor with runtime-determined size
-    data = Tensor.empty([size], dtype=f32)
-
-    # Functional-style updates (immutable semantics)
-    # NOTE: Tensor update API still under design - tensors are immutable
-    # May use functional operations or bufferization
-    for i in range(size):
-        data = data.at[i].set(cast(i, f32) * 2.0)
-
-    return data
-```
-
-**Technical Requirements:**
-- `tensor` dialect for value-semantic, immutable tensors
-- Dynamic shapes: `tensor<?xf32>`
-- Tensor operations: `tensor.empty`, `tensor.extract`, `tensor.insert`
-- Buffer allocation and deallocation via `bufferization` pass
-- Integration with loops for tensor initialization
-- **Note**: Tensor API design TBD - truly immutable vs. functional updates
-
-#### 4. **NumPy/PyTorch Interoperability**
-```python
-import numpy as np
-
-@ml_function
-def process_numpy(arr: Tensor[?, f32]) -> Tensor[?, f32]:
-    # Process elements: arr[i] * 2 + 1
-    result = arr * 2.0 + 1.0
-    return result
-
-# Usage with NumPy
-np_array = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-result = process_numpy(np_array)  # Returns NumPy array
-```
-
-**Technical Requirements:**
-- Python buffer protocol integration (PEP 3118)
-- Zero-copy data passing between Python and MLIR
-- Type mapping: `numpy.float32` → `f32`, `numpy.int32` → `i32`
-- Shape inference and validation
-- Conversion: NumPy → `memref`/`tensor` → computation → NumPy
-
-#### 5. **Array Reduction Operations**
-```python
-@ml_function
-def array_sum(arr: Tensor[?, i32]) -> i32:
-    # Sum all elements in array
-    result = 0
-    for i in range(len(arr)):
-        result = result + arr[i]
-    return result
-
-@ml_function
-def array_max(arr: Tensor[?, i32]) -> i32:
-    # Find maximum element
-    max_val = arr[0]
-    for i in range(1, len(arr)):
-        max_val = If(arr[i] > max_val, arr[i], max_val)
-    return max_val
-```
-
-**Technical Requirements:**
-- Array length/shape queries: `tensor.dim`, `memref.dim`
-- Reduction patterns with loops
-- Future: `linalg.reduce` for optimized reductions
-
-### Expected Deliverables:
-- Array/tensor type system with fixed and dynamic sizes
-- `memref` dialect integration for stack-allocated arrays
-- `tensor` dialect integration for value-semantic tensors
-- Element access, slicing, and modification operations
-- NumPy interoperability with zero-copy data passing
-- Comprehensive test suite for array operations
-- Documentation and examples for array usage
-
-### MLIR Dialects to Integrate:
-- **memref**: Stack-allocated, mutable buffers (fixed size)
-- **tensor**: Value-semantic, immutable tensors (dynamic size)
-- **affine**: Affine expressions for loop bounds and indexing
-- **linalg** (future): High-level linear algebra operations
+### MLIR Dialects Integrated:
+- **memref**: Stack-allocated, mutable buffers ✅
+- **tensor**: Value-semantic, immutable tensors ✅
+- **bufferization**: tensor → memref lowering ✅
+- **linalg**: High-level linear algebra → Phase 8
 
 ---
 
 ## Future Development Phases 📋
 
-### Phase 8: ML Operations  
-- Linear algebra primitives (`matmul`, activation functions)
-- Automatic differentiation with gradient computation
-- Neural network building blocks and optimization
+### Phase 8: Linear Algebra (linalg dialect)
 
-### Phase 9: Production & Performance
-- Multi-threading, GPU/CUDA backend support
-- Advanced optimization (PGO, vectorization, polyhedral)
-- Profiling tools and debug capabilities
+**Goal**: Introduce `linalg` as the core abstraction for ML operations. This is the right
+architectural level — `linalg` ops compose with tiling, vectorization, and GPU lowering
+in later phases. Implementing matmul as explicit `scf.for` loops would be slower and
+architecturally wrong.
 
-### Phase 10: Advanced AI Architectures
-- Transformer primitives (attention, layer norm, FFN)
-- Graph neural networks and diffusion model support  
-- Integration with PyTorch/TensorFlow, HuggingFace Transformers
+#### 8.1 Tensor Return Types
+```python
+@ml_function
+def scale(x: Tensor[4, f32], factor: f32) -> Tensor[4, f32]:
+    return x * factor  # Returns a new tensor
+```
+
+**Technical Requirements:**
+- Functions can return `tensor` / `memref` types (currently only scalars supported)
+- Memory ownership: callee allocates (`memref.alloc`), caller receives pointer
+- Python side: reconstruct result as a list or buffer from the returned pointer + shape
+- **Must land before 8.2** — matmul is useless without a way to return its result
+
+#### 8.2 linalg Dialect Integration
+```python
+@ml_function
+def dot(a: Array[4, f32], b: Array[4, f32]) -> f32:
+    return linalg.dot(a, b)  # Scalar return — no tensor return needed
+
+@ml_function
+def matmul(A: Tensor[4, 4, f32], B: Tensor[4, 4, f32]) -> Tensor[4, 4, f32]:
+    return linalg.matmul(A, B)  # Requires 8.1
+```
+
+**Technical Requirements:**
+- Register `linalg` dialect in `MLIRBuilder` and lowering pipeline
+- `linalg.dot` (scalar return — first linalg op, no dependency on 8.1)
+- `linalg.matmul`, `linalg.fill` (depend on tensor return from 8.1)
+- Python frontend ops: `dot()`, `matmul()`
+- Lowering: `linalg` → `loops` → `memref` → LLVM (existing bufferization handles the rest)
+
+#### 8.3 Activation Functions
+```python
+@ml_function
+def relu(x: Tensor[?, f32]) -> Tensor[?, f32]:
+    return tensor_map(x, lambda v: If(v > 0.0, v, 0.0))
+```
+
+**Technical Requirements:**
+- Element-wise tensor map operation (`linalg.generic` or explicit For loop)
+- Common activations: relu, sigmoid, tanh (composable from existing arith ops)
+- No new dialect needed — these are element-wise ops on tensors
+
+#### 8.4 Reduction Operations
+```python
+@ml_function
+def tensor_sum(x: Tensor[?, f32]) -> f32:
+    return linalg.reduce(x, init=0.0, op=lambda a, b: a + b)
+
+@ml_function
+def tensor_max(x: Tensor[?, f32]) -> f32:
+    return linalg.reduce(x, init=x[0], op=lambda a, b: If(a > b, a, b))
+
+@ml_function
+def mean(x: Tensor[?, f32], n: int) -> f32:
+    return tensor_sum(x) / cast(n, f32)
+```
+
+**Technical Requirements:**
+- `linalg.reduce` for general reductions (scalar output — no dependency on 8.1)
+- Reduction ops: `sum`, `max`, `min` as built-in convenience wrappers
+- `tensor.dim` / `memref.dim` for dynamic size queries (needed for `mean`)
+- Note: reductions to scalar are independent of 8.1 (tensor returns); reductions
+  to lower-rank tensors (e.g. row-wise sum) require 8.1
+
+---
+
+### Phase 8.5: I/O & NumPy Interoperability
+
+**Goal**: Connect the JIT-compiled functions to real data. Now that Phase 8 provides useful
+ML operations, this phase makes them actually usable with Python ecosystem data.
+
+```python
+import numpy as np
+
+@ml_function
+def process(A: Tensor[4, 4, f32], B: Tensor[4, 4, f32]) -> Tensor[4, 4, f32]:
+    return matmul(A, B)
+
+A = np.random.rand(4, 4).astype(np.float32)
+B = np.random.rand(4, 4).astype(np.float32)
+result = process(A, B)  # Returns np.ndarray
+```
+
+**Technical Requirements:**
+- Python buffer protocol (PEP 3118) for zero-copy input passing
+- numpy dtype → MLIR type mapping (`np.float32` → `f32`, `np.int32` → `i32`)
+- Shape validation against declared parameter type
+- Result reconstruction: raw pointer + shape → numpy array (with correct ownership/copy)
+
+---
+
+### Phase 9: Performance
+
+**Goal**: Make the compiler produce fast code. `linalg` is the key — it's designed to be
+the target of tiling, vectorization, and GPU lowering passes.
+
+#### 9.1 Vectorization
+- `linalg` → `vector` dialect transformation (MLIR's built-in vectorization pass)
+- Auto-vectorization of matmul and element-wise ops (AVX2/AVX-512 on x86)
+- Benchmarking infrastructure to measure improvement
+
+#### 9.2 Loop Tiling & Fusion
+- Tiling matmul for cache efficiency (`linalg` tiling pass)
+- Loop fusion for element-wise + matmul chains
+
+#### 9.3 GPU/CUDA Backend
+- `linalg` → `gpu` dialect → NVVM/CUBIN
+- CUDA kernel launch via MLIR's GPU execution engine
+- Memory transfer: host ↔ device
+
+---
+
+### Phase 10: Advanced Architectures
+
+**Goal**: High-level ML building blocks and ecosystem integration.
+
+#### 10.1 Transformer Primitives
+- Multi-head attention (matmul + softmax, composable from Phase 8)
+- Layer normalization (reduction + element-wise, composable from Phase 8)
+- FFN layer (two matmuls + activation)
+
+#### 10.2 Automatic Differentiation (Research Track)
+- **Scope**: Forward-mode AD for scalar and simple tensor ops (achievable)
+- **Deferred**: Reverse-mode AD is a research-level project; consider Enzyme-MLIR
+  integration rather than implementing from scratch
+- Gradient computation for basic ops: `arith`, `linalg.matmul`
+
+#### 10.3 Ecosystem Integration
+- PyTorch/TensorFlow model import (via torch-mlir or tf2mlir)
+- HuggingFace Transformers: run inference on imported models
 - Custom operator definition framework
 
 ---
@@ -289,26 +320,23 @@ module {
 ## Technical Status
 
 ### Current Stack:
-- **Dependencies**: LLVM/MLIR 18+, CMake 3.20+, pybind11, C++17, Python 3.8+
-- **MLIR Dialects**: `arith`, `func`, `builtin`, `scf`, `cf` | **Next**: `memref`, `tensor`, `affine`
-- **Testing**: Comprehensive pytest suite with JIT integration tests
-  - `test_strict_typing.py` - Type system validation
-  - `test_parameters.py` - Function parameter tests
-  - `test_conditionals.py` - If/comparison operations
-  - `test_loops.py` - For/While loop tests
-  - `test_recursion.py` - Recursive function tests
-  - `test_cpp_backend.py` - C++ backend integration
-- **Examples**: Working demos in `examples/` directory
+- **Dependencies**: LLVM/MLIR 18+, CMake 3.20+, pybind11, protobuf, C++17, Python 3.8+
+- **MLIR Dialects (active)**: `arith`, `func`, `builtin`, `scf`, `cf`, `memref`, `tensor`, `bufferization`
+- **Next dialect**: `linalg`
+- **Testing**: pytest suite organized by feature area (`tests/core/`, `tests/memref/`, `tests/tensor/`)
 
 ### Current Operations:
 - **Arithmetic**: `add`, `sub`, `mul`, `div`, `cast`
 - **Comparison**: `lt`, `le`, `gt`, `ge`, `eq`, `ne`
-- **Control Flow**: `If`, `For`, `While`
+- **Control Flow**: `If`, `For` (with `iter_args`), `While`
 - **Functions**: `call` (recursion), `@ml_function` decorator
+- **Arrays (memref)**: `Array[N, dtype]`, element access/store, element-wise arithmetic, JAX-style `.at[i].set(v)`
+- **Tensors**: `Tensor.empty([size], dtype)`, `tensor.extract`, `tensor.insert`, dynamic dims
 
 ### Architecture Overview:
 ```
-Python Frontend (AST) → C++ MLIR Backend → LLVM Lowering → JIT Execution
-     @ml_function           MLIRBuilder        MLIRLowering    MLIRExecutor
-      (strict types)        (arith/scf/cf)      (llvm dialect)  (O0/O2/O3)
+Python Frontend (AST) → Protobuf → C++ MLIR Backend → LLVM Lowering → JIT Execution
+     @ml_function          bytes      MLIRBuilder         MLIRLowering    MLIRExecutor
+      (strict types)                  (dialect builders)  (bufferize →    (O0/O2/O3)
+                                                           memref → llvm)
 ```
