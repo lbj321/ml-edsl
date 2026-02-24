@@ -82,7 +82,11 @@ class OperatorMixin:
 
     # Array subscript operators
     def __getitem__(self, index):
-        """Enable arr[i] syntax for array element reads"""
+        """Enable arr[i] / tensor[i] syntax for element reads"""
+        from ..types import TensorType
+        if isinstance(self.infer_type(), TensorType):
+            from .nodes.tensors import TensorExtract
+            return TensorExtract(self, index)
         from .nodes.arrays import ArrayAccess
         return ArrayAccess(self, index)
 
@@ -113,7 +117,7 @@ class OperatorMixin:
             _AtIndexer object that captures the index
 
         Example:
-            arr = Array[4, i32]([10, 20, 30, 40])
+            arr = Array[i32, 4]([10, 20, 30, 40])
             arr = arr.at[1].set(99)       # Returns new array
             arr = arr.at[2].set(88)       # Can chain updates
         """

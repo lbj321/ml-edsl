@@ -1,380 +1,238 @@
-# Test Guidelines for MLIR EDSL
+# Tests — Structure and Guidelines
 
-This file provides guidance to Claude Code when writing or updating tests in this test suite.
+## Test Categories
 
-## Overview
+Every test should fall into exactly one of these categories:
 
-All tests in this project use a common base class (`MLIRTestBase`) that provides:
-- Automatic backend initialization and cleanup
-- Optional IR printing via `PRINT_IR=1` environment variable
-- Optional IR file output via `SAVE_IR=1` environment variable (saved to `ir_output/`)
-- Proper test isolation with `setup_method()` and `teardown_method()`
-
-## File Organization Patterns
-
-### Pattern 1: Single Test Class (Simple Features)
-Use for focused, single-feature test files:
+### 1. Runtime Execution Tests (`test_*_execution.py`, `test_*.py`)
+Verify that compiled functions produce correct values.
 
 ```python
-"""Test <feature name> with <brief description>"""
-
-import pytest
-from mlir_edsl import <imports>
-from mlir_edsl.backend import HAS_CPP_BACKEND
-from tests.test_base import MLIRTestBase
-
-
-class Test<FeatureName>(MLIRTestBase):
-    """Test <feature description>"""
-
-    def test_basic_scenario(self):
-        """Test <specific scenario being validated>"""
-        # Test implementation
-        pass
-```
-
-**Example**: `test_parameters.py`
-
-### Pattern 2: Multiple Test Classes (Complex Features)
-Use for comprehensive feature testing with multiple aspects:
-
-```python
-"""Tests for <feature name>
-
-Multi-line description explaining what this test suite validates:
-- Key aspect 1
-- Key aspect 2
-- Key aspect 3
-"""
-
-import pytest
-from mlir_edsl import <imports>
-from mlir_edsl.backend import HAS_CPP_BACKEND
-from tests.test_base import MLIRTestBase
-
-
-# ==================== SECTION NAME ====================
-
-class Test<AspectName>(MLIRTestBase):
-    """Test <specific aspect of feature>"""
-
-    def test_scenario_one(self):
-        """Test <what this validates>"""
-        pass
-
-
-# ==================== ANOTHER SECTION ====================
-
-class Test<AnotherAspect>(MLIRTestBase):
-    """Test <another aspect of feature>"""
-
-    def test_scenario_two(self):
-        """Test <what this validates>"""
-        pass
-```
-
-**Example**: `test_strict_typing.py`
-
-**Section Comment Format**: Use `# ====` style with ALL CAPS section names for visual separation.
-
-## Naming Conventions
-
-### File Names
-- Pattern: `test_<feature_name>.py`
-- Use underscores for multi-word features
-- Examples: `test_parameters.py`, `test_strict_typing.py`, `test_control_flow.py`
-
-### Class Names
-- Pattern: `Test<FeatureName>` or `Test<FeatureAspect>`
-- Use PascalCase
-- Be specific about what aspect is being tested
-- Examples: `TestParameterFunctionality`, `TestTypeHintValidation`, `TestExplicitCastOperations`
-
-### Test Method Names
-- Pattern: `test_<specific_scenario_being_tested>`
-- Use underscores to separate words
-- Be descriptive - the name should explain what's being validated
-- Examples:
-  - `test_basic_two_parameters`
-  - `test_missing_parameter_type_hint`
-  - `test_cast_execution_int_to_float`
-
-## Docstring Requirements
-
-### File-Level Docstring
-**Required** - First line of every test file:
-```python
-"""Test <feature name> [with additional context]"""
-```
-
-For complex test files, use multi-line format:
-```python
-"""Tests for <feature name>
-
-This test suite validates:
-- Aspect 1
-- Aspect 2
-- Aspect 3
-"""
-```
-
-### Class-Level Docstring
-**Required** - Every test class needs a docstring:
-```python
-class TestFeatureName(MLIRTestBase):
-    """Test <what this class validates>"""
-```
-
-### Method-Level Docstring
-**Required** - Every test method needs a docstring:
-```python
-def test_something(self):
-    """Test <specific scenario being validated>"""
-```
-
-The docstring should clearly explain:
-- What specific behavior is being tested
-- What edge case is being validated
-- What error condition is being checked
-
-## Test Implementation Patterns
-
-### Basic Test Structure
-```python
-def test_feature(self):
-    """Test <what is being validated>"""
-    @ml_function
-    def my_func(x: int) -> int:
-        return add(x, 5)
-
-    result = my_func(10)
-    assert result == 15
-```
-
-### Error Testing Pattern
-```python
-def test_error_condition(self):
-    """Test that <invalid operation> raises <ErrorType>"""
-    with pytest.raises(TypeError, match="expected error message pattern"):
-        @ml_function
-        def bad_func(x: int) -> float:
-            return x  # Type mismatch
-```
-
-### Conditional Tests (Backend-Dependent)
-For tests requiring execution (not just compilation):
-```python
-@pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
-def test_runtime_behavior(self):
-    """Test runtime execution with backend"""
-    @ml_function
-    def my_func(x: int) -> int:
-        return add(x, 5)
-
-    result = my_func(10)
-    assert result == 15
-```
-
-**When to use**: Any test that calls the generated function and checks return values needs the C++ backend.
-
-## Import Patterns
-
-### Standard Imports
-```python
-import pytest
-from mlir_edsl import ml_function, add, sub, mul, div, cast
-from mlir_edsl import i32, f32, i1
-from mlir_edsl.backend import HAS_CPP_BACKEND
-from tests.test_base import MLIRTestBase
-```
-
-### Feature-Specific Imports
-Import only what you need for the specific tests:
-```python
-from mlir_edsl import For, While, If  # Control flow
-from mlir_edsl import lt, gt, eq      # Comparison ops
-```
-
-## Assertion Patterns
-
-### Exact Value Assertions
-```python
-assert result == 15
-assert result == expected_value
-```
-
-### Floating-Point Assertions
-```python
-assert abs(result - 15.5) < 0.001
-```
-
-### Type Assertions
-```python
-assert isinstance(result, int)
-assert isinstance(result, float)
-```
-
-### Error Message Validation
-```python
-try:
-    # Code that should raise
-    assert False, "Should have raised TypeError"
-except TypeError as e:
-    error_msg = str(e)
-    assert "expected substring" in error_msg
-```
-
-## Environment Variables
-
-### PRINT_IR=1
-Print MLIR and LLVM IR to stdout after each test:
-```bash
-PRINT_IR=1 pytest tests/test_parameters.py -v
-```
-
-### SAVE_IR=1
-Save MLIR and LLVM IR to files in `ir_output/`:
-```bash
-SAVE_IR=1 pytest tests/test_parameters.py -v
-```
-
-Output files:
-- `ir_output/<test_name>.mlir` - MLIR dialect
-- `ir_output/<test_name>.ll` - LLVM IR
-- `ir_output/<test_name>.html` - HTML with collapsible sections
-
-### Combined Usage
-```bash
-PRINT_IR=1 SAVE_IR=1 pytest tests/test_parameters.py -v
-```
-
-## Test Organization Guidelines
-
-### When to Create a New Test File
-- Testing a distinct feature area (parameters, typing, control flow, etc.)
-- File size exceeds ~500 lines
-- Tests are logically separate from existing test files
-
-### When to Add to Existing File
-- Testing an aspect of an existing feature
-- Adds to existing test class coverage
-- Extends error cases for existing functionality
-
-### Class Organization Within File
-- Group related test classes using section comments
-- Order classes from simple to complex scenarios
-- Order classes logically (validation → operations → execution)
-
-## Example Test Template
-
-```python
-"""Test <feature name>"""
-
-import pytest
-from mlir_edsl import ml_function, add, mul
-from mlir_edsl import i32, f32, i1
-from mlir_edsl.backend import HAS_CPP_BACKEND
-from tests.test_base import MLIRTestBase
-
-
-class Test<FeatureName>(MLIRTestBase):
-    """Test <feature description>"""
-
-    def test_basic_scenario(self):
-        """Test basic <feature> functionality"""
+class TestFeatureExecution:
+    def test_something(self, backend):
         @ml_function
         def my_func(x: int) -> int:
             return add(x, 5)
+        assert my_func(10) == 15
+```
 
-        result = my_func(10)
-        assert result == 15
+- **Requires**: `backend` fixture
+- **Asserts**: Return values, side effects
+- **This is the primary correctness layer** — if the function produces the right answer, the IR was good enough
 
-    def test_edge_case(self):
-        """Test edge case: <specific edge case>"""
+### 2. IR Structure Tests (`test_ir.py`)
+Verify MLIR properties that **cannot be caught by runtime tests**. There are two kinds:
+
+#### Pre-lowering IR (`check_ir`)
+Check the MLIR IR as emitted by MLIRBuilder, before any lowering passes.
+
+```python
+class TestFeatureIR:
+    def test_no_duplicate_comparison(self, check_ir):
         @ml_function
-        def edge_func(x: int) -> int:
-            return mul(x, 0)
+        def clamp(x: int, lo: int, hi: int) -> int:
+            return If(lt(x, lo), lo, If(gt(x, hi), hi, x))
+        clamp(1, 2, 3)
+        check_ir("""
+        // CHECK: arith.cmpi slt
+        // CHECK-NOT: arith.cmpi slt
+        """)
+```
 
-        result = edge_func(42)
-        assert result == 0
+- **Requires**: `check_ir` fixture (depends on FileCheck binary)
+- **Asserts**: IR structure via FileCheck patterns on pre-lowering MLIR
 
-    def test_error_condition(self):
-        """Test that <invalid operation> raises TypeError"""
-        with pytest.raises(TypeError, match="error pattern"):
+#### Post-lowering IR (`check_lowered_ir`)
+Check the IR **after** a specific lowering pass (bufferization, deallocation, etc.).
+Use the `after` parameter to specify the pass name (substring match).
+
+```python
+class TestBufferizationIR:
+    def test_tensor_bufferizes_to_memref(self, check_lowered_ir):
+        @ml_function
+        def tensor_buf() -> i32:
+            t = Tensor[i32, 4]([1, 2, 3, 4])
+            return t[0]
+        tensor_buf()
+        check_lowered_ir("""
+        // CHECK: memref.alloc
+        // CHECK-NOT: tensor.from_elements
+        """, after="one-shot-bufferize")
+```
+
+- **Requires**: `check_lowered_ir` fixture (depends on FileCheck binary)
+- **Asserts**: IR structure via FileCheck patterns on lowered IR
+- **`after` parameter**: pass name to inspect IR after (e.g., `"one-shot-bufferize"`, `"ownership-based-buffer-deallocation"`)
+
+#### When to use which
+
+- **`check_ir`**: Verify what the frontend *emits* — dialect choice, type representation, structural invariants. Answers: "Did MLIRBuilder produce the right ops?"
+- **`check_lowered_ir`**: Verify what lowering passes *transform* — that high-level ops are correctly replaced by lower-level ops. Answers: "Did the lowering pipeline do its job?" Use `CHECK-NOT` to confirm the higher-level ops are gone, and `CHECK` to confirm the expected lower-level replacements appeared.
+
+**Good `check_ir` tests:**
+- Dialect boundary enforcement (no `tensor` ops in memref code, no `memref` ops in tensor code)
+- Correct type representation (`tensor<2x3xf32>` not `tensor<6xf32>`)
+- Optimization properties (no duplicate comparisons, no redundant allocations)
+- Structural invariants (function signatures, block structure)
+
+**Good `check_lowered_ir` tests:**
+- Bufferization correctness — tensor ops become memref ops after `one-shot-bufferize`
+- Allocation strategy — `alloc` vs `alloca` after bufferization
+- Shape preservation through lowering — `tensor<2x3xi32>` becomes `memref<2x3xi32>`, not `memref<6xi32>`
+- Deallocation insertion — `bufferization.dealloc` appears after `ownership-based-buffer-deallocation`
+
+**Bad IR tests** (don't write these — they duplicate runtime tests):
+- "Does `add(x, y)` emit `arith.addi`?" — if it didn't, the runtime test would fail too
+- "Does array access emit `memref.load`?" — same, runtime catches this
+- Basic "does this op exist?" checks with no structural insight
+
+### 3. AST Construction Tests (`test_*_ast.py`)
+Verify that Python AST nodes are built correctly, without any backend.
+
+```python
+class TestArrayAST:
+    def test_access_type_inference(self):
+        arr = ArrayLiteral([1, 2, 3], Array[i32, 3])
+        access = arr[1]
+        assert access.infer_type() == i32
+```
+
+- **Requires**: Nothing (pure Python)
+- **Asserts**: Node properties, type inference, `get_children()`, protobuf serialization
+- Tests here should never need the `backend` fixture
+
+### 4. Type System Tests (`test_*_types.py`)
+Verify type creation, validation, equality, and error handling.
+
+```python
+class TestArrayTypeValidation:
+    def test_negative_size_rejected(self):
+        with pytest.raises(TypeError):
+            Array[i32, -1]
+
+    def test_type_equality(self):
+        assert Array[i32, 4] == Array[i32, 4]
+        assert Array[i32, 4] != Array[f32, 4]
+```
+
+- **Requires**: Nothing (pure Python)
+- **Asserts**: Type properties, equality, hashing, MLIR string output, error messages
+- Includes validation of subscript syntax (`Array[dtype, dims]`, `Tensor[dtype, dims]`)
+
+### 5. Error and Validation Tests
+Verify that bad input produces clear error messages. These live **within** the appropriate category file rather than in a separate file.
+
+```python
+class TestStrictTyping:
+    def test_missing_return_type_raises(self):
+        with pytest.raises(TypeError, match="return type"):
             @ml_function
-            def bad_func(x):  # Missing type hint
+            def bad(x: int):
                 return x
 ```
 
-## Migrating Legacy Test Files
+- Use `pytest.raises(ExceptionType, match="substring")` to verify both exception type and message
+- Test error paths alongside the happy paths in the same file
 
-Some older test files may not follow the current standard pattern. When updating these files:
+## Directory Layout
 
-### Legacy Pattern (Do Not Use)
-```python
-# Standalone test functions without classes
-def test_something():
-    """Test something"""
-    result = do_something()
-    assert result == expected
+```
+tests/
+├── conftest.py              # Shared fixtures (backend, clean_module, check_ir)
+├── CLAUDE.md                # This file
+├── core/                    # Scalar ops, control flow, recursion, typing
+│   ├── test_parameter.py        # Runtime: parameter passing
+│   ├── test_control_flow.py     # Runtime: if/else, comparisons
+│   ├── test_recursion.py        # Runtime: recursive functions
+│   ├── test_strict_typing.py    # Type system + errors: type hints, validation
+│   ├── test_jit_integration.py  # Runtime: operator overloading, JIT
+│   ├── test_cpp_backend.py      # Backend: low-level backend API
+│   ├── test_optimization_benchmark.py  # Backend: optimization levels
+│   └── test_ir.py               # IR: structural checks for core ops
+├── memref/                  # Array operations (memref dialect)
+│   ├── test_array_ast.py        # AST: ArrayLiteral, ArrayAccess, ArrayStore
+│   ├── test_array_types.py      # Type system: ArrayType creation, validation
+│   ├── test_array_execution.py  # Runtime: array ops end-to-end
+│   ├── test_array_elementwise.py # Runtime: element-wise ops, broadcasting
+│   ├── test_array_2d.py         # Mixed: 2D array AST + runtime
+│   ├── test_array_3d.py         # Mixed: 3D array AST + runtime
+│   └── test_ir.py               # IR: memref structural checks
+└── tensor/                  # Tensor operations (tensor dialect)
+    ├── test_tensor_ast.py       # AST: TensorFromElements, TensorExtract, TensorEmpty
+    ├── test_tensor_types.py     # Type system: TensorType creation, validation
+    ├── test_tensor_execution.py # Runtime: tensor ops end-to-end
+    ├── test_tensor_empty.py     # Runtime: tensor.empty end-to-end
+    ├── test_tensor_insert.py    # Mixed: TensorInsert AST + runtime
+    └── test_ir.py               # IR: tensor structural checks (pre-lowering + post-lowering)
 ```
 
-### Current Pattern (Use This)
-```python
-class TestFeatureName(MLIRTestBase):
-    """Test feature description"""
+## Fixtures (defined in `conftest.py`)
 
-    def test_something(self):
-        """Test something"""
-        result = do_something()
-        assert result == expected
+| Fixture | Scope | Purpose |
+|---|---|---|
+| `backend` | session | C++ backend instance; auto-skips if unavailable |
+| `clean_module` | function (autouse) | Clears module before each test; saves IR after if `SAVE_IR=1` |
+| `check_ir` | function | FileCheck-based IR assertions on pre-lowering MLIR; skips if FileCheck not found |
+| `check_lowered_ir` | function | FileCheck-based IR assertions on post-lowering IR; takes `after` param for pass name |
+
+## IR Inspection Workflow
+
+`SAVE_IR=1` generates HTML reports showing the full compilation pipeline (Python source, AST, MLIR, lowering passes, LLVM IR). Output mirrors the test directory structure:
+
+```
+ir_html/
+├── core/
+│   ├── test_parameter/
+│   │   ├── test_basic_two_parameters.html
+│   │   └── test_explicit_type_casting.html
+│   └── test_control_flow/
+│       └── test_if_greater_than.html
+├── memref/
+│   ├── test_array_execution/
+│   │   ├── test_array_access_execution.html
+│   │   └── test_array_store_execution.html
+│   └── test_array_2d/
+│       └── ...
+└── tensor/
+    └── ...
 ```
 
-### Migration Checklist
+**Target specific tests** to avoid generating hundreds of files:
 
-When migrating a legacy test file:
+```bash
+# Inspect IR for a single test file
+SAVE_IR=1 python3 -m pytest tests/memref/test_array_execution.py -v
 
-1. ✅ **Convert to class-based tests** - Wrap all test functions in a class inheriting from MLIRTestBase
-2. ✅ **Import MLIRTestBase** - Add `from tests.test_base import MLIRTestBase`
-3. ✅ **Add file/class/method docstrings** - Ensure all three levels are documented
-4. ✅ **Update test method signatures** - Add `self` parameter to all test methods
-5. ✅ **Verify backend setup** - Remove manual backend initialization (MLIRTestBase handles this)
-6. ✅ **Test the migration** - Run `pytest` to verify
+# Inspect IR for one specific test
+SAVE_IR=1 python3 -m pytest tests/memref/test_array_execution.py::TestArrayExecution::test_array_access_execution -v
 
-**Files needing migration** (as of current status):
-- `test_loops.py` - Uses standalone functions
-- `test_conditionals.py` - Uses standalone functions
-- Any other files with standalone `def test_*()` functions outside of classes
+# Inspect IR for a whole dialect
+SAVE_IR=1 python3 -m pytest tests/tensor/ -v
+```
 
-## Guidelines When Writing New Tests
+The `ir_html/` directory is cleared at the start of each test session, so only the tests you just ran will be present.
 
-1. **Always inherit from MLIRTestBase** - Don't create standalone test functions or classes
-2. **Include all required docstrings** - File, class, and method level
-3. **Use descriptive names** - Test names should explain what's being validated
-4. **Test both success and failure cases** - Include error condition tests
-5. **Use appropriate pytest markers** - Mark backend-dependent tests with `@pytest.mark.skipif`
-6. **Follow existing patterns** - Match the style of `test_parameters.py` and `test_strict_typing.py`
-7. **Keep tests focused** - One test should validate one specific behavior
-8. **Add helpful comments** - Explain complex test logic or expected values
+## Conventions
+
+- **No base classes** — tests are plain classes, no inheritance
+- **One assert concept per test** — test one behavior, not a whole workflow
+- **Test names describe the expectation**: `test_negative_size_rejected`, not `test_size`
+- **Backend-dependent tests** take `backend` as a fixture parameter; pure-Python tests omit it
+- **Subscript syntax**: `Array[dtype, dims]` and `Tensor[dtype, dims]` (type first, shape after)
 
 ## Running Tests
 
-### Run all tests
 ```bash
-python3 -m pytest tests/ -v
+python3 -m pytest tests/ -v                    # All tests
+python3 -m pytest tests/core/ -v               # Core tests only
+python3 -m pytest tests/memref/test_ir.py -v   # Specific file
+SAVE_IR=1 python3 -m pytest tests/ -v          # Save IR to ir_output/ + ir_html/
+DUMP_AST=1 python3 -m pytest tests/ -v         # Dump AST to ast_output/
 ```
 
-### Run specific test file
-```bash
-python3 -m pytest tests/test_parameters.py -v
-```
+## When Adding a New Feature
 
-### Run specific test
-```bash
-python3 -m pytest tests/test_parameters.py::TestParameterFunctionality::test_basic_two_parameters -v
-```
-
-### Run with IR output
-```bash
-PRINT_IR=1 python3 -m pytest tests/test_parameters.py -v
-```
+1. Add **type system tests** if introducing new types or validation rules
+2. Add **AST tests** if introducing new AST nodes (construction, type inference, serialization)
+3. Add **runtime execution tests** to verify correctness end-to-end
+4. Add **IR tests** only for structural properties invisible to runtime

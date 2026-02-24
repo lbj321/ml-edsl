@@ -34,6 +34,7 @@ set(MLIR_LLVM_LIBS
 set(MLIR_SCF_LIBS
     MLIRSCFDialect
     MLIRSCFToControlFlow
+    MLIRSCFTransforms
     MLIRControlFlowDialect
 )
 
@@ -44,6 +45,9 @@ set(MLIR_MEMORY_LIBS
     MLIRTensorDialect
     MLIRLinalgDialect
     MLIRBufferizationDialect
+    MLIRBufferizationTransforms
+    MLIRTensorTransforms
+    MLIRArithTransforms
 )
 
 # Combine all current libraries

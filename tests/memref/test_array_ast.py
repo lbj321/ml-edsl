@@ -22,7 +22,7 @@ class TestArrayLiteralCreation:
 
     def test_array_literal_i32(self):
         """Test creating array literal with i32 elements"""
-        arr_type = Array[4, i32]
+        arr_type = Array[i32, 4]
         arr = ArrayLiteral([1, 2, 3, 4], arr_type)
 
         assert isinstance(arr, ArrayLiteral)
@@ -31,7 +31,7 @@ class TestArrayLiteralCreation:
 
     def test_array_literal_f32(self):
         """Test creating array literal with f32 elements"""
-        arr_type = Array[3, f32]
+        arr_type = Array[f32, 3]
         arr = ArrayLiteral([1.0, 2.5, 3.14], arr_type)
 
         assert isinstance(arr, ArrayLiteral)
@@ -39,7 +39,7 @@ class TestArrayLiteralCreation:
 
     def test_array_literal_elements_converted_to_ast_nodes(self):
         """Test that Python literals are converted to Constant nodes"""
-        arr_type = Array[2, i32]
+        arr_type = Array[i32, 2]
         arr = ArrayLiteral([10, 20], arr_type)
 
         # Elements should be Constant AST nodes
@@ -55,21 +55,21 @@ class TestArrayLiteralTypeChecking:
 
     def test_array_size_mismatch(self):
         """Test that size mismatch is caught"""
-        arr_type = Array[4, i32]
+        arr_type = Array[i32, 4]
 
-        with pytest.raises(TypeError, match="Array size mismatch"):
+        with pytest.raises(TypeError, match="expected 4 elements, got 3"):
             ArrayLiteral([1, 2, 3], arr_type)  # Only 3 elements, expected 4
 
     def test_array_element_type_mismatch(self):
         """Test that element type mismatch is caught"""
-        arr_type = Array[3, i32]
+        arr_type = Array[i32, 3]
 
         with pytest.raises(TypeError, match="Array element type mismatch.*index 1"):
             ArrayLiteral([1, 2.5, 3], arr_type)  # 2.5 is float, expected int
 
     def test_array_all_elements_must_match(self):
         """Test that all elements must match declared type"""
-        arr_type = Array[4, f32]
+        arr_type = Array[f32, 4]
 
         # This should fail - int elements in f32 array
         with pytest.raises(TypeError, match="expected f32.*got i32"):
@@ -77,15 +77,15 @@ class TestArrayLiteralTypeChecking:
 
     def test_array_nested_arrays_rejected(self):
         """Test that nested arrays are rejected"""
-        inner = ArrayLiteral([1, 2], Array[2, i32])
-        outer_type = Array[2, i32]
+        inner = ArrayLiteral([1, 2], Array[i32, 2])
+        outer_type = Array[i32, 2]
 
         with pytest.raises(TypeError, match="cannot be an array"):
             ArrayLiteral([inner, inner], outer_type)
 
     def test_array_mixed_types_rejected(self):
         """Test that mixed element types are rejected"""
-        arr_type = Array[3, i32]
+        arr_type = Array[i32, 3]
 
         with pytest.raises(TypeError, match="type mismatch"):
             ArrayLiteral([1, 2.5, 3], arr_type)
@@ -98,7 +98,7 @@ class TestArrayLiteralTypeInference:
 
     def test_array_literal_infer_type_returns_array_type(self):
         """Test that ArrayLiteral.infer_type() returns ArrayType"""
-        arr_type = Array[4, i32]
+        arr_type = Array[i32, 4]
         arr = ArrayLiteral([1, 2, 3, 4], arr_type)
 
         inferred = arr.infer_type()
@@ -107,7 +107,7 @@ class TestArrayLiteralTypeInference:
 
     def test_array_literal_type_preserves_size_and_element_type(self):
         """Test that inferred type has correct size and element type"""
-        arr_type = Array[5, f32]
+        arr_type = Array[f32, 5]
         arr = ArrayLiteral([1.0, 2.0, 3.0, 4.0, 5.0], arr_type)
 
         inferred = arr.infer_type()
@@ -123,7 +123,7 @@ class TestArrayAccess:
 
     def test_array_access_creation(self):
         """Test creating ArrayAccess node"""
-        arr = ArrayLiteral([1, 2, 3, 4], Array[4, i32])
+        arr = ArrayLiteral([1, 2, 3, 4], Array[i32, 4])
         access = ArrayAccess(arr, 2)
 
         assert isinstance(access, ArrayAccess)
@@ -133,7 +133,7 @@ class TestArrayAccess:
 
     def test_array_access_with_value_index(self):
         """Test ArrayAccess with Value node as index"""
-        arr = ArrayLiteral([10, 20, 30], Array[3, i32])
+        arr = ArrayLiteral([10, 20, 30], Array[i32, 3])
         idx = Constant(1, i32)
         access = ArrayAccess(arr, idx)
 
@@ -141,7 +141,7 @@ class TestArrayAccess:
 
     def test_array_access_infer_type_returns_element_type(self):
         """Test that ArrayAccess returns element type, not array type"""
-        arr = ArrayLiteral([1, 2, 3], Array[3, i32])
+        arr = ArrayLiteral([1, 2, 3], Array[i32, 3])
         access = ArrayAccess(arr, 0)
 
         inferred = access.infer_type()
@@ -150,7 +150,7 @@ class TestArrayAccess:
 
     def test_array_access_f32_array_returns_f32(self):
         """Test accessing f32 array returns f32"""
-        arr = ArrayLiteral([1.0, 2.0, 3.0], Array[3, f32])
+        arr = ArrayLiteral([1.0, 2.0, 3.0], Array[f32, 3])
         access = ArrayAccess(arr, 1)
 
         assert access.infer_type() == f32
@@ -170,7 +170,7 @@ class TestArrayAccessTypeChecking:
 
     def test_array_access_index_must_be_i32(self):
         """Test that index must be i32"""
-        arr = ArrayLiteral([1.0, 2.0], Array[2, f32])
+        arr = ArrayLiteral([1.0, 2.0], Array[f32, 2])
         float_idx = Constant(1.5, f32)
 
         with pytest.raises(TypeError, match="Array index .* must be i32"):
@@ -178,7 +178,7 @@ class TestArrayAccessTypeChecking:
 
     def test_array_access_python_int_index_converted(self):
         """Test that Python int index is converted to i32 Constant"""
-        arr = ArrayLiteral([10, 20, 30], Array[3, i32])
+        arr = ArrayLiteral([10, 20, 30], Array[i32, 3])
         access = ArrayAccess(arr, 1)  # Python int
 
         assert isinstance(access.indices[0], Constant)
@@ -192,7 +192,7 @@ class TestArrayStore:
 
     def test_array_store_creation(self):
         """Test creating ArrayStore node"""
-        arr = ArrayLiteral([1, 2, 3], Array[3, i32])
+        arr = ArrayLiteral([1, 2, 3], Array[i32, 3])
         store = ArrayStore(arr, 0, 99)
 
         assert isinstance(store, ArrayStore)
@@ -204,7 +204,7 @@ class TestArrayStore:
 
     def test_array_store_with_ast_nodes(self):
         """Test ArrayStore with Value nodes"""
-        arr = ArrayLiteral([10, 20], Array[2, i32])
+        arr = ArrayLiteral([10, 20], Array[i32, 2])
         idx = Constant(1, i32)
         val = Constant(42, i32)
         store = ArrayStore(arr, idx, val)
@@ -214,12 +214,12 @@ class TestArrayStore:
 
     def test_array_store_infer_type_returns_array_type(self):
         """Test that ArrayStore returns array type"""
-        arr = ArrayLiteral([1, 2, 3], Array[3, i32])
+        arr = ArrayLiteral([1, 2, 3], Array[i32, 3])
         store = ArrayStore(arr, 0, 5)
 
         inferred = store.infer_type()
         assert isinstance(inferred, ArrayType)
-        assert inferred == Array[3, i32]
+        assert inferred == Array[i32, 3]
 
 
 # ==================== ARRAY STORE TYPE CHECKING ====================
@@ -236,7 +236,7 @@ class TestArrayStoreTypeChecking:
 
     def test_array_store_index_must_be_i32(self):
         """Test that index must be i32"""
-        arr = ArrayLiteral([1, 2], Array[2, i32])
+        arr = ArrayLiteral([1, 2], Array[i32, 2])
         float_idx = Constant(1.5, f32)
 
         with pytest.raises(TypeError, match="Array index .* must be i32"):
@@ -244,7 +244,7 @@ class TestArrayStoreTypeChecking:
 
     def test_array_store_value_type_must_match(self):
         """Test strict type matching for stored value"""
-        arr = ArrayLiteral([1, 2, 3], Array[3, i32])
+        arr = ArrayLiteral([1, 2, 3], Array[i32, 3])
 
         # Try to store float into i32 array - should fail
         with pytest.raises(TypeError, match="Cannot store f32 into Array\\[\\.\\.\\., i32\\]"):
@@ -252,7 +252,7 @@ class TestArrayStoreTypeChecking:
 
     def test_array_store_f32_array_accepts_float(self):
         """Test that f32 array accepts float values"""
-        arr = ArrayLiteral([1.0, 2.0], Array[2, f32])
+        arr = ArrayLiteral([1.0, 2.0], Array[f32, 2])
         store = ArrayStore(arr, 0, 5.5)  # Should work
 
         assert store.value.value == 5.5
@@ -260,8 +260,8 @@ class TestArrayStoreTypeChecking:
 
     def test_array_store_rejects_array_in_element(self):
         """Test that storing array into array element fails"""
-        arr = ArrayLiteral([1, 2], Array[2, i32])
-        inner = ArrayLiteral([3, 4], Array[2, i32])
+        arr = ArrayLiteral([1, 2], Array[i32, 2])
+        inner = ArrayLiteral([3, 4], Array[i32, 2])
 
         with pytest.raises(TypeError, match="Cannot store array into array element"):
             ArrayStore(arr, 0, inner)
@@ -274,7 +274,7 @@ class TestSubscriptSyntax:
 
     def test_getitem_creates_array_access(self):
         """Test that arr[i] creates ArrayAccess node"""
-        arr = ArrayLiteral([1, 2, 3], Array[3, i32])
+        arr = ArrayLiteral([1, 2, 3], Array[i32, 3])
         access = arr[1]
 
         assert isinstance(access, ArrayAccess)
@@ -283,7 +283,7 @@ class TestSubscriptSyntax:
 
     def test_setitem_creates_array_store(self):
         """Test that arr[i] = value creates ArrayStore node"""
-        arr = ArrayLiteral([1, 2, 3], Array[3, i32])
+        arr = ArrayLiteral([1, 2, 3], Array[i32, 3])
         store = arr.at[0].set(99)
 
         assert isinstance(store, ArrayStore)
@@ -293,7 +293,7 @@ class TestSubscriptSyntax:
 
     def test_subscript_type_checking_works(self):
         """Test that subscript syntax enforces type checking"""
-        arr = ArrayLiteral([1, 2, 3], Array[3, i32])
+        arr = ArrayLiteral([1, 2, 3], Array[i32, 3])
 
         # This should work
         access = arr[0]
@@ -311,7 +311,7 @@ class TestArrayGetChildren:
 
     def test_array_literal_get_children_returns_elements(self):
         """Test that ArrayLiteral.get_children() returns element nodes"""
-        arr = ArrayLiteral([1, 2, 3], Array[3, i32])
+        arr = ArrayLiteral([1, 2, 3], Array[i32, 3])
         children = arr.get_children()
 
         assert len(children) == 3
@@ -319,7 +319,7 @@ class TestArrayGetChildren:
 
     def test_array_access_get_children_returns_array_and_index(self):
         """Test that ArrayAccess.get_children() returns [array, index]"""
-        arr = ArrayLiteral([10, 20], Array[2, i32])
+        arr = ArrayLiteral([10, 20], Array[i32, 2])
         access = ArrayAccess(arr, 1)
         children = access.get_children()
 
@@ -329,7 +329,7 @@ class TestArrayGetChildren:
 
     def test_array_store_get_children_returns_all_three(self):
         """Test that ArrayStore.get_children() returns [array, index, value]"""
-        arr = ArrayLiteral([1, 2], Array[2, i32])
+        arr = ArrayLiteral([1, 2], Array[i32, 2])
         store = ArrayStore(arr, 0, 99)
         children = store.get_children()
 
@@ -346,7 +346,7 @@ class TestArrayProtobufSerialization:
 
     def test_array_literal_to_proto(self):
         """Test that ArrayLiteral.to_proto() works"""
-        arr = ArrayLiteral([1, 2, 3], Array[3, i32])
+        arr = ArrayLiteral([1, 2, 3], Array[i32, 3])
         context = SerializationContext()
         pb = arr.to_proto(context)
 
@@ -367,7 +367,7 @@ class TestArrayProtobufSerialization:
 
     def test_array_access_to_proto(self):
         """Test that ArrayAccess.to_proto() works"""
-        arr = ArrayLiteral([1, 2], Array[2, i32])
+        arr = ArrayLiteral([1, 2], Array[i32, 2])
         access = ArrayAccess(arr, 0)
         context = SerializationContext()
         pb = access.to_proto(context)
@@ -382,7 +382,7 @@ class TestArrayProtobufSerialization:
 
     def test_array_store_to_proto(self):
         """Test that ArrayStore.to_proto() works"""
-        arr = ArrayLiteral([1, 2], Array[2, i32])
+        arr = ArrayLiteral([1, 2], Array[i32, 2])
         store = ArrayStore(arr, 0, 5)
         context = SerializationContext()
         pb = store.to_proto(context)
@@ -398,7 +398,7 @@ class TestArrayProtobufSerialization:
 
     def test_array_literal_with_reuse(self):
         """Test ArrayLiteral serialization with SSA value reuse"""
-        arr = ArrayLiteral([1, 2, 3], Array[3, i32])
+        arr = ArrayLiteral([1, 2, 3], Array[i32, 3])
 
         # Use to_proto_with_reuse (which handles SSA value reuse)
         pb = arr.to_proto_with_reuse()
@@ -408,7 +408,7 @@ class TestArrayProtobufSerialization:
 
     def test_nested_array_operations_to_proto(self):
         """Test serialization of nested array operations"""
-        arr = ArrayLiteral([10, 20, 30], Array[3, i32])
+        arr = ArrayLiteral([10, 20, 30], Array[i32, 3])
         access = ArrayAccess(arr, 1)
 
         # Serialize the access (which contains the array literal)
@@ -428,24 +428,24 @@ class TestArrayTypeIntegration:
     """Test that Array[N, T]([...]) syntax works end-to-end"""
 
     def test_array_type_call_creates_array_literal(self):
-        """Test that Array[4, i32]([1,2,3,4]) creates ArrayLiteral"""
-        arr = Array[4, i32]([1, 2, 3, 4])
+        """Test that Array[i32, 4]([1,2,3,4]) creates ArrayLiteral"""
+        arr = Array[i32, 4]([1, 2, 3, 4])
 
         assert isinstance(arr, ArrayLiteral)
-        assert arr.array_type == Array[4, i32]
+        assert arr.array_type == Array[i32, 4]
         assert len(arr.elements) == 4
 
     def test_array_construction_validates_types(self):
         """Test that Array construction validates element types"""
         # This should fail - float elements in i32 array
         with pytest.raises(TypeError, match="type mismatch"):
-            Array[3, i32]([1.0, 2.0, 3.0])
+            Array[i32, 3]([1.0, 2.0, 3.0])
 
     def test_array_construction_validates_size(self):
         """Test that Array construction validates size"""
         # This should fail - 2 elements when 3 expected
-        with pytest.raises(TypeError, match="size mismatch"):
-            Array[3, i32]([1, 2])
+        with pytest.raises(TypeError, match="expected 3 elements, got 2"):
+            Array[i32, 3]([1, 2])
 
 
 if __name__ == "__main__":

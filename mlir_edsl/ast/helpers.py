@@ -60,37 +60,64 @@ class _AtSetter:
         self._index = index
 
     def set(self, value):
-        """Functional array update - returns new array with element set
+        """Functional update - returns new array/tensor with element set
 
-        This creates an ArrayStore node representing the updated array.
-        Since MLIR uses SSA (Static Single Assignment), arrays are immutable,
-        so this returns a new array rather than modifying the original.
+        This creates an ArrayStore or TensorInsert node representing the
+        updated container. Since MLIR uses SSA (Static Single Assignment),
+        arrays/tensors are immutable, so this returns a new value rather
+        than modifying the original.
 
         Args:
             value: The value to store (can be Python literal or Value node)
 
         Returns:
-            ArrayStore node representing the updated array
+            ArrayStore or TensorInsert node representing the updated container
 
         Example:
-            arr = Array[4, i32]([1, 2, 3, 4])
+            arr = Array[i32, 4]([1, 2, 3, 4])
             arr = arr.at[1].set(99)  # Returns new array [1, 99, 3, 4]
+
+            t = Tensor[i32, 4]([1, 2, 3, 4])
+            t = t.at[1].set(99)  # Returns new tensor [1, 99, 3, 4]
         """
         # Import here to avoid circular dependency
-        from .nodes.arrays import ArrayStore
-        return ArrayStore(self._array, self._index, value)
+        from ..types import TensorType, ArrayType
+        container_type = self._array.infer_type()
+
+        if isinstance(container_type, TensorType):
+            from .nodes.tensors import TensorInsert
+            return TensorInsert(self._array, self._index, value)
+        elif isinstance(container_type, ArrayType):
+            from .nodes.arrays import ArrayStore
+            return ArrayStore(self._array, self._index, value)
+        else:
+            raise TypeError(
+                f".at[].set() requires array or tensor, got {container_type}"
+            )
 
     def get(self):
-        """Explicit element access: arr.at[i].get()
+        """Explicit element access: container.at[i].get()
 
-        This is equivalent to arr[i] but follows the .at[] convention.
+        This is equivalent to container[i] but follows the .at[] convention.
 
         Returns:
-            ArrayAccess node for reading the element
+            ArrayAccess or TensorExtract node for reading the element
 
         Example:
             value = arr.at[1].get()  # Same as arr[1]
+            value = t.at[1].get()    # Same as t[1]
         """
         # Import here to avoid circular dependency
-        from .nodes.arrays import ArrayAccess
-        return ArrayAccess(self._array, self._index)
+        from ..types import TensorType, ArrayType
+        container_type = self._array.infer_type()
+
+        if isinstance(container_type, TensorType):
+            from .nodes.tensors import TensorExtract
+            return TensorExtract(self._array, self._index)
+        elif isinstance(container_type, ArrayType):
+            from .nodes.arrays import ArrayAccess
+            return ArrayAccess(self._array, self._index)
+        else:
+            raise TypeError(
+                f".at[].get() requires array or tensor, got {container_type}"
+            )

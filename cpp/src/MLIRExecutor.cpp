@@ -3,9 +3,7 @@
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/IRReader/IRReader.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar/GVN.h"
@@ -18,16 +16,14 @@
 namespace mlir_edsl {
 
 MLIRExecutor::MLIRExecutor() {
-  context = std::make_unique<llvm::LLVMContext>();
   jit = nullptr;
   initialized = false;
-  lastError = "";
   optimizationLevel = OptLevel::O2;
 }
 
-bool MLIRExecutor::initialize() {
+void MLIRExecutor::initialize() {
   if (initialized) {
-    return true;
+    return;
   }
 
   llvm::InitializeNativeTarget();
@@ -36,29 +32,17 @@ bool MLIRExecutor::initialize() {
 
   auto jitOrError = llvm::orc::LLJITBuilder().create();
   if (!jitOrError) {
-    lastError = "Failed to create LLJIT";
-    return false;
+    throw std::runtime_error("Failed to create LLJIT");
   }
 
   jit = std::move(jitOrError.get());
   initialized = true;
-
-  return true;
 }
 
-bool MLIRExecutor::compileModule(const std::string &llvmIR) {
-  if (!initialize()) {
-    return false;
-  }
-
-  llvm::SMDiagnostic error;
-  auto buffer = llvm::MemoryBuffer::getMemBuffer(llvmIR);
-  auto module = llvm::parseIR(*buffer, error, *context);
-
-  if (!module) {
-    lastError = "Failed to parse LLVM IR";
-    return false;
-  }
+void MLIRExecutor::compileModule(std::unique_ptr<llvm::Module> module,
+                                 std::unique_ptr<llvm::LLVMContext> context,
+                                 const std::vector<std::string> &functionNames) {
+  initialize();
 
   // Save unoptimized LLVM IR if SAVE_IR environment variable is set
   const bool saveIR = std::getenv("SAVE_IR") != nullptr;
@@ -83,71 +67,47 @@ bool MLIRExecutor::compileModule(const std::string &llvmIR) {
     }
   }
 
-  auto tsm = llvm::orc::ThreadSafeModule(std::move(module),
-                                         std::make_unique<llvm::LLVMContext>());
+  auto tsm = llvm::orc::ThreadSafeModule(std::move(module), std::move(context));
 
   auto err = jit->addIRModule(std::move(tsm));
   if (err) {
-    lastError = "Failed to add module to JIT";
-    return false;
+    throw std::runtime_error("Failed to add module to JIT");
   }
 
-  // Lookup and cache function pointers for all registered signatures
-  for (const auto& [name, sig] : signatures) {
+  // Lookup and cache function pointers for requested names
+  for (const auto& name : functionNames) {
     auto symbolOrError = jit->lookup(name);
-    if (symbolOrError) {
-      functionPointers[name] = (void*)symbolOrError->getValue();
+    if (!symbolOrError) {
+      std::string errMsg;
+      llvm::raw_string_ostream os(errMsg);
+      os << symbolOrError.takeError();
+      throw std::runtime_error("JIT lookup failed for '" + name + "': " + errMsg);
     }
+    functionPointers[name] = (void*)symbolOrError->getValue();
   }
-
-  return true;
-}
-
-void MLIRExecutor::registerFunctionSignature(const mlir_edsl::FunctionSignature &signature) {
-  // Store signature by function name
-  signatures[signature.name()] = signature;
 }
 
 uintptr_t MLIRExecutor::getFunctionPointer(const std::string &name) {
   auto it = functionPointers.find(name);
   if (it == functionPointers.end()) {
-    lastError = "Function not compiled: " + name;
-    throw std::runtime_error(lastError);
+    throw std::runtime_error("Function not compiled: " + name);
   }
   return reinterpret_cast<uintptr_t>(it->second);
-}
-
-std::string MLIRExecutor::getFunctionSignature(const std::string &name) const {
-  auto it = signatures.find(name);
-  if (it == signatures.end()) {
-    throw std::runtime_error("Function signature not found: " + name);
-  }
-
-  // Return serialized protobuf
-  return it->second.SerializeAsString();
 }
 
 void MLIRExecutor::setOptimizationLevel(OptLevel level) {
   optimizationLevel = level;
 }
 
-void MLIRExecutor::clearJit() {
+void MLIRExecutor::clear() {
   if (initialized) {
-    // Create a fresh JIT instance
     auto jitOrError = llvm::orc::LLJITBuilder().create();
-    if (jitOrError) {
-      jit = std::move(jitOrError.get());
-    } else {
-      lastError = "Failed to recreate LLJIT";
+    if (!jitOrError) {
+      throw std::runtime_error("Failed to recreate LLJIT");
     }
+    jit = std::move(jitOrError.get());
   }
   functionPointers.clear();
-  // Note: signatures NOT cleared - they persist across JIT recompilations
-}
-
-void MLIRExecutor::clearAll() {
-  clearJit();
-  signatures.clear();
 }
 
 void MLIRExecutor::optimizeModule(llvm::Module *module) {

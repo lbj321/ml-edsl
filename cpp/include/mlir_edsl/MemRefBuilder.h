@@ -44,9 +44,7 @@ private:
   SCFBuilder *scfBuilder;     // For loop operations
 
   /// Helper: Build loop body for array binary operations
-  void buildArrayBinaryOpElement(mlir::OpBuilder &loopBuilder,
-                                 mlir::Location loc,
-                                 llvm::ArrayRef<mlir::Value> indices,
+  void buildArrayBinaryOpElement(llvm::ArrayRef<mlir::Value> indices,
                                  mlir::Value left, mlir::Value right,
                                  BroadcastMode broadcastMode,
                                  mlir_edsl::BinaryOpType opType,
@@ -60,17 +58,13 @@ private:
   /// constants at the current scope before entering any loops.
   void buildNestedForLoops(llvm::ArrayRef<int64_t> shape,
                            llvm::SmallVectorImpl<mlir::Value> &indices,
-                           std::function<void(mlir::OpBuilder &, mlir::Location,
-                                              llvm::ArrayRef<mlir::Value>)>
-                               bodyFn);
+                           std::function<void(llvm::ArrayRef<mlir::Value>)> bodyFn);
 
   /// Recursive emitter: emits scf.for at dimension `dim` using pre-built
   /// loop bound constants, then recurses for inner dimensions.
   void emitNestedForLoops(llvm::ArrayRef<int64_t> shape, int dim,
                           llvm::SmallVectorImpl<mlir::Value> &indices,
-                          std::function<void(mlir::OpBuilder &, mlir::Location,
-                                             llvm::ArrayRef<mlir::Value>)>
-                              bodyFn,
+                          std::function<void(llvm::ArrayRef<mlir::Value>)> bodyFn,
                           mlir::Value c0, mlir::Value c1,
                           llvm::ArrayRef<mlir::Value> dimSizes);
 };

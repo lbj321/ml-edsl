@@ -1,6 +1,8 @@
 #include "mlir_edsl/MLIRLowering.h"
 
-#include <iostream>
+#include <stdexcept>
+
+#include "mlir/IR/OwningOpRef.h"
 
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -10,17 +12,55 @@
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
+#include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Bufferization/Transforms/Passes.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Pass/Pass.h"
+#include "mlir/Dialect/SCF/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Pass/PassInstrumentation.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/Passes.h"
 #include "llvm/Support/raw_ostream.h"
+
+namespace {
+
+class IRSnapshotInstrumentation : public mlir::PassInstrumentation {
+public:
+  using SnapshotList = std::vector<std::pair<std::string, std::string>>;
+
+  explicit IRSnapshotInstrumentation(SnapshotList *snapshots)
+      : snapshots(snapshots) {}
+
+  void runAfterPass(mlir::Pass *pass, mlir::Operation *op) override {
+    std::string ir;
+    llvm::raw_string_ostream os(ir);
+    // Walk up to module root for consistent full-module snapshots
+    mlir::Operation *root = op;
+    while (root->getParentOp())
+      root = root->getParentOp();
+    root->print(os);
+    // Prefer human-readable pass argument name, fall back to class name
+    std::string passName = pass->getArgument().str();
+    if (passName.empty())
+      passName = pass->getName().str();
+    snapshots->emplace_back(std::move(passName), std::move(ir));
+  }
+
+private:
+  SnapshotList *snapshots;
+};
+
+} // anonymous namespace
 
 namespace mlir_edsl {
 
@@ -31,8 +71,10 @@ MLIRLowering::MLIRLowering()
   setupLoweringPipeline();
 }
 
-MLIRLowering::MLIRLowering(mlir::MLIRContext *sharedContext)
-    : context(nullptr), passManager(sharedContext) {
+MLIRLowering::MLIRLowering(mlir::MLIRContext *sharedContext,
+                           bool captureSnapshots)
+    : context(nullptr), passManager(sharedContext),
+      snapshotsEnabled(captureSnapshots) {
   registerRequiredDialects(sharedContext);
   setupLoweringPipeline();
 }
@@ -47,7 +89,19 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   context->getOrLoadDialect<mlir::memref::MemRefDialect>();
   context->getOrLoadDialect<mlir::scf::SCFDialect>();
   context->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
+  context->getOrLoadDialect<mlir::tensor::TensorDialect>();
+  context->getOrLoadDialect<mlir::bufferization::BufferizationDialect>();
   context->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+
+  // Register bufferizable op interfaces (tells one-shot-bufferize how to
+  // convert each op)
+  mlir::DialectRegistry registry;
+  mlir::arith::registerBufferizableOpInterfaceExternalModels(registry);
+  mlir::tensor::registerBufferizableOpInterfaceExternalModels(registry);
+  mlir::scf::registerBufferizableOpInterfaceExternalModels(registry);
+  mlir::bufferization::func_ext::registerBufferizableOpInterfaceExternalModels(
+      registry);
+  context->appendDialectRegistry(registry);
 
   // Register LLVM translation interfaces
   mlir::registerLLVMDialectTranslation(*context);
@@ -55,12 +109,26 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
 }
 
 void MLIRLowering::setupLoweringPipeline() {
-  passManager.enableTiming();
   passManager.enableVerifier(true);
+  if (snapshotsEnabled) {
+    passManager.addInstrumentation(
+        std::make_unique<IRSnapshotInstrumentation>(&snapshots));
+  }
 }
 
 void MLIRLowering::addConversionPasses() {
-  // First lower SCF to ControlFlow dialect
+  // Bufferize tensor ops to memref ops
+  passManager.addPass(mlir::bufferization::createOneShotBufferizePass());
+
+  // Insert deallocs for buffers created during bufferization
+  passManager.addPass(
+      mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
+  passManager.addPass(mlir::createCanonicalizerPass());
+  passManager.addPass(
+      mlir::bufferization::createBufferDeallocationSimplificationPass());
+  passManager.addPass(mlir::bufferization::createLowerDeallocationsPass());
+
+  // Lower SCF to ControlFlow dialect
   passManager.addPass(mlir::createSCFToControlFlowPass());
 
   // Then lower everything to LLVM
@@ -73,53 +141,33 @@ void MLIRLowering::addConversionPasses() {
 }
 
 bool MLIRLowering::runLoweringPipeline(mlir::ModuleOp module) {
-  const bool debug = std::getenv("MLIR_DEBUG") != nullptr;
-
-  if (debug) {
-    std::cerr << "=== BEFORE LOWERING ===\n";
-    module.print(llvm::errs());
-    std::cerr << "\n========================\n";
-  }
-
   passManager.clear();
   addConversionPasses();
+  return mlir::succeeded(passManager.run(module));
+}
 
-  if (mlir::failed(passManager.run(module))) {
-    std::cerr << "Failed to run lowering pipeline\n";
-    if (debug) {
-      std::cerr << "=== MODULE AFTER FAILED LOWERING ===\n";
-      module.print(llvm::errs());
-      std::cerr << "\n==================================\n";
-    }
-    return false;
+LoweredModule MLIRLowering::lowerToLLVMModule(mlir::ModuleOp module) {
+  mlir::OwningOpRef<mlir::ModuleOp> clonedModule = module.clone();
+
+  if (!runLoweringPipeline(*clonedModule)) {
+    throw std::runtime_error("Lowering pipeline failed");
   }
 
-  if (debug) {
-    std::cerr << "=== AFTER SUCCESSFUL LOWERING ===\n";
-    module.print(llvm::errs());
-    std::cerr << "\n===============================\n";
+  auto llvmContext = std::make_unique<llvm::LLVMContext>();
+  auto llvmModule = mlir::translateModuleToLLVMIR(*clonedModule, *llvmContext);
+
+  if (!llvmModule) {
+    throw std::runtime_error("Translation to LLVM IR failed");
   }
 
-  return true;
+  return {std::move(llvmModule), std::move(llvmContext)};
 }
 
 std::string MLIRLowering::lowerToLLVMIR(mlir::ModuleOp module) {
-  mlir::ModuleOp clonedModule = module.clone();
-
-  if (!runLoweringPipeline(clonedModule)) {
-    return "ERROR: Lowering pipeline failed";
-  }
-
-  llvm::LLVMContext llvmContext;
-  auto llvmModule = mlir::translateModuleToLLVMIR(clonedModule, llvmContext);
-
-  if (!llvmModule) {
-    return "ERROR: Translation to LLVM IR failed";
-  }
-
+  auto lowered = lowerToLLVMModule(module);
   std::string result;
   llvm::raw_string_ostream stream(result);
-  llvmModule->print(stream, nullptr);
+  lowered.module->print(stream, nullptr);
   return result;
 }
 

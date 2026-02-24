@@ -10,7 +10,15 @@ add_library(mlir_edsl_core STATIC
     src/builders/ArithBuilder.cpp
     src/builders/SCFBuilder.cpp
     src/builders/MemRefBuilder.cpp
+    src/builders/TensorBuilder.cpp
 )
+
+# MLIRLowering subclasses mlir::PassInstrumentation which requires -fno-rtti
+# to match LLVM's build. Other files use pybind11 which requires RTTI.
+if(NOT LLVM_ENABLE_RTTI)
+    set_source_files_properties(src/MLIRLowering.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+endif()
 
 target_include_directories(mlir_edsl_core PUBLIC
     include
@@ -30,9 +38,10 @@ target_link_libraries(mlir_edsl_core PUBLIC
     pybind11::pybind11
 )
 
-# JIT Executor component
+# JIT Executor and Compiler component
 add_library(mlir_edsl_executor STATIC
     src/MLIRExecutor.cpp
+    src/MLIRCompiler.cpp
 )
 
 target_include_directories(mlir_edsl_executor PUBLIC
@@ -43,7 +52,6 @@ target_include_directories(mlir_edsl_executor PUBLIC
 target_include_mlir_directories(mlir_edsl_executor)
 target_link_mlir_libraries(mlir_edsl_executor)
 
-# Executor now needs protobuf for FunctionSignature
 target_link_libraries(mlir_edsl_executor PUBLIC
     mlir_edsl_core
 )

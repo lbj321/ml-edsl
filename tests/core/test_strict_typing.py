@@ -10,13 +10,11 @@ This test suite validates the strict typing enforcement:
 import pytest
 from mlir_edsl import ml_function, add, sub, mul, div, cast
 from mlir_edsl import i32, f32, i1
-from mlir_edsl.backend import HAS_CPP_BACKEND
-from tests.test_base import MLIRTestBase
 
 
 # ==================== TYPE HINT VALIDATION ====================
 
-class TestTypeHintValidation(MLIRTestBase):
+class TestTypeHintValidation:
     """Test type hint validation"""
 
     def test_missing_parameter_type_hint(self):
@@ -44,7 +42,7 @@ class TestTypeHintValidation(MLIRTestBase):
 
 # ==================== PYTHON TYPE HINTS (int, float, bool) ====================
 
-class TestPythonTypeHints(MLIRTestBase):
+class TestPythonTypeHints:
     """Test Python type hints (int, float, bool)"""
 
     def test_python_int_type_hint(self):
@@ -77,7 +75,7 @@ class TestPythonTypeHints(MLIRTestBase):
 
 # ==================== MLIR TYPE HINTS (i32, f32, i1) ====================
 
-class TestMLIRTypeHints(MLIRTestBase):
+class TestMLIRTypeHints:
     """Test MLIR type hints (i32, f32, i1)"""
 
     def test_mlir_i32_type_hint(self):
@@ -118,7 +116,7 @@ class TestMLIRTypeHints(MLIRTestBase):
 
 # ==================== STRICT TYPE MATCHING ====================
 
-class TestStrictTypeMatching(MLIRTestBase):
+class TestStrictTypeMatching:
     """Test strict type matching"""
 
     def test_strict_type_mismatch_add(self):
@@ -153,7 +151,7 @@ class TestStrictTypeMatching(MLIRTestBase):
 
 # ==================== EXPLICIT CAST OPERATIONS ====================
 
-class TestExplicitCastOperations(MLIRTestBase):
+class TestExplicitCastOperations:
     """Test explicit cast operations"""
 
     def test_cast_int_to_float(self):
@@ -205,7 +203,7 @@ class TestExplicitCastOperations(MLIRTestBase):
 
 # ==================== RETURN TYPE VALIDATION ====================
 
-class TestReturnTypeValidation(MLIRTestBase):
+class TestReturnTypeValidation:
     """Test return type validation"""
 
     def test_return_type_mismatch_int_declared_float_returned(self):
@@ -239,7 +237,7 @@ class TestReturnTypeValidation(MLIRTestBase):
 
 # ==================== COMPLEX TYPE SCENARIOS ====================
 
-class TestComplexTypeScenarios(MLIRTestBase):
+class TestComplexTypeScenarios:
     """Test complex type scenarios"""
 
     def test_complex_expression_with_casts(self):
@@ -275,19 +273,18 @@ class TestComplexTypeScenarios(MLIRTestBase):
 
         @ml_function
         def loop_strict(n: int) -> int:
-            # For loop with all i32 values
-            return For(start=0, end=n, init=0, operation="add", step=1)
+            # For loop with lambda body, all i32 values
+            return For(start=0, end=n, init=0, body=lambda i, acc: acc + i, step=1)
 
         assert loop_strict is not None
 
 
 # ==================== RUNTIME VALUE VALIDATION ====================
 
-class TestRuntimeValueValidation(MLIRTestBase):
+class TestRuntimeValueValidation:
     """Test runtime value validation"""
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
-    def test_runtime_value_type_mismatch(self):
+    def test_runtime_value_type_mismatch(self, backend):
         """Test that passing wrong runtime type raises error"""
         @ml_function
         def expects_int(x: int) -> int:
@@ -297,9 +294,7 @@ class TestRuntimeValueValidation(MLIRTestBase):
         with pytest.raises(TypeError, match="expects int/i32"):
             expects_int(3.14)
 
-
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
-    def test_runtime_value_type_match(self):
+    def test_runtime_value_type_match(self, backend):
         """Test that correct runtime types work"""
         @ml_function
         def expects_int(x: int) -> int:
@@ -312,11 +307,10 @@ class TestRuntimeValueValidation(MLIRTestBase):
 
 # ==================== CAST WITH BACKEND EXECUTION ====================
 
-class TestCastWithBackendExecution(MLIRTestBase):
+class TestCastWithBackendExecution:
     """Test cast with backend execution"""
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
-    def test_cast_execution_int_to_float(self):
+    def test_cast_execution_int_to_float(self, backend):
         """Test cast execution with C++ backend - int to float"""
         @ml_function
         def cast_float_exec(x: int) -> float:
@@ -326,9 +320,7 @@ class TestCastWithBackendExecution(MLIRTestBase):
         assert isinstance(result, float)
         assert result == 42.0
 
-
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
-    def test_cast_execution_float_to_int(self):
+    def test_cast_execution_float_to_int(self, backend):
         """Test cast execution with C++ backend - float to int"""
         @ml_function
         def cast_int_exec(x: float) -> int:
@@ -338,8 +330,7 @@ class TestCastWithBackendExecution(MLIRTestBase):
         assert isinstance(result, int)
         assert result == 3  # Truncates
 
-    @pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend for execution")
-    def test_cast_in_arithmetic_execution(self):
+    def test_cast_in_arithmetic_execution(self, backend):
         """Test cast used in arithmetic operations"""
         @ml_function
         def mixed_arithmetic(x: int, y: float) -> float:
@@ -353,7 +344,7 @@ class TestCastWithBackendExecution(MLIRTestBase):
 
 # ==================== ERROR MESSAGE QUALITY ====================
 
-class TestErrorMessageQuality(MLIRTestBase):
+class TestErrorMessageQuality:
     """Test error message quality"""
 
     def test_error_message_shows_hint(self):

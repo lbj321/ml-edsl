@@ -49,9 +49,30 @@ def _to_scalar_node(value):
         raise TypeError(f"Invalid value: {value}")
 
 
+def _validate_and_flatten(elements, shape, path=""):
+    """Recursively validate nested list structure and flatten to row-major order.
+
+    Works for any number of dimensions (1D, 2D, 3D, ...).
+    """
+    if len(shape) == 0:
+        return [elements]
+
+    expected = shape[0]
+    if not isinstance(elements, list) or len(elements) != expected:
+        actual = len(elements) if isinstance(elements, list) else "non-list"
+        raise TypeError(
+            f"{path or 'Array'}: expected {expected} elements, got {actual}"
+        )
+
+    flat = []
+    for i, elem in enumerate(elements):
+        flat.extend(_validate_and_flatten(elem, shape[1:], f"{path}[{i}]"))
+    return flat
+
+
 class ArrayLiteral(Value):
     """
-    Array creation: Array[4, i32]([1, 2, 3, 4])
+    Array creation: Array[i32, 4]([1, 2, 3, 4])
 
     Compile-time type checking:
     - Validates size matches number of elements
@@ -68,63 +89,8 @@ class ArrayLiteral(Value):
         self._validate_element_types()
 
     def _validate_size(self):
-        """Ensure number of elements matches declared shape and flatten nested lists"""
-        if self.array_type.ndim == 1:
-            # 1D: elements should be flat list
-            if len(self.elements) != self.array_type.shape[0]:
-                raise TypeError(
-                    f"Array size mismatch: declared Array[{self.array_type.shape[0]}, ...] "
-                    f"but got {len(self.elements)} elements"
-                )
-        elif self.array_type.ndim == 2:
-            # 2D: elements should be nested list [[...], [...]]
-            self.elements = self._validate_and_flatten_2d(self.elements)
-        elif self.array_type.ndim == 3:
-            # 3D: elements should be triply nested list [[[...]], [[...]]]
-            self.elements = self._validate_and_flatten_3d(self.elements)
-
-    def _validate_and_flatten_2d(self, elements):
-        """Validate 2D structure and flatten to row-major order"""
-        rows, cols = self.array_type.shape
-
-        if not isinstance(elements, list) or len(elements) != rows:
-            raise TypeError(
-                f"2D array expects {rows} rows, got {len(elements) if isinstance(elements, list) else 'non-list'}"
-            )
-
-        flat = []
-        for i, row in enumerate(elements):
-            if not isinstance(row, list) or len(row) != cols:
-                raise TypeError(
-                    f"Row {i}: expected {cols} elements, got {len(row) if isinstance(row, list) else 'non-list'}"
-                )
-            flat.extend(row)
-
-        return flat
-
-    def _validate_and_flatten_3d(self, elements):
-        """Validate 3D structure and flatten to row-major order"""
-        d0, d1, d2 = self.array_type.shape
-
-        if not isinstance(elements, list) or len(elements) != d0:
-            raise TypeError(
-                f"3D array expects {d0} matrices, got {len(elements) if isinstance(elements, list) else 'non-list'}"
-            )
-
-        flat = []
-        for i, matrix in enumerate(elements):
-            if not isinstance(matrix, list) or len(matrix) != d1:
-                raise TypeError(
-                    f"Matrix {i}: expected {d1} rows, got {len(matrix) if isinstance(matrix, list) else 'non-list'}"
-                )
-            for j, row in enumerate(matrix):
-                if not isinstance(row, list) or len(row) != d2:
-                    raise TypeError(
-                        f"Matrix {i}, row {j}: expected {d2} elements, got {len(row) if isinstance(row, list) else 'non-list'}"
-                    )
-                flat.extend(row)
-
-        return flat
+        """Ensure number of elements matches declared shape and flatten nested lists."""
+        self.elements = _validate_and_flatten(self.elements, self.array_type.shape)
 
     def _validate_element_types(self):
         """Ensure all elements match the declared element type (strict!)"""

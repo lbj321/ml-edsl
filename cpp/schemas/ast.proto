@@ -14,8 +14,8 @@ message TypeSpec {
   oneof type_kind {
     ScalarTypeSpec scalar = 1;
     MemRefTypeSpec memref = 2;
+    TensorTypeSpec tensor = 3;
     // Future extensions:
-    // TensorTypeSpec tensor = 3;
     // TupleTypeSpec tuple = 4;
     // ComplexTypeSpec complex = 5;
   }
@@ -45,6 +45,12 @@ message MemRefTypeSpec {
   // Future extensions for advanced memref features:
   // MemRefLayout layout = 3;      // Strided layouts, affine maps
   // MemorySpace memory_space = 4; // GPU global, shared, etc.
+}
+
+// Tensor type specification (value-semantic, immutable)
+message TensorTypeSpec {
+  repeated int64 shape = 1;        // Shape: [4] for 1D, [2,3] for 2D. Use -1 for dynamic dims.
+  TypeSpec element_type = 2;       // Element type
 }
 
 // ============================================================================
@@ -113,6 +119,7 @@ message ASTNode {
     ControlFlowNode control_flow = 3;
     FunctionNode function = 4;
     BindingNode binding = 5;
+    TensorNode tensor = 6;
   }
 }
 
@@ -136,11 +143,23 @@ message ArrayNode {
   }
 }
 
+// Tensor operations (value-semantic)
+message TensorNode {
+  oneof value {
+    TensorFromElements from_elements = 1;
+    TensorExtract extract = 2;
+    TensorInsert insert = 3;
+    TensorEmpty empty = 4;
+  }
+}
+
 // Control flow operations
 message ControlFlowNode {
   oneof value {
     IfOp if_op = 1;
     ForLoopOp for_loop = 2;
+    ForIndex for_index = 3;
+    ForIterArg for_iter_arg = 4;
   }
 }
 
@@ -215,14 +234,29 @@ message CastOp {
 // CONTROL FLOW
 // ============================================================================
 
-// For loop operation (scf.for)
+// For loop operation (scf.for) with lambda body
 message ForLoopOp {
   ASTNode start = 1;          // Loop start bound (inclusive)
   ASTNode end = 2;            // Loop end bound (exclusive)
   ASTNode step = 3;           // Loop step/increment
   ASTNode init_value = 4;     // Initial accumulator value
-  BinaryOpType operation = 5; // Loop body operation
-  TypeSpec result_type = 6;   // Result type (validated by Python)
+  reserved 5;                  // Was: BinaryOpType operation (removed)
+  TypeSpec result_type = 6;    // Result type (validated by Python)
+  reserved 7;                  // Was: loop_id (removed)
+  ASTNode body = 8;            // Lambda body AST (references ForIndex/ForIterArg nodes)
+  int64 index_node_id = 9;     // ForIndex placeholder node ID → injected as %iv in body
+  int64 iter_arg_node_id = 10; // ForIterArg placeholder node ID → injected as %iter_arg in body
+}
+
+// For loop induction variable placeholder (leaf node, resolved at IR build time)
+message ForIndex {
+  int64 node_id = 1;          // Matches ForLoopOp.index_node_id; resolved to %iv in valueCache
+}
+
+// For loop iter_arg placeholder (leaf node, resolved at IR build time)
+message ForIterArg {
+  int64 node_id = 1;          // Matches ForLoopOp.iter_arg_node_id; resolved to %iter_arg in valueCache
+  int32 arg_index = 2;        // Which iter_arg (0 for single accumulator)
 }
 
 // ============================================================================
@@ -257,6 +291,37 @@ message ArrayBinaryOp {
   ASTNode right = 3;              // Right operand (array or scalar)
   TypeSpec result_type = 4;       // Result type (MemRefTypeSpec)
   BroadcastMode broadcast = 5;    // Broadcasting mode
+}
+
+// ============================================================================
+// TENSORS (Value-semantic)
+// ============================================================================
+
+// Create tensor from scalar elements: tensor.from_elements
+message TensorFromElements {
+  TypeSpec type = 1;                // Tensor type (TensorTypeSpec)
+  repeated ASTNode elements = 2;   // Scalar elements
+}
+
+// Extract scalar from tensor: tensor.extract
+message TensorExtract {
+  ASTNode tensor = 1;              // Tensor to extract from
+  repeated ASTNode indices = 2;    // Index values
+  TypeSpec result_type = 3;        // Element type (ScalarTypeSpec)
+}
+
+// Insert scalar into tensor: tensor.insert (returns NEW tensor)
+message TensorInsert {
+  ASTNode tensor = 1;              // Tensor to insert into
+  repeated ASTNode indices = 2;    // Index values
+  ASTNode value = 3;               // Value to insert
+  TypeSpec result_type = 4;        // Result tensor type (TensorTypeSpec)
+}
+
+// Create uninitialized tensor: tensor.empty
+message TensorEmpty {
+  TypeSpec type = 1;               // Tensor type (TensorTypeSpec with shape + element type)
+  repeated ASTNode dynamic_dims = 2; // Runtime values for dynamic (?) dimensions, in order
 }
 
 // ============================================================================

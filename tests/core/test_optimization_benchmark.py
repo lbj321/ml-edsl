@@ -10,15 +10,12 @@ This test suite validates:
 import time
 import pytest
 from mlir_edsl import ml_function, add, sub, mul, div
-from mlir_edsl.backend import HAS_CPP_BACKEND, get_backend
-from tests.test_base import MLIRTestBase
 
 
-@pytest.mark.skipif(not HAS_CPP_BACKEND, reason="Requires C++ backend")
-class TestOptimizationLevels(MLIRTestBase):
+class TestOptimizationLevels:
     """Test LLVM optimization levels"""
 
-    def test_optimization_correctness(self):
+    def test_optimization_correctness(self, backend):
         """Ensure optimization doesn't change computation results"""
         @ml_function
         def float_calc(a: float, b: float, c: float, d: float) -> float:
@@ -27,15 +24,13 @@ class TestOptimizationLevels(MLIRTestBase):
             add_result = add(mul_result, c)  # 10.0 + 1.5 = 11.5
             return sub(add_result, d)   # 11.5 - 0.5 = 11.0
 
-        backend = get_backend()
-
         # Test each optimization level gives same result
         for opt_level in [0, 2, 3]:
             backend.set_optimization_level(opt_level)
             result = float_calc(2.5, 4.0, 1.5, 0.5)
             assert abs(result - 11.0) < 1e-6, f"O{opt_level} gave incorrect result: {result}"
 
-    def test_optimization_with_constants(self):
+    def test_optimization_with_constants(self, backend):
         """Test that optimization handles constant expressions correctly"""
         @ml_function
         def const_expr() -> int:
@@ -45,15 +40,13 @@ class TestOptimizationLevels(MLIRTestBase):
             mul_result = mul(add_result, sub_result)  # 75
             return div(mul_result, 2)    # 37
 
-        backend = get_backend()
-
         # Test O0 vs O2 vs O3
         for opt_level in [0, 2, 3]:
             backend.set_optimization_level(opt_level)
             result = const_expr()
             assert result == 37, f"O{opt_level} gave incorrect result: {result}"
 
-    def test_optimization_performance_comparison(self):
+    def test_optimization_performance_comparison(self, backend):
         """Compare performance across optimization levels"""
         @ml_function
         def complex_calc(a: int, b: int, c: int, d: int, e: int) -> int:
@@ -64,7 +57,6 @@ class TestOptimizationLevels(MLIRTestBase):
             mul_result = mul(add_result, sub_result)
             return div(mul_result, e)
 
-        backend = get_backend()
         iterations = 10000
 
         results = {}
@@ -95,14 +87,12 @@ class TestOptimizationLevels(MLIRTestBase):
         # Verify times are positive (sanity check)
         assert all(t > 0 for t, _ in results.values())
 
-    def test_optimization_constant_folding(self):
+    def test_optimization_constant_folding(self, backend):
         """Test that optimization performs constant folding"""
         @ml_function
         def simple_const() -> int:
             # Simple constant that should be folded: 4 + 6 = 10
             return add(4, 6)
-
-        backend = get_backend()
 
         # Test both O0 and O2
         for opt_level in [0, 2]:

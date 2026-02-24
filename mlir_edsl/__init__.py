@@ -8,10 +8,10 @@ Phase 3: C++ MLIR Backend
 - Fallback to string-based generation if C++ backend unavailable
 """
 
-from .types import i32, f32, i1, Array
+from .types import i32, f32, i1, DYN, Array, Tensor
 from .ops import add, sub, mul, div, lt, le, gt, ge, eq, ne, If, For, cast, call
 from .functions import ml_function
-from .ast import Value, Constant, BinaryOp, CastOp, ArrayLiteral, ArrayAccess, ArrayStore
+from .ast import Value, Constant, BinaryOp, CastOp, ArrayLiteral, ArrayAccess, ArrayStore, TensorFromElements, TensorExtract, TensorInsert
 from . import ast_pb2
 
 # Binary operation constants (from protobuf schema)
@@ -52,7 +52,9 @@ __all__ = [
 
     # Type system
     "i32", "f32", "i1",  # Scalar types
+    "DYN",                # Dynamic dimension sentinel
     "Array",              # Array type constructor
+    "Tensor",             # Tensor type constructor
 
     # Arithmetic operations
     "add", "sub", "mul", "div", "cast",
@@ -82,4 +84,7 @@ __all__ = [
     "ArrayLiteral",
     "ArrayAccess",
     "ArrayStore",
+    "TensorFromElements",
+    "TensorExtract",
+    "TensorInsert",
 ] + __all_cpp__

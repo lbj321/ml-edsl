@@ -9,13 +9,12 @@ flowchart TD
     A["@ml_function decorator"] --> B["Symbolic execution"]
     B --> C["Python AST"]
     C --> D["Protobuf serialization"]
-    D -->|pybind11 boundary| E["C++ MLIRBuilder"]
-    E --> F["MLIR IR"]
-    F --> G["MLIR lowering passes"]
-    G --> H["LLVM IR"]
-    H --> I["LLVM ORC JIT"]
-    I --> J["Native machine code"]
-    J -->|function pointer via ctypes| K["Python result"]
+    D -->|pybind11 boundary| E["C++ MLIRCompiler"]
+    E --> F["MLIRBuilder: AST → MLIR IR"]
+    F --> G["MLIRLowering: MLIR → LLVM IR"]
+    G --> H["MLIRExecutor: ORC JIT"]
+    H --> I["Native machine code"]
+    I -->|function pointer via ctypes| J["Python result"]
 ```
 
 The pipeline has two phases. The **definition phase** happens at decoration time: the decorator runs the function body with symbolic `Parameter` objects to build an AST and validate types. The **execution phase** happens on first call: the AST is serialized, compiled through MLIR/LLVM, and JIT-compiled. Subsequent calls reuse the compiled native code.
@@ -54,21 +53,25 @@ cpp/                                # C++ backend
     schemas/
         ast.proto                   # Protobuf schema (single source of truth for types)
     include/mlir_edsl/
-        MLIRBuilder.h               # AST → MLIR IR generation
+        MLIRCompiler.h              # Unified facade (owns context, module, orchestrates all)
+        MLIRBuilder.h               # AST → MLIR IR generation (non-owning)
         ArithBuilder.h              # arith dialect operations
         SCFBuilder.h                # scf dialect (if, for)
         MemRefBuilder.h             # memref dialect (arrays)
+        TensorBuilder.h             # tensor dialect operations
         MLIRLowering.h              # MLIR → LLVM IR lowering
         MLIRExecutor.h              # LLVM ORC JIT engine
     src/
+        MLIRCompiler.cpp            # Facade: compilation, finalization, state management
         MLIRBuilder.cpp             # Core IR generation
         MLIRExecutor.cpp            # JIT compilation and execution
         MLIRLowering.cpp            # Lowering passes
-        python_bindings.cpp         # pybind11 glue
+        python_bindings.cpp         # pybind11 glue (only exposes MLIRCompiler)
         builders/
             ArithBuilder.cpp        # arith.addi, arith.muli, arith.sitofp, etc.
             SCFBuilder.cpp          # scf.if, scf.for
             MemRefBuilder.cpp       # memref.alloca, memref.load, memref.store
+            TensorBuilder.cpp       # tensor dialect operations
 
 tests/                              # pytest suite
 ```
@@ -112,7 +115,7 @@ On the first call to `factorial(5)`, the cached AST is serialized to protobuf vi
 
 ### 4. C++ MLIR generation
 
-`MLIRBuilder::compileFunctionFromDef` parses the protobuf and dispatches each node to a category handler:
+`MLIRCompiler::compileFunction` receives the parsed `FunctionDef` protobuf, creates the function shell (entry block, parameter mapping), then delegates to `MLIRBuilder::buildFromProtobufNode` which dispatches each AST node to a category handler:
 
 | AST category | Handler | MLIR dialect |
 |---|---|---|
@@ -122,7 +125,7 @@ On the first call to `factorial(5)`, the cached AST is serialized to protobuf vi
 | `FunctionNode` | `buildFromFunctionNode()` | `func` (parameters, calls) |
 | `BindingNode` | `buildFromBindingNode()` | SSA value reuse (let/ref) |
 
-Each handler delegates to a specialized builder (`ArithBuilder`, `SCFBuilder`, `MemRefBuilder`) that creates MLIR operations. The factorial example produces IR like:
+Each handler delegates to a specialized dialect builder (`ArithBuilder`, `SCFBuilder`, `MemRefBuilder`, `TensorBuilder`) that creates MLIR operations. The factorial example produces IR like:
 
 ```mlir
 module {
@@ -146,35 +149,41 @@ module {
 
 ### 5. Lowering and JIT
 
-`MLIRLowering` applies passes to convert from the MLIR dialects (`arith`, `scf`, `func`, `memref`) down to the `LLVM` dialect, then emits LLVM IR as a string. `MLIRExecutor` feeds this LLVM IR to the ORC JIT engine with the configured optimization level (O0, O2, or O3), producing native machine code. The function pointer is stored and returned to Python as a `uintptr_t`.
+On first call to `getFunctionPointer`, `MLIRCompiler::ensureFinalized` triggers the lowering and JIT pipeline:
+
+1. **MLIRLowering** clones the module (`OwningOpRef` for RAII cleanup) and runs conversion passes: `OneShotBufferize` (tensor→memref), `SCFToControlFlow`, `ArithToLLVM`, `MemRefToLLVM`, `ControlFlowToLLVM`, `FuncToLLVM`, and `ReconcileUnrealizedCasts`. The result is an `llvm::Module` + `llvm::LLVMContext` pair.
+2. **MLIRExecutor** takes ownership of both via `std::move`, runs LLVM optimization passes (Mem2Reg, InstCombine, SimplifyCFG, optionally GVN), wraps them in a `ThreadSafeModule`, and hands them to ORC LLJIT. Symbol lookup caches native function pointers.
+
+The original MLIR module is preserved — adding functions after finalization auto-invalidates the JIT, and re-finalization re-lowers the entire module.
 
 ### 6. Execution
 
-`CppMLIRBackend.execute_function` retrieves the function pointer, wraps it with `ctypes.CFUNCTYPE` using the registered signature (mapping `i32 → ctypes.c_int32`), and calls it with the Python arguments. The native return value is marshalled back to a Python `int`.
+`CppMLIRBackend.execute_function` retrieves the function pointer and wraps it with `ctypes.CFUNCTYPE` using the Python-side cached signature (mapping `ScalarType → ctypes`, e.g. `i32 → c_int32`). Signatures are cached at compile time — no round-trip to C++ is needed. The ctypes wrapper calls directly into JIT-compiled native code and marshals the return value back to Python.
 
 ## Python/C++ Boundary
 
-Python orchestrates both C++ objects, mediating every step:
+Python talks to a single `MLIRCompiler` facade via pybind11. Only two things cross the boundary: serialized protobuf bytes (in) and integer function pointers (out). Type signatures stay on the Python side.
 
 ```mermaid
 sequenceDiagram
     participant P as Python (CppMLIRBackend)
-    participant B as C++ MLIRBuilder
-    participant E as C++ MLIRExecutor
+    participant C as C++ MLIRCompiler
+    participant JIT as Native code
 
-    P->>B: compile_function(protobuf bytes)
-    B-->>B: parse protobuf → generate MLIR → lower
-    P->>B: get_llvm_ir_string()
-    B-->>P: LLVM IR string
-    P->>E: compile_module(LLVM IR string)
-    E-->>E: JIT compile to native code
-    P->>E: get_function_pointer("factorial")
-    E-->>P: uintptr_t
-    P-->>P: ctypes.CFUNCTYPE(ptr) → call → result
+    P->>P: cache param types + return type
+    P->>C: compile_function(protobuf bytes)
+    C-->>C: parse protobuf → MLIRBuilder generates MLIR
+    P->>C: get_function_pointer("factorial")
+    C-->>C: MLIRLowering (clone → lower) → MLIRExecutor (JIT)
+    C-->>P: uintptr_t
+    P-->>P: ctypes.CFUNCTYPE(ptr) from cached types
+    P->>JIT: direct call to native code
+    JIT-->>P: return value
 ```
 
 - **Serialization format**: Protobuf (`FunctionDef.SerializeToString()` / `ParseFromString()`)
-- **Execution format**: Function pointers returned as `uintptr_t`, called via `ctypes.CFUNCTYPE`
+- **Execution format**: Function pointers returned as `uintptr_t`, called via `ctypes.CFUNCTYPE` (bypasses pybind11)
+- **Signature caching**: Python caches `(param_types, return_type)` at compile time — no C++ round-trip needed for ctypes wrapper construction
 - **Schema**: `cpp/schemas/ast.proto` is the single source of truth for AST node types, operation enums, and type definitions
 
 ## Type System
@@ -207,8 +216,38 @@ Key rules:
 | `func` | Function definitions and calls | `func.func`, `func.call`, `return` |
 | `scf` | Structured control flow | `scf.if`, `scf.for`, `scf.yield` |
 | `memref` | Fixed-size arrays | `memref.alloca`, `memref.load`, `memref.store` |
-| `cf` | Control flow (branching) | Used during lowering |
-| `llvm` | LLVM dialect | Target of lowering passes |
+| `tensor` | Value-semantic tensors | `tensor.empty`, `tensor.insert`, `tensor.extract` |
+| `bufferization` | Tensor → memref conversion | `one-shot-bufferize` pass |
+| `cf` | Control flow (branching) | Used during lowering (SCF → cf.br/cf.cond_br) |
+| `llvm` | LLVM dialect | Target of all lowering passes |
+
+## C++ Ownership Model
+
+`MLIRCompiler` is the sole owner of all C++ state. It is non-copyable and non-movable due to raw-pointer aliasing between members. Declaration order in the header enforces safe destruction (C++ destroys members in reverse order):
+
+```
+MLIRCompiler owns:
+│
+├── 1. Infrastructure (destroyed last)
+│   ├── unique_ptr<MLIRContext>          ← dialect registry, type uniquing
+│   ├── unique_ptr<OpBuilder>            ← creates MLIR ops
+│   └── OwningOpRef<ModuleOp>            ← top-level module (all func ops)
+│
+├── 2. Shared state (destroyed middle)
+│   ├── parameterMap                     ← current function's arg name → mlir::Value
+│   ├── functionTable                    ← all function name → FuncOp
+│   └── compiledFunctions                ← set of compiled names
+│
+└── 3. Components (destroyed first)
+    ├── unique_ptr<MLIRBuilder>          ← borrows context*, builder*, parameterMap*, functionTable*
+    │   └── owns: valueCache, dialect builders (Arith, SCF, MemRef, Tensor)
+    └── unique_ptr<MLIRExecutor>         ← owns LLJIT, function pointer cache
+```
+
+Key ownership transfers during finalization:
+- `MLIRLowering` is stack-local, clones the module into an `OwningOpRef` (RAII cleanup), and produces an `llvm::Module` + `llvm::LLVMContext`
+- Both are `std::move`d into `MLIRExecutor::compileModule`, which wraps them in a `ThreadSafeModule` and hands them to ORC LLJIT
+- After JIT compilation, ORC owns the LLVM module; the executor only caches native function pointer addresses
 
 ## Related Documents
 

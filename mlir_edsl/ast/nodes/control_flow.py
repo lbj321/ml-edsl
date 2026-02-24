@@ -1,4 +1,4 @@
-"""Control flow AST nodes: IfOp, ForLoopOp"""
+"""Control flow AST nodes: IfOp, ForLoopOp, ForIndex, ForIterArg"""
 
 from typing import TYPE_CHECKING
 from ..base import Value
@@ -56,26 +56,80 @@ class IfOp(Value):
         return pb_node
 
 
+class ForIndex(Value):
+    """Placeholder for the induction variable of a for loop.
+
+    Leaf node — resolved at IR build time by injecting its node_id
+    into the valueCache, mapping to the scf.for block argument %iv.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.node_id = self.id
+
+    def infer_type(self) -> Type:
+        """Induction variable is always i32."""
+        return i32
+
+    def get_children(self) -> list['Value']:
+        return []
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.control_flow.for_index.node_id = self.node_id
+        return pb_node
+
+
+class ForIterArg(Value):
+    """Placeholder for a loop-carried accumulator (iter_arg).
+
+    Leaf node — resolved at IR build time by injecting its node_id
+    into the valueCache, mapping to the scf.for block argument for the iter_arg.
+    """
+
+    def __init__(self, value_type: Type, arg_index: int = 0):
+        super().__init__()
+        self.node_id = self.id
+        self.value_type = value_type
+        self.arg_index = arg_index
+
+    def infer_type(self) -> Type:
+        """Returns the type of the accumulator."""
+        return self.value_type
+
+    def get_children(self) -> list['Value']:
+        return []
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.control_flow.for_iter_arg.node_id = self.node_id
+        pb_node.control_flow.for_iter_arg.arg_index = self.arg_index
+        return pb_node
+
+
 class ForLoopOp(Value):
-    """Represents a for loop operation (scf.for) - STRICT TYPE ENFORCEMENT
+    """Represents a for loop with lambda body (scf.for with iter_args).
 
     Loop bounds (start, end, step) must all be integers (i32).
-    Accumulator (init_value) must be integer (i32).
-
-    Represents: for(i = start; i < end; i += step) { accumulator = accumulator op i }
+    Accumulator (init_value) can be any type (scalar or tensor).
+    Body is an AST subtree built by the lambda, referencing ForIndex/ForIterArg.
 
     Examples:
-        - For(start=0, end=10, step=1, init=0, op=ast_pb2.ADD)
+        t = Tensor.empty(i32, 4)
+        t = For(0, 4, init=t, body=lambda i, acc: acc.at[i].set(i * 2))
     """
 
     def __init__(self, start: Value, end: Value, step: Value,
-                 init_value: Value, operation: int):
+                 init_value: Value, body: Value,
+                 index_placeholder: 'ForIndex', iter_arg_placeholder: 'ForIterArg'):
         super().__init__()
         self.start = start
         self.end = end
         self.step = step
         self.init_value = init_value
-        self.operation = operation
+        self.body = body
+        self.index_node_id = index_placeholder.node_id
+        self.iter_arg_node_id = iter_arg_placeholder.node_id
 
         # Get all types
         start_type = start.infer_type()
@@ -97,10 +151,13 @@ class ForLoopOp(Value):
                 f"Got: {start_type}. Use integer indices with float accumulator if needed."
             )
 
-        # STRICT: Accumulator must be integer
-        if not init_type.is_integer():
+        # Body result type must match init type
+        body_type = body.infer_type()
+        if body_type != init_type:
             raise TypeError(
-                f"ForLoopOp accumulator must be integer (i32). Got: {init_type}"
+                f"For loop body result type {body_type} does not match "
+                f"init type {init_type}. The body must return the same type "
+                f"as the accumulator."
             )
 
         # Result type matches the accumulator type
@@ -111,7 +168,7 @@ class ForLoopOp(Value):
         return self._inferred_type
 
     def get_children(self) -> list['Value']:
-        return [self.start, self.end, self.step, self.init_value]
+        return [self.start, self.end, self.step, self.init_value, self.body]
 
     def _serialize_node(self, context: 'SerializationContext'):
         pb_node = ast_pb2.ASTNode()
@@ -119,6 +176,8 @@ class ForLoopOp(Value):
         pb_node.control_flow.for_loop.end.CopyFrom(self.end.to_proto(context))
         pb_node.control_flow.for_loop.step.CopyFrom(self.step.to_proto(context))
         pb_node.control_flow.for_loop.init_value.CopyFrom(self.init_value.to_proto(context))
-        pb_node.control_flow.for_loop.operation = self.operation
         pb_node.control_flow.for_loop.result_type.CopyFrom(self._inferred_type.to_proto())
+        pb_node.control_flow.for_loop.body.CopyFrom(self.body.to_proto(context))
+        pb_node.control_flow.for_loop.index_node_id = self.index_node_id
+        pb_node.control_flow.for_loop.iter_arg_node_id = self.iter_arg_node_id
         return pb_node
