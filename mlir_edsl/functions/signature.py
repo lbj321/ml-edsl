@@ -3,7 +3,7 @@ from typing import Callable, Dict, List, Any, Tuple, get_type_hints
 from dataclasses import dataclass
 import inspect
 
-from ..types import Type, TypeSystem, TYPE_HINT_NAMESPACE
+from ..types import Type, TypeSystem, TYPE_HINT_NAMESPACE, Array, Tensor, ArrayType, TensorType
 
 
 @dataclass
@@ -85,8 +85,13 @@ class FunctionSignature:
 
 def _get_type_hints(func: Callable) -> dict:
     """Get type hints with MLIR type namespace."""
+    localns = {
+        **TYPE_HINT_NAMESPACE,            # i32, f32, i1
+        'Array': Array, 'Tensor': Tensor,
+        'ArrayType': ArrayType, 'TensorType': TensorType,
+    }
     return get_type_hints(
         func,
         globalns={'int': int, 'float': float, 'bool': bool},
-        localns=TYPE_HINT_NAMESPACE
+        localns=localns,
     )
