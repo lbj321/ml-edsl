@@ -45,12 +45,12 @@ class TestArrayParameters:
     def test_dot_product_weighted(self, backend):
         """Dot product with non-trivial weights"""
         @ml_function
-        def dot(a: Array[f32, 4], b: Array[f32, 4]) -> f32:
+        def dot_weighted(a: Array[f32, 4], b: Array[f32, 4]) -> f32:
             return For(start=0, end=4, init=0.0,
                        body=lambda i, acc: acc + a[i] * b[i])
 
         # 1*2 + 2*3 + 3*4 + 4*5 = 2 + 6 + 12 + 20 = 40
-        result = dot([1.0, 2.0, 3.0, 4.0], [2.0, 3.0, 4.0, 5.0])
+        result = dot_weighted([1.0, 2.0, 3.0, 4.0], [2.0, 3.0, 4.0, 5.0])
         assert abs(result - 40.0) < 0.001
 
     def test_mixed_scalar_and_array_params(self, backend):

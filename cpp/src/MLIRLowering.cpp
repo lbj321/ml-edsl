@@ -117,8 +117,12 @@ void MLIRLowering::setupLoweringPipeline() {
 }
 
 void MLIRLowering::addConversionPasses() {
-  // Bufferize tensor ops to memref ops
-  passManager.addPass(mlir::bufferization::createOneShotBufferizePass());
+  // Bufferize tensor ops to memref ops.
+  // bufferizeFunctionBoundaries=true rewrites tensor function parameters and
+  // return types to memref, which is required when tensors appear in signatures.
+  mlir::bufferization::OneShotBufferizePassOptions bufOpts;
+  bufOpts.bufferizeFunctionBoundaries = true;
+  passManager.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
 
   // Insert deallocs for buffers created during bufferization
   passManager.addPass(
