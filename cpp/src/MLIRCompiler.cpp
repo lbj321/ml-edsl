@@ -109,7 +109,7 @@ MLIRCompiler::convertType(const mlir_edsl::TypeSpec &typeSpec) const {
 }
 
 bool MLIRCompiler::isValidParameterType(const mlir_edsl::TypeSpec &type) const {
-  return type.has_scalar();
+  return type.has_scalar() || type.has_memref() || type.has_tensor();
 }
 
 bool MLIRCompiler::isValidReturnType(const mlir_edsl::TypeSpec &type) const {

@@ -16,11 +16,6 @@ import pytest
 from mlir_edsl.backend import get_backend
 
 
-# ==================== STATE ====================
-
-_ir_output_cleared = False
-
-
 # ==================== HELPERS ====================
 
 def _read_file(path):
@@ -216,20 +211,12 @@ def _save_ir_for_test(backend, node):
         tests/memref/test_array_execution.py::TestArrayExecution::test_basic
         -> ir_html/memref/test_array_execution/test_basic.html
     """
-    global _ir_output_cleared
-
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     ir_output_dir = os.path.join(project_root, "ir_output")
     ir_html_dir = os.path.join(project_root, "ir_html")
 
-    # Clear directories once per session
-    if not _ir_output_cleared:
-        if os.path.exists(ir_output_dir):
-            shutil.rmtree(ir_output_dir)
-        if os.path.exists(ir_html_dir):
-            shutil.rmtree(ir_html_dir)
-        _ir_output_cleared = True
-
+    # ir_output/ is guaranteed to exist (created by session_setup fixture
+    # before any test runs). Just ensure ir_html/ exists for this test.
     os.makedirs(ir_output_dir, exist_ok=True)
 
     functions = backend.list_functions()
@@ -295,6 +282,26 @@ def _find_filecheck():
 
 
 # ==================== FIXTURES ====================
+
+@pytest.fixture(scope="session", autouse=True)
+def session_setup():
+    """Clear and create ir_output/ before any test runs.
+
+    C++ saves {name}.mlir and module_unopt.ll during test execution.
+    ir_output/ must exist before tests start, otherwise the C++ saves fail
+    silently and the HTML report shows '(File not found: ...)'.
+    """
+    save_ir = os.getenv("SAVE_IR", "").lower() in ("1", "true", "yes")
+    if save_ir:
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        ir_output_dir = os.path.join(project_root, "ir_output")
+        ir_html_dir = os.path.join(project_root, "ir_html")
+        if os.path.exists(ir_output_dir):
+            shutil.rmtree(ir_output_dir)
+        if os.path.exists(ir_html_dir):
+            shutil.rmtree(ir_html_dir)
+        os.makedirs(ir_output_dir)
+
 
 @pytest.fixture(scope="session")
 def backend():

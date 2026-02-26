@@ -1,7 +1,7 @@
 # ML-EDSL Development Roadmap
 
 **Architecture**: Python frontend with C++ MLIR backend
-**Current Status**: Phase 7.4 - aggregate types as function parameters (unblocks Phase 8)
+**Current Status**: Phase 8 - linalg dialect and tensor return types
 **Vision**: Comprehensive ML compilation framework supporting modern AI architectures
 
 ---
@@ -42,7 +42,7 @@ result = sum_range(1, 10) # 55 - Native speed!
 
 ---
 
-## Phase 7: Memory & Arrays 🚧 CURRENT FOCUS
+## Phase 7: Memory & Arrays ✅ Complete
 
 **Goal**: Add array and tensor support to enable ML workloads, bridging from scalar operations to vectorized/tensor computations.
 
@@ -63,30 +63,11 @@ result = sum_range(1, 10) # 55 - Native speed!
 - `tensor.empty`, `tensor.extract`, `tensor.insert`
 - Bufferization pipeline: `tensor` → `memref` → LLVM
 
-### Remaining 🚧
-
 #### 4. Aggregate Types as Function Parameters
-```python
-@ml_function
-def dot_product(a: Array[4, f32], b: Array[4, f32]) -> f32:
-    # Lambda-based For with iter_args: (i, acc) -> next_acc
-    return For(start=0, end=4, init=0.0,
-               body=lambda i, acc: acc + a[i] * b[i])
-
-# Call with Python data
-result = dot_product([1.0, 2.0, 3.0, 4.0], [1.0, 1.0, 1.0, 1.0])
-```
-
-**Technical Requirements:**
-- `TensorType` Python class in `types.py` (mirrors `ArrayType`, uses `?` sentinel for dynamic dims)
-- `TypeSystem.parse_type_hint` recognizes `Tensor[?, f32]` annotations
-- `execute_function` in `backend.py` packs aggregate params as LLVM memref descriptors:
-  `(ptr, ptr, offset, size0, ..., stride0, ...)` — the standard MLIR calling convention
-- Validation: exact shape check for static types, ndim+dtype check for dynamic
-
-**Note**: numpy interop is deferred to Phase 8.5. This item only needs Python list/buffer
-input to unblock Phase 8. The LLVM calling convention is identical for all aggregate types
-(Array, static Tensor, dynamic Tensor) — only validation differs.
+- `Array` and `Tensor` types accepted as `@ml_function` parameters
+- Python lists packed as MLIR memref descriptors `(alloc_ptr, aligned_ptr, offset, sizes..., strides...)`
+- Shape/ndim validation against declared `ArrayType`/`TensorType` at call time
+- `Array`/`Tensor` added to `_get_type_hints` namespace for PEP 563 compatibility
 
 ### MLIR Dialects Integrated:
 - **memref**: Stack-allocated, mutable buffers ✅
@@ -96,14 +77,14 @@ input to unblock Phase 8. The LLVM calling convention is identical for all aggre
 
 ---
 
-## Future Development Phases 📋
-
-### Phase 8: Linear Algebra (linalg dialect)
+## Phase 8: Linear Algebra (linalg dialect) 🚧 CURRENT FOCUS
 
 **Goal**: Introduce `linalg` as the core abstraction for ML operations. This is the right
 architectural level — `linalg` ops compose with tiling, vectorization, and GPU lowering
 in later phases. Implementing matmul as explicit `scf.for` loops would be slower and
 architecturally wrong.
+
+### Remaining 🚧
 
 #### 8.1 Tensor Return Types
 ```python
@@ -170,7 +151,13 @@ def mean(x: Tensor[?, f32], n: int) -> f32:
 - Note: reductions to scalar are independent of 8.1 (tensor returns); reductions
   to lower-rank tensors (e.g. row-wise sum) require 8.1
 
+### MLIR Dialects:
+- **linalg**: High-level linear algebra — current target ✅ (registered)
+- **vector**: Vectorization → Phase 9
+
 ---
+
+## Future Development Phases 📋
 
 ### Phase 8.5: I/O & NumPy Interoperability
 

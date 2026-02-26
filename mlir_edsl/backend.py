@@ -1,7 +1,7 @@
 """C++ MLIR backend integration"""
 import ctypes
 from typing import Union
-from .types import Type, ScalarType
+from .types import Type, ScalarType, ArrayType, TensorType
 
 
 try:
@@ -24,6 +24,53 @@ TYPE_TO_CTYPES = {
 }
 
 _global_backend = None
+
+
+def _flatten_list(data: list) -> list:
+    """Flatten a nested list to 1D in row-major order."""
+    if not data or not isinstance(data[0], list):
+        return list(data)
+    result = []
+    for item in data:
+        result.extend(_flatten_list(item))
+    return result
+
+
+def _make_memref_descriptor(data: list, array_type) -> tuple:
+    """Build (c_types, c_vals, buffer) for the standard MLIR memref descriptor.
+
+    MLIR lowers memref<NxT> to individual LLVM args:
+        alloc_ptr, aligned_ptr, offset, size0[, size1, ...], stride0[, stride1, ...]
+
+    The buffer must be kept alive by the caller until after the ctypes call.
+    """
+    _ELEM_CTYPES = {
+        ScalarType.I32: ctypes.c_int32,
+        ScalarType.F32: ctypes.c_float,
+        ScalarType.I1: ctypes.c_bool,
+    }
+    elem_ctype = _ELEM_CTYPES[array_type.element_type.kind]
+    shape = array_type.shape
+    ndim = len(shape)
+    total = array_type.total_elements
+
+    flat = _flatten_list(data)
+    buf = (elem_ctype * total)(*flat)
+    ptr = ctypes.cast(buf, ctypes.c_void_p)
+
+    # Row-major strides: shape (2,3,4) → strides (12, 4, 1)
+    strides = [1] * ndim
+    for i in range(ndim - 2, -1, -1):
+        strides[i] = strides[i + 1] * shape[i + 1]
+
+    c_types = (
+        [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
+        + [ctypes.c_int64] * ndim
+        + [ctypes.c_int64] * ndim
+    )
+    c_vals = [ptr, ptr, 0] + list(shape) + strides
+
+    return c_types, c_vals, buf
 
 
 class CppMLIRBackend:
@@ -87,10 +134,26 @@ class CppMLIRBackend:
         """Execute compiled function via JIT with ctypes."""
         param_types, return_type = self._signatures[name]
         c_ret = self._type_to_ctype(return_type, "return type")
-        c_params = [self._type_to_ctype(pt, f"parameter {i}") for i, pt in enumerate(param_types)]
-        func_type = ctypes.CFUNCTYPE(c_ret, *c_params)
+
+        flat_c_types = []
+        flat_args = []
+        live_buffers = []  # Keep ctypes arrays alive through the call
+
+        for pt, val in zip(param_types, args):
+            if isinstance(pt, ScalarType):
+                flat_c_types.append(TYPE_TO_CTYPES[pt.kind])
+                flat_args.append(val)
+            elif isinstance(pt, (ArrayType, TensorType)):
+                c_types, c_vals, buf = _make_memref_descriptor(val, pt)
+                flat_c_types.extend(c_types)
+                flat_args.extend(c_vals)
+                live_buffers.append(buf)
+            else:
+                raise RuntimeError(f"Unsupported parameter type {pt} for execution")
+
+        func_type = ctypes.CFUNCTYPE(c_ret, *flat_c_types)
         wrapper = func_type(self.compiler.get_function_pointer(name))
-        return wrapper(*args)
+        return wrapper(*flat_args)
 
     # ==================== MANAGEMENT ====================
     def has_function(self, name: str) -> bool:

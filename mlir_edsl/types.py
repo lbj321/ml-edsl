@@ -643,8 +643,25 @@ class TypeSystem:
             type_spec: Type instance
             param_name: Parameter name for error messages
         """
-        # Skip validation for arrays (arrays are AST nodes, not runtime values)
-        if type_spec.is_aggregate():
+        if isinstance(type_spec, ArrayType):
+            if not isinstance(value, list):
+                raise TypeError(
+                    f"Parameter '{param_name}': expected list for {type_spec}, "
+                    f"got {type(value).__name__}"
+                )
+            cls._check_nested_shape(value, type_spec.shape, param_name)
+            return
+
+        if isinstance(type_spec, TensorType):
+            if not isinstance(value, list):
+                raise TypeError(
+                    f"Parameter '{param_name}': expected list for {type_spec}, "
+                    f"got {type(value).__name__}"
+                )
+            if not type_spec.is_dynamic:
+                cls._check_nested_shape(value, type_spec.shape, param_name)
+            else:
+                cls._check_nested_ndim(value, type_spec.ndim, param_name)
             return
 
         # Scalar validation
@@ -659,6 +676,29 @@ class TypeSystem:
                 raise TypeError(f"Parameter '{param_name}' expects float/f32 but got {type(value).__name__}")
         else:
             raise TypeError(f"Parameter '{param_name}': unknown scalar type {type_spec}")
+
+    @classmethod
+    def _check_nested_shape(cls, data: list, shape: tuple, param_name: str):
+        """Recursively verify data has the expected shape."""
+        if not isinstance(data, list) or len(data) != shape[0]:
+            got = len(data) if isinstance(data, list) else f"non-list ({type(data).__name__})"
+            raise ValueError(
+                f"Parameter '{param_name}': expected {shape[0]} elements, got {got}"
+            )
+        if len(shape) > 1:
+            for i, item in enumerate(data):
+                cls._check_nested_shape(item, shape[1:], f"{param_name}[{i}]")
+
+    @classmethod
+    def _check_nested_ndim(cls, data: list, ndim: int, param_name: str):
+        """Verify data has the right number of dimensions (for dynamic tensors)."""
+        if not isinstance(data, list):
+            raise ValueError(
+                f"Parameter '{param_name}': expected list, got {type(data).__name__}"
+            )
+        if ndim > 1:
+            for i, item in enumerate(data):
+                cls._check_nested_ndim(item, ndim - 1, f"{param_name}[{i}]")
         
     @classmethod
     def types_match(cls, inferred: Type, declared: Type) -> Tuple[bool, str]:
