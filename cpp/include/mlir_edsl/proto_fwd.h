@@ -54,4 +54,9 @@ class TensorInsert;
 class LetBinding;
 class ValueReference;
 
+// Linalg operations
+class LinalgNode;
+class LinalgDot;
+class LinalgMatmul;
+
 } // namespace mlir_edsl

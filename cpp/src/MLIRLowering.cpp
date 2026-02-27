@@ -19,6 +19,9 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Passes.h"
+#include "mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/BufferizableOpInterfaceImpl.h"
@@ -90,6 +93,7 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   context->getOrLoadDialect<mlir::scf::SCFDialect>();
   context->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
   context->getOrLoadDialect<mlir::tensor::TensorDialect>();
+  context->getOrLoadDialect<mlir::linalg::LinalgDialect>();
   context->getOrLoadDialect<mlir::bufferization::BufferizationDialect>();
   context->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
 
@@ -99,6 +103,7 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   mlir::arith::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::tensor::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::scf::registerBufferizableOpInterfaceExternalModels(registry);
+  mlir::linalg::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::bufferization::func_ext::registerBufferizableOpInterfaceExternalModels(
       registry);
   context->appendDialectRegistry(registry);
@@ -120,6 +125,7 @@ void MLIRLowering::addConversionPasses() {
   // Bufferize tensor ops to memref ops.
   // bufferizeFunctionBoundaries=true rewrites tensor function parameters and
   // return types to memref, which is required when tensors appear in signatures.
+  // Our linalg ops already use memrefs so they pass through unchanged.
   mlir::bufferization::OneShotBufferizePassOptions bufOpts;
   bufOpts.bufferizeFunctionBoundaries = true;
   passManager.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
@@ -131,6 +137,12 @@ void MLIRLowering::addConversionPasses() {
   passManager.addPass(
       mlir::bufferization::createBufferDeallocationSimplificationPass());
   passManager.addPass(mlir::bufferization::createLowerDeallocationsPass());
+
+  // Lower linalg structured ops (dot, matmul) to scf.for loops.
+  // Runs after bufferization because linalg-to-loops uses applyPatternsGreedily
+  // with tensor canonicalization patterns, which would constant-fold tensor ops
+  // in unrelated functions if run before one-shot-bufferize.
+  passManager.addPass(mlir::createConvertLinalgToLoopsPass());
 
   // Lower SCF to ControlFlow dialect
   passManager.addPass(mlir::createSCFToControlFlowPass());

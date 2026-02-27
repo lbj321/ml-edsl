@@ -120,6 +120,7 @@ message ASTNode {
     FunctionNode function = 4;
     BindingNode binding = 5;
     TensorNode tensor = 6;
+    LinalgNode linalg = 7;
   }
 }
 
@@ -322,6 +323,33 @@ message TensorInsert {
 message TensorEmpty {
   TypeSpec type = 1;               // Tensor type (TensorTypeSpec with shape + element type)
   repeated ASTNode dynamic_dims = 2; // Runtime values for dynamic (?) dimensions, in order
+}
+
+// ============================================================================
+// LINALG OPERATIONS
+// ============================================================================
+
+// Top-level linalg node container
+message LinalgNode {
+  oneof value {
+    LinalgDot    dot    = 1;
+    LinalgMatmul matmul = 2;
+  }
+}
+
+// Dot product of two 1D arrays: linalg.dot
+// Returns a scalar of the operand element type.
+message LinalgDot {
+  ASTNode lhs = 1;  // 1D memref (memref<Nxf32>, memref<Nxi32>, etc.)
+  ASTNode rhs = 2;  // 1D memref, same element type as lhs
+}
+
+// Matrix multiply of two 2D arrays: linalg.matmul
+// Returns a 2D memref (out_type). Shape: lhs[M,K] x rhs[K,N] → out[M,N].
+message LinalgMatmul {
+  ASTNode  lhs      = 1;  // 2D memref (memref<MxKxf32>)
+  ASTNode  rhs      = 2;  // 2D memref (memref<KxNxf32>)
+  TypeSpec out_type = 3;  // Output MemRefTypeSpec (memref<MxNxf32>)
 }
 
 // ============================================================================

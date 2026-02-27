@@ -16,6 +16,7 @@ class ArithBuilder;
 class SCFBuilder;
 class MemRefBuilder;
 class TensorBuilder;
+class LinalgBuilder;
 }
 
 // Forward declarations for protobuf classes
@@ -61,6 +62,7 @@ private:
   std::unique_ptr<mlir_edsl::SCFBuilder> scfBuilder;
   std::unique_ptr<mlir_edsl::MemRefBuilder> memrefBuilder;
   std::unique_ptr<mlir_edsl::TensorBuilder> tensorBuilder;
+  std::unique_ptr<mlir_edsl::LinalgBuilder> linalgBuilder;
 
   // Helper methods
   bool isIntegerType(mlir::Type type) const;
@@ -81,6 +83,7 @@ private:
   mlir::Value buildFromControlFlowNode(const mlir_edsl::ControlFlowNode &node);
   mlir::Value buildFromFunctionNode(const mlir_edsl::FunctionNode &node);
   mlir::Value buildFromTensorNode(const mlir_edsl::TensorNode &node);
+  mlir::Value buildFromLinalgNode(const mlir_edsl::LinalgNode &node);
   mlir::Value buildFromBindingNode(const mlir_edsl::BindingNode &node);
 
   // Node handlers

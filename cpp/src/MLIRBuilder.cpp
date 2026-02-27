@@ -3,6 +3,7 @@
 #include "mlir_edsl/SCFBuilder.h"
 #include "mlir_edsl/MemRefBuilder.h"
 #include "mlir_edsl/TensorBuilder.h"
+#include "mlir_edsl/LinalgBuilder.h"
 
 #include "ast.pb.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -26,6 +27,8 @@ MLIRBuilder::MLIRBuilder(mlir::MLIRContext *context, mlir::OpBuilder *builder)
   memrefBuilder = std::make_unique<mlir_edsl::MemRefBuilder>(
       *builder, context, this, arithBuilder.get(), scfBuilder.get());
   tensorBuilder = std::make_unique<mlir_edsl::TensorBuilder>(
+      *builder, context, this);
+  linalgBuilder = std::make_unique<mlir_edsl::LinalgBuilder>(
       *builder, context, this);
 }
 
@@ -61,6 +64,8 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
       return buildFromFunctionNode(node.function());
     case mlir_edsl::ASTNode::kTensor:
       return buildFromTensorNode(node.tensor());
+    case mlir_edsl::ASTNode::kLinalg:
+      return buildFromLinalgNode(node.linalg());
     case mlir_edsl::ASTNode::kBinding:
       return buildFromBindingNode(node.binding());
     default:
@@ -110,6 +115,17 @@ mlir::Value MLIRBuilder::buildFromTensorNode(const mlir_edsl::TensorNode &node) 
       return tensorBuilder->buildEmpty(node.empty());
     default:
       throw std::runtime_error("Unknown tensor node type");
+  }
+}
+
+mlir::Value MLIRBuilder::buildFromLinalgNode(const mlir_edsl::LinalgNode &node) {
+  switch (node.value_case()) {
+    case mlir_edsl::LinalgNode::kDot:
+      return linalgBuilder->buildDot(node.dot());
+    case mlir_edsl::LinalgNode::kMatmul:
+      return linalgBuilder->buildMatmul(node.matmul());
+    default:
+      throw std::runtime_error("Unknown linalg node type");
   }
 }
 
