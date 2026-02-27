@@ -47,6 +47,7 @@ MLIRCompiler::~MLIRCompiler() = default;
 
 void MLIRCompiler::resetFunctionState() {
   currentFunction = nullptr;
+  currentOutParam = {};
   parameterMap.clear();
   builder->clearValueCache();
   opBuilder->setInsertionPointToEnd(module->getBody());
@@ -66,7 +67,15 @@ void MLIRCompiler::createFunction(
     paramTypes.push_back(builder->convertType(typeSpec));
   }
 
-  auto funcType = opBuilder->getFunctionType(paramTypes, {returnType});
+  // Aggregate return: append a hidden out-param and use void return instead.
+  // Python allocates the output buffer and passes it as a memref descriptor.
+  const bool aggregateReturn = mlir::isa<mlir::MemRefType>(returnType);
+  if (aggregateReturn) {
+    paramTypes.push_back(returnType);
+  }
+
+  auto funcType = opBuilder->getFunctionType(
+      paramTypes, aggregateReturn ? mlir::TypeRange{} : mlir::TypeRange{returnType});
   currentFunction = opBuilder->create<mlir::func::FuncOp>(
       opBuilder->getUnknownLoc(), name, funcType);
 
@@ -79,6 +88,11 @@ void MLIRCompiler::createFunction(
   for (size_t i = 0; i < params.size(); i++) {
     parameterMap[params[i].first] = entryBlock->getArgument(i);
   }
+
+  // Store the out-param block arg for use in finalizeFunction.
+  if (aggregateReturn) {
+    currentOutParam = entryBlock->getArgument(params.size());
+  }
 }
 
 void MLIRCompiler::finalizeFunction(const std::string &name,
@@ -86,7 +100,24 @@ void MLIRCompiler::finalizeFunction(const std::string &name,
   if (!currentFunction) {
     throw std::runtime_error("No current function to finish");
   }
-  opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(), result);
+
+  if (currentOutParam) {
+    // Aggregate return: copy result into Python-allocated out-param buffer.
+    opBuilder->create<mlir::memref::CopyOp>(
+        opBuilder->getUnknownLoc(), result, currentOutParam);
+    opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc());
+  } else if (mlir::isa<mlir::IntegerType, mlir::FloatType>(result.getType())) {
+    // Scalar return — normal path.
+    opBuilder->create<mlir::func::ReturnOp>(
+        opBuilder->getUnknownLoc(), result);
+  } else {
+    std::string typeName;
+    llvm::raw_string_ostream os(typeName);
+    result.getType().print(os);
+    throw std::runtime_error(
+        "finalizeFunction: unhandled result type '" + typeName + "'");
+  }
+
   compiledFunctions.insert(name);
 
   // Save MLIR to file if SAVE_IR environment variable is set
@@ -113,7 +144,7 @@ bool MLIRCompiler::isValidParameterType(const mlir_edsl::TypeSpec &type) const {
 }
 
 bool MLIRCompiler::isValidReturnType(const mlir_edsl::TypeSpec &type) const {
-  return type.has_scalar();
+  return type.has_scalar() || type.has_memref();
 }
 
 // ==================== COMPILATION ====================

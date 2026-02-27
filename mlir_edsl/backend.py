@@ -36,6 +36,48 @@ def _flatten_list(data: list) -> list:
     return result
 
 
+def _unflatten(flat: list, shape: list) -> list:
+    """Reconstruct a nested list from a flat row-major list."""
+    if len(shape) == 1:
+        return flat
+    stride = len(flat) // shape[0]
+    return [_unflatten(flat[i * stride:(i + 1) * stride], shape[1:])
+            for i in range(shape[0])]
+
+
+def _make_output_descriptor(array_type) -> tuple:
+    """Allocate a zeroed output buffer and build its memref descriptor.
+
+    Returns (c_types, c_vals, buf) matching the standard MLIR memref descriptor
+    layout. buf is Python-owned and must be kept alive through the ctypes call.
+    """
+    _ELEM_CTYPES = {
+        ScalarType.I32: ctypes.c_int32,
+        ScalarType.F32: ctypes.c_float,
+        ScalarType.I1: ctypes.c_bool,
+    }
+    elem_ctype = _ELEM_CTYPES[array_type.element_type.kind]
+    shape = array_type.shape
+    ndim = len(shape)
+    total = array_type.total_elements
+
+    buf = (elem_ctype * total)()  # zeroed, Python-owned
+    ptr = ctypes.cast(buf, ctypes.c_void_p)
+
+    strides = [1] * ndim
+    for i in range(ndim - 2, -1, -1):
+        strides[i] = strides[i + 1] * shape[i + 1]
+
+    c_types = (
+        [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
+        + [ctypes.c_int64] * ndim
+        + [ctypes.c_int64] * ndim
+    )
+    c_vals = [ptr, ptr, 0] + list(shape) + strides
+
+    return c_types, c_vals, buf
+
+
 def _make_memref_descriptor(data: list, array_type) -> tuple:
     """Build (c_types, c_vals, buffer) for the standard MLIR memref descriptor.
 
@@ -130,10 +172,9 @@ class CppMLIRBackend:
         raise RuntimeError(f"Aggregate types not supported for {context} in JIT execution")
 
     # ==================== JIT EXECUTION ====================
-    def execute_function(self, name: str, *args) -> Union[int, float, bool]:
+    def execute_function(self, name: str, *args) -> Union[int, float, bool, list]:
         """Execute compiled function via JIT with ctypes."""
         param_types, return_type = self._signatures[name]
-        c_ret = self._type_to_ctype(return_type, "return type")
 
         flat_c_types = []
         flat_args = []
@@ -151,9 +192,23 @@ class CppMLIRBackend:
             else:
                 raise RuntimeError(f"Unsupported parameter type {pt} for execution")
 
-        func_type = ctypes.CFUNCTYPE(c_ret, *flat_c_types)
-        wrapper = func_type(self.compiler.get_function_pointer(name))
-        return wrapper(*flat_args)
+        ptr = self.compiler.get_function_pointer(name)
+
+        if isinstance(return_type, ArrayType):
+            # Aggregate return: append Python-allocated output descriptor.
+            out_c_types, out_c_vals, out_buf = _make_output_descriptor(return_type)
+            flat_c_types.extend(out_c_types)
+            flat_args.extend(out_c_vals)
+            live_buffers.append(out_buf)
+            ctypes.CFUNCTYPE(None, *flat_c_types)(ptr)(*flat_args)
+            return _unflatten(list(out_buf), return_type.shape)
+        elif isinstance(return_type, ScalarType):
+            c_ret = self._type_to_ctype(return_type, "return type")
+            return ctypes.CFUNCTYPE(c_ret, *flat_c_types)(ptr)(*flat_args)
+        else:
+            raise RuntimeError(
+                f"execute_function: unhandled return type {return_type}"
+            )
 
     # ==================== MANAGEMENT ====================
     def has_function(self, name: str) -> bool:

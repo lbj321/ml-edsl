@@ -84,20 +84,16 @@ architectural level — `linalg` ops compose with tiling, vectorization, and GPU
 in later phases. Implementing matmul as explicit `scf.for` loops would be slower and
 architecturally wrong.
 
+### Completed ✅
+
+#### 8.1 Array Return Types
+- `Array[dtype, dims]` accepted as `@ml_function` return type
+- C++ transforms aggregate-returning functions: appends hidden out-param, switches to void return
+- Python allocates zeroed ctypes output buffer, passes as memref descriptor (same layout as input params)
+- Result copied via `memref.copy` into Python-owned buffer; reconstructed as nested list via `_unflatten`
+- Scalar return path unchanged
+
 ### Remaining 🚧
-
-#### 8.1 Tensor Return Types
-```python
-@ml_function
-def scale(x: Tensor[4, f32], factor: f32) -> Tensor[4, f32]:
-    return x * factor  # Returns a new tensor
-```
-
-**Technical Requirements:**
-- Functions can return `tensor` / `memref` types (currently only scalars supported)
-- Memory ownership: callee allocates (`memref.alloc`), caller receives pointer
-- Python side: reconstruct result as a list or buffer from the returned pointer + shape
-- **Must land before 8.2** — matmul is useless without a way to return its result
 
 #### 8.2 linalg Dialect Integration
 ```python
