@@ -8,6 +8,23 @@
 
 #include <stdexcept>
 
+namespace {
+
+/// Build arith.constant 0 for any numeric type, using ConstantOp + explicit
+/// attribute consistently (same pattern as ArithBuilder::buildConstant).
+mlir::Value buildZero(mlir::OpBuilder &builder, mlir::Location loc,
+                      mlir::Type elemType) {
+  if (mlir::isa<mlir::FloatType>(elemType))
+    return builder.create<mlir::arith::ConstantOp>(
+        loc, mlir::FloatAttr::get(elemType, 0.0));
+  if (mlir::isa<mlir::IntegerType>(elemType))
+    return builder.create<mlir::arith::ConstantOp>(
+        loc, mlir::IntegerAttr::get(elemType, 0));
+  throw std::runtime_error("buildZero: unsupported element type");
+}
+
+} // anonymous namespace
+
 namespace mlir_edsl {
 
 LinalgBuilder::LinalgBuilder(mlir::OpBuilder &builder,
@@ -32,15 +49,7 @@ mlir::Value LinalgBuilder::buildDot(const mlir_edsl::LinalgDot &node) {
   mlir::MemRefType outType = mlir::MemRefType::get({}, elemType);
   mlir::Value out = builder.create<mlir::memref::AllocaOp>(loc, outType);
 
-  mlir::Value zero;
-  if (mlir::isa<mlir::FloatType>(elemType)) {
-    zero = builder.create<mlir::arith::ConstantOp>(
-        loc, mlir::FloatAttr::get(elemType, 0.0));
-  } else if (mlir::isa<mlir::IntegerType>(elemType)) {
-    zero = builder.create<mlir::arith::ConstantIntOp>(loc, 0, elemType);
-  } else {
-    throw std::runtime_error("linalg.dot: unsupported element type");
-  }
+  mlir::Value zero = buildZero(builder, loc, elemType);
   builder.create<mlir::memref::StoreOp>(loc, zero, out,
                                         mlir::ValueRange{} /*no indices*/);
 
@@ -71,15 +80,7 @@ mlir::Value LinalgBuilder::buildMatmul(const mlir_edsl::LinalgMatmul &node) {
   // 3. Allocate and zero-initialise the output memref
   mlir::Value tmp = builder.create<mlir::memref::AllocaOp>(loc, outMemRefType);
 
-  mlir::Value zero;
-  if (mlir::isa<mlir::FloatType>(elemType)) {
-    zero = builder.create<mlir::arith::ConstantOp>(
-        loc, mlir::FloatAttr::get(elemType, 0.0));
-  } else if (mlir::isa<mlir::IntegerType>(elemType)) {
-    zero = builder.create<mlir::arith::ConstantIntOp>(loc, 0, elemType);
-  } else {
-    throw std::runtime_error("linalg.matmul: unsupported element type");
-  }
+  mlir::Value zero = buildZero(builder, loc, elemType);
 
   // 4. Zero-fill via linalg.fill
   builder.create<mlir::linalg::FillOp>(loc, mlir::ValueRange{zero},
