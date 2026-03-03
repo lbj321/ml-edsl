@@ -5,6 +5,8 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Utils/StructuredOpsUtils.h"
+#include "mlir/IR/AffineMap.h"
 
 #include <stdexcept>
 
@@ -92,6 +94,55 @@ mlir::Value LinalgBuilder::buildMatmul(const mlir_edsl::LinalgMatmul &node) {
 
   // 6. Return the output memref; finalizeFunction will copy it to out-param
   return tmp;
+}
+
+mlir::Value LinalgBuilder::buildMap(const mlir_edsl::LinalgMap &node) {
+  auto loc = builder.getUnknownLoc();
+
+  // 1. Build the 1D memref input
+  mlir::Value input = parent->buildFromProtobufNode(node.input());
+  auto inputType = mlir::dyn_cast<mlir::MemRefType>(input.getType());
+  if (!inputType)
+    throw std::runtime_error("tensor_map: input must be a memref type");
+
+  // 2. Determine output type and allocate output memref
+  mlir::Type outMLIRType = parent->convertType(node.out_type());
+  auto outType = mlir::dyn_cast<mlir::MemRefType>(outMLIRType);
+  if (!outType)
+    throw std::runtime_error("tensor_map: out_type must be a memref type");
+
+  mlir::Value output = builder.create<mlir::memref::AllocaOp>(loc, outType);
+
+  // 3. Build affine maps and iterator types for linalg.generic
+  int64_t ndim = inputType.getRank();
+  auto identityMap = mlir::AffineMap::getMultiDimIdentityMap(ndim, context);
+  llvm::SmallVector<mlir::AffineMap> indexingMaps = {identityMap, identityMap};
+  llvm::SmallVector<mlir::utils::IteratorType> iteratorTypes(
+      ndim, mlir::utils::IteratorType::parallel);
+
+  int64_t elementNodeId = node.element_node_id();
+  const auto &bodyProto = node.body();
+
+  // 4. Emit linalg.generic with a parallel body.
+  // GenericOp::build does InsertionGuard(builder) + setInsertionPointToStart on
+  // the outer builder before invoking the region callback — same as scf::ForOp.
+  // So capturing 'builder' by [&] inside the lambda is correct.
+  builder.create<mlir::linalg::GenericOp>(
+      loc,
+      /*resultTensorTypes=*/mlir::TypeRange{},
+      /*inputs=*/mlir::ValueRange{input},
+      /*outputs=*/mlir::ValueRange{output},
+      indexingMaps,
+      iteratorTypes,
+      [&](mlir::OpBuilder &, mlir::Location innerLoc, mlir::ValueRange blockArgs) {
+        // blockArgs[0] = current input element; blockArgs[1] = current output
+        // element (unused — we compute and yield a fresh value).
+        parent->setValueCacheEntry(elementNodeId, blockArgs[0]);
+        mlir::Value result = parent->buildFromProtobufNode(bodyProto);
+        builder.create<mlir::linalg::YieldOp>(innerLoc, result);
+      });
+
+  return output;
 }
 
 } // namespace mlir_edsl

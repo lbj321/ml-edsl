@@ -4,7 +4,7 @@ from .arithmetic import add, sub, mul, div
 from .comparison import lt, le, gt, ge, eq, ne
 from .control_flow import If, For
 from .conversion import cast, call
-from .linalg import dot, matmul
+from .linalg import dot, matmul, tensor_map, relu, leaky_relu
 
 __all__ = [
     # Arithmetic
@@ -16,5 +16,5 @@ __all__ = [
     # Utilities
     'cast', 'call',
     # Linear algebra
-    'dot', 'matmul',
+    'dot', 'matmul', 'tensor_map', 'relu', 'leaky_relu',
 ]

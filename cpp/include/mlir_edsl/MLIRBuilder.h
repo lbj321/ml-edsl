@@ -44,6 +44,7 @@ public:
   mlir::Type convertType(const mlir_edsl::TypeSpec &typeSpec) const;
   mlir::Value buildIndexConstant(int64_t value);
   mlir::Value castToIndexType(mlir::Value value);
+  void setValueCacheEntry(int64_t nodeId, mlir::Value value);
 
 private:
   // Non-owning references (owned by MLIRCompiler)
@@ -95,6 +96,7 @@ private:
   mlir::Value handleForLoopOp(const mlir_edsl::ForLoopOp &op);
   mlir::Value handleForIndex(const mlir_edsl::ForIndex &node);
   mlir::Value handleForIterArg(const mlir_edsl::ForIterArg &node);
+  mlir::Value handleLinalgMapElement(const mlir_edsl::LinalgMapElement &node);
   mlir::Value handleParameter(const mlir_edsl::Parameter &param);
   mlir::Value handleCallOp(const mlir_edsl::CallOp &op);
   mlir::Value handleLetBinding(const mlir_edsl::LetBinding &binding);

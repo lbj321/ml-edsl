@@ -22,6 +22,9 @@ public:
   /// Build matrix multiply: linalg.matmul ins(%A, %B) outs(%C) → returns memref
   mlir::Value buildMatmul(const mlir_edsl::LinalgMatmul &node);
 
+  /// Element-wise map via linalg.generic: returns output memref of same type as input.
+  mlir::Value buildMap(const mlir_edsl::LinalgMap &node);
+
 private:
   mlir::OpBuilder &builder;
   mlir::MLIRContext *context;

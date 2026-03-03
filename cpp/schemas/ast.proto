@@ -332,8 +332,10 @@ message TensorEmpty {
 // Top-level linalg node container
 message LinalgNode {
   oneof value {
-    LinalgDot    dot    = 1;
-    LinalgMatmul matmul = 2;
+    LinalgDot        dot         = 1;
+    LinalgMatmul     matmul      = 2;
+    LinalgMap        map         = 3;
+    LinalgMapElement map_element = 4;
   }
 }
 
@@ -350,6 +352,21 @@ message LinalgMatmul {
   ASTNode  lhs      = 1;  // 2D memref (memref<MxKxf32>)
   ASTNode  rhs      = 2;  // 2D memref (memref<KxNxf32>)
   TypeSpec out_type = 3;  // Output MemRefTypeSpec (memref<MxNxf32>)
+}
+
+// Element-wise map over a 1D array: linalg.generic (parallel)
+// body references LinalgMapElement placeholder via element_node_id.
+message LinalgMap {
+  ASTNode  input           = 1;  // 1D memref input
+  ASTNode  body            = 2;  // body expression (references LinalgMapElement)
+  int64    element_node_id = 3;  // LinalgMapElement placeholder node ID
+  TypeSpec out_type        = 4;  // output MemRefTypeSpec (same shape as input)
+}
+
+// Placeholder for the linalg.generic body block argument.
+// Leaf node — resolved to linalg.generic body block arg at build time via valueCache.
+message LinalgMapElement {
+  int64 node_id = 1;  // resolved to linalg.generic body block arg at build time
 }
 
 // ============================================================================

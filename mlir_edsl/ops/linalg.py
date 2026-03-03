@@ -1,6 +1,6 @@
-"""Linalg operations: dot product and matrix multiply"""
+"""Linalg operations: dot product, matrix multiply, and element-wise map"""
 
-from ..ast.nodes.linalg import LinalgDot, LinalgMatmul
+from ..ast.nodes.linalg import LinalgDot, LinalgMatmul, LinalgMap
 from ..ast.base import Value
 
 
@@ -44,3 +44,64 @@ def matmul(A: Value, B: Value) -> LinalgMatmul:
             return matmul(A, B)
     """
     return LinalgMatmul(A, B)
+
+
+def tensor_map(arr: Value, fn) -> LinalgMap:
+    """Apply fn element-wise over a 1D array (linalg.generic under the hood).
+
+    Args:
+        arr: 1D array (Array[f32, N] or Array[i32, N])
+        fn: callable accepting a scalar Value placeholder, returning a scalar Value
+
+    Returns:
+        LinalgMap AST node; evaluates to a 1D array of the same type
+
+    Raises:
+        TypeError: if arr is not a 1D array, or fn returns wrong element type
+
+    Example:
+        @ml_function
+        def scale(a: Array[f32, 4]) -> Array[f32, 4]:
+            return tensor_map(a, lambda v: v * 2.0)
+    """
+    return LinalgMap(arr, fn)
+
+
+def relu(arr: Value) -> LinalgMap:
+    """ReLU: max(0, x) element-wise over a 1D float array.
+
+    Args:
+        arr: 1D array of f32 values
+
+    Returns:
+        LinalgMap AST node; evaluates to a 1D array with negative values clamped to 0
+
+    Example:
+        @ml_function
+        def apply_relu(a: Array[f32, 4]) -> Array[f32, 4]:
+            return relu(a)
+    """
+    from ..ast.nodes.control_flow import IfOp
+    from ..ast.helpers import to_value
+    return LinalgMap(arr, lambda v: IfOp(v > to_value(0.0), v, to_value(0.0)))
+
+
+def leaky_relu(arr: Value, alpha: float = 0.01) -> LinalgMap:
+    """Leaky ReLU: v if v > 0 else alpha * v, element-wise over a 1D float array.
+
+    Args:
+        arr: 1D array of f32 values
+        alpha: negative slope coefficient (default 0.01)
+
+    Returns:
+        LinalgMap AST node; evaluates to a 1D array with leaky relu applied
+
+    Example:
+        @ml_function
+        def apply_leaky_relu(a: Array[f32, 4]) -> Array[f32, 4]:
+            return leaky_relu(a, alpha=0.1)
+    """
+    from ..ast.nodes.control_flow import IfOp
+    from ..ast.helpers import to_value
+    a = float(alpha)
+    return LinalgMap(arr, lambda v: IfOp(v > to_value(0.0), v, v * to_value(a)))

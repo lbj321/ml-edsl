@@ -50,6 +50,10 @@ void MLIRBuilder::clearValueCache() {
   valueCache.clear();
 }
 
+void MLIRBuilder::setValueCacheEntry(int64_t nodeId, mlir::Value value) {
+  valueCache[nodeId] = value;
+}
+
 // ==================== AST DISPATCH ====================
 
 mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
@@ -124,6 +128,10 @@ mlir::Value MLIRBuilder::buildFromLinalgNode(const mlir_edsl::LinalgNode &node) 
       return linalgBuilder->buildDot(node.dot());
     case mlir_edsl::LinalgNode::kMatmul:
       return linalgBuilder->buildMatmul(node.matmul());
+    case mlir_edsl::LinalgNode::kMap:
+      return linalgBuilder->buildMap(node.map());
+    case mlir_edsl::LinalgNode::kMapElement:
+      return handleLinalgMapElement(node.map_element());
     default:
       throw std::runtime_error("Unknown linalg node type");
   }
@@ -302,6 +310,15 @@ mlir::Value MLIRBuilder::handleForIterArg(const mlir_edsl::ForIterArg &node) {
     return it->second;
   }
   throw std::runtime_error("ForIterArg: no value in cache for node_id " +
+                           std::to_string(node.node_id()));
+}
+
+mlir::Value MLIRBuilder::handleLinalgMapElement(const mlir_edsl::LinalgMapElement &node) {
+  auto it = valueCache.find(node.node_id());
+  if (it != valueCache.end()) {
+    return it->second;
+  }
+  throw std::runtime_error("LinalgMapElement: no value in cache for node_id " +
                            std::to_string(node.node_id()));
 }
 

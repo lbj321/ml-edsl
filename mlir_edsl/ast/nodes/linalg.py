@@ -1,4 +1,4 @@
-"""Linalg AST nodes: LinalgDot, LinalgMatmul"""
+"""Linalg AST nodes: LinalgDot, LinalgMatmul, LinalgMapElement, LinalgMap"""
 
 from ..base import Value
 from ...types import Type, ScalarType, ArrayType
@@ -129,4 +129,75 @@ class LinalgMatmul(Value):
         pb_node.linalg.matmul.lhs.CopyFrom(self.lhs.to_proto(context))
         pb_node.linalg.matmul.rhs.CopyFrom(self.rhs.to_proto(context))
         pb_node.linalg.matmul.out_type.CopyFrom(self._out_type.to_proto())
+        return pb_node
+
+
+class LinalgMapElement(Value):
+    """Placeholder for the linalg.generic body block argument.
+
+    Leaf node — resolved at IR build time via valueCache injection.
+    The element_type matches the input array's element type.
+    """
+
+    def __init__(self, element_type: Type):
+        super().__init__()
+        self.node_id = self.id
+        self._element_type = element_type
+
+    def infer_type(self) -> Type:
+        """Returns the element type of the mapped array."""
+        return self._element_type
+
+    def get_children(self) -> list['Value']:
+        return []
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.linalg.map_element.node_id = self.node_id
+        return pb_node
+
+
+class LinalgMap(Value):
+    """Element-wise map over a 1D array using linalg.generic (parallel).
+
+    The fn lambda is called at AST construction time with a LinalgMapElement
+    placeholder. At C++ build time the placeholder is resolved to the
+    linalg.generic body block argument via valueCache injection.
+
+    Example:
+        result = tensor_map(arr, lambda v: v * 2.0)
+    """
+
+    def __init__(self, input: Value, fn):
+        super().__init__()
+        self.input = input
+        input_type = input.infer_type()
+        if not isinstance(input_type, ArrayType) or input_type.ndim != 1:
+            raise TypeError(
+                f"tensor_map: input must be a 1D array, got {input_type}"
+            )
+        self._out_type = input_type
+        self._element_placeholder = LinalgMapElement(input_type.element_type)
+        self.body = fn(self._element_placeholder)
+        body_type = self.body.infer_type()
+        if body_type != input_type.element_type:
+            raise TypeError(
+                f"tensor_map body must return element type {input_type.element_type}, "
+                f"got {body_type}"
+            )
+
+    def infer_type(self) -> Type:
+        """Returns the same array type as the input."""
+        return self._out_type
+
+    def get_children(self) -> list['Value']:
+        # LinalgMapElement appears inside body's subtree — do not list it here
+        return [self.input, self.body]
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.linalg.map.input.CopyFrom(self.input.to_proto(context))
+        pb_node.linalg.map.body.CopyFrom(self.body.to_proto(context))
+        pb_node.linalg.map.element_node_id = self._element_placeholder.node_id
+        pb_node.linalg.map.out_type.CopyFrom(self._out_type.to_proto())
         return pb_node

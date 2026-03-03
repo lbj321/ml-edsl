@@ -58,5 +58,7 @@ class ValueReference;
 class LinalgNode;
 class LinalgDot;
 class LinalgMatmul;
+class LinalgMap;
+class LinalgMapElement;
 
 } // namespace mlir_edsl
