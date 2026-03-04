@@ -133,7 +133,7 @@ class LinalgMatmul(Value):
 
 
 class LinalgMapElement(Value):
-    """Placeholder for the linalg.generic body block argument.
+    """Placeholder for the linalg.map body block argument.
 
     Leaf node — resolved at IR build time via valueCache injection.
     The element_type matches the input array's element type.
@@ -158,11 +158,11 @@ class LinalgMapElement(Value):
 
 
 class LinalgMap(Value):
-    """Element-wise map over a 1D array using linalg.generic (parallel).
+    """Element-wise map over a 1D array using linalg.map (MapOp).
 
     The fn lambda is called at AST construction time with a LinalgMapElement
     placeholder. At C++ build time the placeholder is resolved to the
-    linalg.generic body block argument via valueCache injection.
+    linalg.map body block argument via valueCache injection.
 
     Example:
         result = tensor_map(arr, lambda v: v * 2.0)

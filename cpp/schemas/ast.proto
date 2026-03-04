@@ -354,7 +354,7 @@ message LinalgMatmul {
   TypeSpec out_type = 3;  // Output MemRefTypeSpec (memref<MxNxf32>)
 }
 
-// Element-wise map over a 1D array: linalg.generic (parallel)
+// Element-wise map over a 1D array: linalg.map (MapOp)
 // body references LinalgMapElement placeholder via element_node_id.
 message LinalgMap {
   ASTNode  input           = 1;  // 1D memref input
@@ -363,10 +363,10 @@ message LinalgMap {
   TypeSpec out_type        = 4;  // output MemRefTypeSpec (same shape as input)
 }
 
-// Placeholder for the linalg.generic body block argument.
-// Leaf node — resolved to linalg.generic body block arg at build time via valueCache.
+// Placeholder for the linalg.map body block argument.
+// Leaf node — resolved to linalg.map body block arg at build time via valueCache.
 message LinalgMapElement {
-  int64 node_id = 1;  // resolved to linalg.generic body block arg at build time
+  int64 node_id = 1;  // resolved to linalg.map body block arg at build time
 }
 
 // ============================================================================

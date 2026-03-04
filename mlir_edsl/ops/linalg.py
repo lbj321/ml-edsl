@@ -47,7 +47,7 @@ def matmul(A: Value, B: Value) -> LinalgMatmul:
 
 
 def tensor_map(arr: Value, fn) -> LinalgMap:
-    """Apply fn element-wise over a 1D array (linalg.generic under the hood).
+    """Apply fn element-wise over a 1D array (linalg.map under the hood).
 
     Args:
         arr: 1D array (Array[f32, N] or Array[i32, N])
