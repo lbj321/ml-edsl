@@ -132,6 +132,14 @@ mlir::Value MLIRBuilder::buildFromLinalgNode(const mlir_edsl::LinalgNode &node) 
       return linalgBuilder->buildMap(node.map());
     case mlir_edsl::LinalgNode::kMapElement:
       return handleLinalgMapElement(node.map_element());
+    case mlir_edsl::LinalgNode::kReduce:
+      return linalgBuilder->buildReduce(node.reduce());
+    case mlir_edsl::LinalgNode::kReduceElement:
+      return handleLinalgPlaceholder(node.reduce_element().node_id(),
+                                     "LinalgReduceElement");
+    case mlir_edsl::LinalgNode::kReduceAccum:
+      return handleLinalgPlaceholder(node.reduce_accum().node_id(),
+                                     "LinalgReduceAccumulator");
     default:
       throw std::runtime_error("Unknown linalg node type");
   }
@@ -320,6 +328,16 @@ mlir::Value MLIRBuilder::handleLinalgMapElement(const mlir_edsl::LinalgMapElemen
   }
   throw std::runtime_error("LinalgMapElement: no value in cache for node_id " +
                            std::to_string(node.node_id()));
+}
+
+mlir::Value MLIRBuilder::handleLinalgPlaceholder(int64_t nodeId,
+                                                  const char *name) {
+  auto it = valueCache.find(nodeId);
+  if (it != valueCache.end()) {
+    return it->second;
+  }
+  throw std::runtime_error(std::string(name) + ": no value in cache for node_id " +
+                           std::to_string(nodeId));
 }
 
 // Function node handlers

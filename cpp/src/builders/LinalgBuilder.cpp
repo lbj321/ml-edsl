@@ -132,4 +132,46 @@ mlir::Value LinalgBuilder::buildMap(const mlir_edsl::LinalgMap &node) {
   return output;
 }
 
+mlir::Value LinalgBuilder::buildReduce(const mlir_edsl::LinalgReduce &node) {
+  auto loc = builder.getUnknownLoc();
+
+  // 1. Build the 1D memref input
+  mlir::Value input = parent->buildFromProtobufNode(node.input());
+  auto inputType = mlir::dyn_cast<mlir::MemRefType>(input.getType());
+  if (!inputType)
+    throw std::runtime_error("linalg.reduce: input must be a memref type");
+  mlir::Type elemType = inputType.getElementType();
+
+  // 2. Allocate a 0-D memref and initialize it with the init value
+  mlir::MemRefType outType = mlir::MemRefType::get({}, elemType);
+  mlir::Value out = builder.create<mlir::memref::AllocaOp>(loc, outType);
+
+  mlir::Value initVal = parent->buildFromProtobufNode(node.init());
+  builder.create<mlir::memref::StoreOp>(loc, initVal, out,
+                                        mlir::ValueRange{} /*no indices*/);
+
+  int64_t elementNodeId = node.element_node_id();
+  int64_t accumNodeId = node.accum_node_id();
+  const auto &bodyProto = node.body();
+
+  // 3. Emit linalg.reduce — body receives (input_element, accumulator)
+  builder.create<mlir::linalg::ReduceOp>(
+      loc,
+      /*inputs=*/mlir::ValueRange{input},
+      /*inits=*/mlir::ValueRange{out},
+      /*dimensions=*/llvm::ArrayRef<int64_t>{0},
+      [&](mlir::OpBuilder &, mlir::Location innerLoc,
+          mlir::ValueRange blockArgs) {
+        // blockArgs[0] = input element, blockArgs[1] = accumulator
+        parent->setValueCacheEntry(elementNodeId, blockArgs[0]);
+        parent->setValueCacheEntry(accumNodeId, blockArgs[1]);
+        mlir::Value result = parent->buildFromProtobufNode(bodyProto);
+        builder.create<mlir::linalg::YieldOp>(innerLoc, result);
+      });
+
+  // 4. Load and return the scalar result
+  return builder.create<mlir::memref::LoadOp>(loc, out,
+                                              mlir::ValueRange{} /*no indices*/);
+}
+
 } // namespace mlir_edsl

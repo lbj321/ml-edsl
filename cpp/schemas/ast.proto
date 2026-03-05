@@ -332,10 +332,13 @@ message TensorEmpty {
 // Top-level linalg node container
 message LinalgNode {
   oneof value {
-    LinalgDot        dot         = 1;
-    LinalgMatmul     matmul      = 2;
-    LinalgMap        map         = 3;
-    LinalgMapElement map_element = 4;
+    LinalgDot             dot             = 1;
+    LinalgMatmul          matmul          = 2;
+    LinalgMap             map             = 3;
+    LinalgMapElement      map_element     = 4;
+    LinalgReduce          reduce          = 5;
+    LinalgReduceElement   reduce_element  = 6;
+    LinalgReduceAccumulator reduce_accum  = 7;
   }
 }
 
@@ -367,6 +370,27 @@ message LinalgMap {
 // Leaf node — resolved to linalg.map body block arg at build time via valueCache.
 message LinalgMapElement {
   int64 node_id = 1;  // resolved to linalg.map body block arg at build time
+}
+
+// Reduction over a 1D array: linalg.reduce
+// body references LinalgReduceElement and LinalgReduceAccumulator via their node_ids.
+message LinalgReduce {
+  ASTNode  input           = 1;  // 1D memref input
+  ASTNode  init            = 2;  // scalar init value (stored into 0-D accumulator)
+  ASTNode  body            = 3;  // body expression: fn(element, accumulator) → scalar
+  int64    element_node_id = 4;  // LinalgReduceElement placeholder node ID
+  int64    accum_node_id   = 5;  // LinalgReduceAccumulator placeholder node ID
+  TypeSpec elem_type       = 6;  // element type (for type inference)
+}
+
+// Placeholder for the input element in linalg.reduce body.
+message LinalgReduceElement {
+  int64 node_id = 1;
+}
+
+// Placeholder for the accumulator in linalg.reduce body.
+message LinalgReduceAccumulator {
+  int64 node_id = 1;
 }
 
 // ============================================================================

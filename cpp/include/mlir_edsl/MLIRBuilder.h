@@ -97,6 +97,7 @@ private:
   mlir::Value handleForIndex(const mlir_edsl::ForIndex &node);
   mlir::Value handleForIterArg(const mlir_edsl::ForIterArg &node);
   mlir::Value handleLinalgMapElement(const mlir_edsl::LinalgMapElement &node);
+  mlir::Value handleLinalgPlaceholder(int64_t nodeId, const char *name);
   mlir::Value handleParameter(const mlir_edsl::Parameter &param);
   mlir::Value handleCallOp(const mlir_edsl::CallOp &op);
   mlir::Value handleLetBinding(const mlir_edsl::LetBinding &binding);

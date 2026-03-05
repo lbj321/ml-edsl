@@ -25,6 +25,9 @@ public:
   /// Element-wise map via linalg.generic: returns output memref of same type as input.
   mlir::Value buildMap(const mlir_edsl::LinalgMap &node);
 
+  /// Reduction over a 1D memref: linalg.reduce ins(%input) outs(%acc) → returns scalar.
+  mlir::Value buildReduce(const mlir_edsl::LinalgReduce &node);
+
 private:
   mlir::OpBuilder &builder;
   mlir::MLIRContext *context;

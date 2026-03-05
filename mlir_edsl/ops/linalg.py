@@ -1,6 +1,6 @@
-"""Linalg operations: dot product, matrix multiply, and element-wise map"""
+"""Linalg operations: dot product, matrix multiply, element-wise map, and reductions"""
 
-from ..ast.nodes.linalg import LinalgDot, LinalgMatmul, LinalgMap
+from ..ast.nodes.linalg import LinalgDot, LinalgMatmul, LinalgMap, LinalgReduce
 from ..ast.base import Value
 
 
@@ -84,6 +84,96 @@ def relu(arr: Value) -> LinalgMap:
     from ..ast.nodes.control_flow import IfOp
     from ..ast.helpers import to_value
     return LinalgMap(arr, lambda v: IfOp(v > to_value(0.0), v, to_value(0.0)))
+
+
+def reduce(arr: Value, init: Value, fn) -> LinalgReduce:
+    """Reduce a 1D array to a scalar using a binary combining function.
+
+    Args:
+        arr: 1D array (Array[f32, N] or Array[i32, N])
+        init: scalar initial accumulator value (same element type as arr)
+        fn: callable(element, accumulator) → scalar Value
+
+    Returns:
+        LinalgReduce AST node; evaluates to a scalar of the element type
+
+    Raises:
+        TypeError: if arr is not 1D, init type mismatches, or fn returns wrong type
+
+    Example:
+        @ml_function
+        def my_sum(a: Array[f32, 4]) -> f32:
+            return reduce(a, to_value(0.0), lambda elem, acc: acc + elem)
+    """
+    return LinalgReduce(arr, init, fn)
+
+
+def tensor_sum(arr: Value) -> LinalgReduce:
+    """Sum all elements of a 1D float array.
+
+    Args:
+        arr: 1D array of f32 values
+
+    Returns:
+        LinalgReduce AST node; evaluates to the sum as f32
+
+    Example:
+        @ml_function
+        def my_sum(a: Array[f32, 4]) -> f32:
+            return tensor_sum(a)
+    """
+    from ..ast.helpers import to_value
+    return LinalgReduce(arr, to_value(0.0), lambda elem, acc: acc + elem)
+
+
+def tensor_max(arr: Value) -> LinalgReduce:
+    """Return the maximum element of a 1D float array.
+
+    Uses -infinity as the initial accumulator so any element beats it.
+
+    Args:
+        arr: 1D array of f32 values
+
+    Returns:
+        LinalgReduce AST node; evaluates to the maximum element as f32
+
+    Example:
+        @ml_function
+        def my_max(a: Array[f32, 4]) -> f32:
+            return tensor_max(a)
+    """
+    from ..ast.helpers import to_value
+    from ..ast.nodes.control_flow import IfOp
+    return LinalgReduce(
+        arr,
+        to_value(float('-inf')),
+        lambda elem, acc: IfOp(elem > acc, elem, acc),
+    )
+
+
+def tensor_min(arr: Value) -> LinalgReduce:
+    """Return the minimum element of a 1D float array.
+
+    Uses +infinity as the initial accumulator so any element beats it.
+
+    Args:
+        arr: 1D array of f32 values
+
+    Returns:
+        LinalgReduce AST node; evaluates to the minimum element as f32
+
+    Example:
+        @ml_function
+        def my_min(a: Array[f32, 4]) -> f32:
+            return tensor_min(a)
+    """
+    from ..ast.helpers import to_value
+    from ..ast.nodes.control_flow import IfOp
+    return LinalgReduce(
+        arr,
+        to_value(float('inf')),
+        lambda elem, acc: IfOp(elem < acc, elem, acc),
+    )
 
 
 def leaky_relu(arr: Value, alpha: float = 0.01) -> LinalgMap:

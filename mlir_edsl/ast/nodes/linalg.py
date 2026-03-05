@@ -1,4 +1,4 @@
-"""Linalg AST nodes: LinalgDot, LinalgMatmul, LinalgMapElement, LinalgMap"""
+"""Linalg AST nodes: LinalgDot, LinalgMatmul, LinalgMapElement, LinalgMap, LinalgReduce"""
 
 from ..base import Value
 from ...types import Type, ScalarType, ArrayType
@@ -200,4 +200,116 @@ class LinalgMap(Value):
         pb_node.linalg.map.body.CopyFrom(self.body.to_proto(context))
         pb_node.linalg.map.element_node_id = self._element_placeholder.node_id
         pb_node.linalg.map.out_type.CopyFrom(self._out_type.to_proto())
+        return pb_node
+
+
+class LinalgReduceElement(Value):
+    """Placeholder for the input element argument in a linalg.reduce body.
+
+    Leaf node — resolved at IR build time via valueCache injection.
+    The element_type matches the input array's element type.
+    """
+
+    def __init__(self, element_type: Type):
+        super().__init__()
+        self.node_id = self.id
+        self._element_type = element_type
+
+    def infer_type(self) -> Type:
+        """Returns the element type of the reduced array."""
+        return self._element_type
+
+    def get_children(self) -> list['Value']:
+        return []
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.linalg.reduce_element.node_id = self.node_id
+        return pb_node
+
+
+class LinalgReduceAccumulator(Value):
+    """Placeholder for the accumulator argument in a linalg.reduce body.
+
+    Leaf node — resolved at IR build time via valueCache injection.
+    The element_type matches the input array's element type.
+    """
+
+    def __init__(self, element_type: Type):
+        super().__init__()
+        self.node_id = self.id
+        self._element_type = element_type
+
+    def infer_type(self) -> Type:
+        """Returns the element type (same as the accumulated scalar)."""
+        return self._element_type
+
+    def get_children(self) -> list['Value']:
+        return []
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.linalg.reduce_accum.node_id = self.node_id
+        return pb_node
+
+
+class LinalgReduce(Value):
+    """Reduction over a 1D array using linalg.reduce.
+
+    The fn lambda is called at AST construction time with two placeholders:
+    - element: LinalgReduceElement (current input element)
+    - accumulator: LinalgReduceAccumulator (running accumulator)
+
+    At C++ build time both placeholders are resolved to the linalg.reduce
+    body block arguments via valueCache injection.
+
+    Example:
+        result = reduce(arr, to_value(0.0), lambda elem, acc: acc + elem)
+    """
+
+    def __init__(self, input: Value, init: Value, fn):
+        super().__init__()
+        self.input = input
+        self.init = init
+
+        input_type = input.infer_type()
+        if not isinstance(input_type, ArrayType) or input_type.ndim != 1:
+            raise TypeError(
+                f"linalg.reduce: input must be a 1D array, got {input_type}"
+            )
+        self._element_type = input_type.element_type
+
+        init_type = init.infer_type()
+        if not isinstance(init_type, ScalarType) or init_type != self._element_type:
+            raise TypeError(
+                f"linalg.reduce: init must be a scalar of element type "
+                f"{self._element_type}, got {init_type}"
+            )
+
+        self._elem_placeholder = LinalgReduceElement(self._element_type)
+        self._accum_placeholder = LinalgReduceAccumulator(self._element_type)
+        self.body = fn(self._elem_placeholder, self._accum_placeholder)
+
+        body_type = self.body.infer_type()
+        if body_type != self._element_type:
+            raise TypeError(
+                f"linalg.reduce body must return element type {self._element_type}, "
+                f"got {body_type}"
+            )
+
+    def infer_type(self) -> Type:
+        """Reduction returns a scalar of the element type."""
+        return self._element_type
+
+    def get_children(self) -> list['Value']:
+        return [self.input, self.init, self.body]
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.linalg.reduce.input.CopyFrom(self.input.to_proto(context))
+        pb_node.linalg.reduce.init.CopyFrom(self.init.to_proto(context))
+        pb_node.linalg.reduce.body.CopyFrom(self.body.to_proto(context))
+        pb_node.linalg.reduce.element_node_id = self._elem_placeholder.node_id
+        pb_node.linalg.reduce.accum_node_id = self._accum_placeholder.node_id
+        pb_node.linalg.reduce.elem_type.CopyFrom(self._element_type.to_proto())
         return pb_node
