@@ -8,6 +8,7 @@ the full pipeline:
 
 import pytest
 import math
+import numpy as np
 from mlir_edsl import ml_function, Array, f32, i32, reduce, tensor_sum, tensor_max, tensor_min
 from mlir_edsl.ast.helpers import to_value
 
@@ -23,7 +24,7 @@ class TestTensorSum:
         def my_sum(a: Array[f32, 4]) -> f32:
             return tensor_sum(a)
 
-        assert abs(my_sum([1.0, 2.0, 3.0, 4.0]) - 10.0) < 1e-5
+        assert abs(my_sum(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)) - 10.0) < 1e-5
 
     def test_sum_with_negatives(self, backend):
         """Sum including negative values."""
@@ -31,7 +32,7 @@ class TestTensorSum:
         def my_sum(a: Array[f32, 4]) -> f32:
             return tensor_sum(a)
 
-        assert abs(my_sum([-1.0, 2.0, -3.0, 4.0]) - 2.0) < 1e-5
+        assert abs(my_sum(np.array([-1.0, 2.0, -3.0, 4.0], dtype=np.float32)) - 2.0) < 1e-5
 
     def test_sum_all_zeros(self, backend):
         """Sum of all zeros is zero."""
@@ -39,7 +40,7 @@ class TestTensorSum:
         def my_sum(a: Array[f32, 4]) -> f32:
             return tensor_sum(a)
 
-        assert abs(my_sum([0.0, 0.0, 0.0, 0.0])) < 1e-5
+        assert abs(my_sum(np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32))) < 1e-5
 
     def test_sum_single_element(self, backend):
         """Sum of a single-element array is the element itself."""
@@ -47,7 +48,7 @@ class TestTensorSum:
         def my_sum(a: Array[f32, 1]) -> f32:
             return tensor_sum(a)
 
-        assert abs(my_sum([42.0]) - 42.0) < 1e-5
+        assert abs(my_sum(np.array([42.0], dtype=np.float32)) - 42.0) < 1e-5
 
     def test_sum_larger_array(self, backend):
         """Sum of 8 elements."""
@@ -55,7 +56,7 @@ class TestTensorSum:
         def my_sum(a: Array[f32, 8]) -> f32:
             return tensor_sum(a)
 
-        assert abs(my_sum([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]) - 36.0) < 1e-4
+        assert abs(my_sum(np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], dtype=np.float32)) - 36.0) < 1e-4
 
 
 # ==================== tensor_max ====================
@@ -69,7 +70,7 @@ class TestTensorMax:
         def my_max(a: Array[f32, 4]) -> f32:
             return tensor_max(a)
 
-        assert abs(my_max([1.0, 4.0, 2.0, 3.0]) - 4.0) < 1e-5
+        assert abs(my_max(np.array([1.0, 4.0, 2.0, 3.0], dtype=np.float32)) - 4.0) < 1e-5
 
     def test_max_with_negatives(self, backend):
         """Max of mixed positive and negative values."""
@@ -77,7 +78,7 @@ class TestTensorMax:
         def my_max(a: Array[f32, 4]) -> f32:
             return tensor_max(a)
 
-        assert abs(my_max([-1.0, -4.0, -2.0, -3.0]) - (-1.0)) < 1e-5
+        assert abs(my_max(np.array([-1.0, -4.0, -2.0, -3.0], dtype=np.float32)) - (-1.0)) < 1e-5
 
     def test_max_single_element(self, backend):
         """Max of single-element array is the element."""
@@ -85,7 +86,7 @@ class TestTensorMax:
         def my_max(a: Array[f32, 1]) -> f32:
             return tensor_max(a)
 
-        assert abs(my_max([7.0]) - 7.0) < 1e-5
+        assert abs(my_max(np.array([7.0], dtype=np.float32)) - 7.0) < 1e-5
 
     def test_max_last_element_is_max(self, backend):
         """Max is the last element in the array."""
@@ -93,7 +94,7 @@ class TestTensorMax:
         def my_max(a: Array[f32, 4]) -> f32:
             return tensor_max(a)
 
-        assert abs(my_max([1.0, 2.0, 3.0, 9.0]) - 9.0) < 1e-5
+        assert abs(my_max(np.array([1.0, 2.0, 3.0, 9.0], dtype=np.float32)) - 9.0) < 1e-5
 
 
 # ==================== tensor_min ====================
@@ -107,7 +108,7 @@ class TestTensorMin:
         def my_min(a: Array[f32, 4]) -> f32:
             return tensor_min(a)
 
-        assert abs(my_min([3.0, 1.0, 4.0, 2.0]) - 1.0) < 1e-5
+        assert abs(my_min(np.array([3.0, 1.0, 4.0, 2.0], dtype=np.float32)) - 1.0) < 1e-5
 
     def test_min_with_negatives(self, backend):
         """Min of mixed values."""
@@ -115,7 +116,7 @@ class TestTensorMin:
         def my_min(a: Array[f32, 4]) -> f32:
             return tensor_min(a)
 
-        assert abs(my_min([1.0, -2.0, 3.0, -4.0]) - (-4.0)) < 1e-5
+        assert abs(my_min(np.array([1.0, -2.0, 3.0, -4.0], dtype=np.float32)) - (-4.0)) < 1e-5
 
     def test_min_single_element(self, backend):
         """Min of single-element array is the element."""
@@ -123,7 +124,7 @@ class TestTensorMin:
         def my_min(a: Array[f32, 1]) -> f32:
             return tensor_min(a)
 
-        assert abs(my_min([5.0]) - 5.0) < 1e-5
+        assert abs(my_min(np.array([5.0], dtype=np.float32)) - 5.0) < 1e-5
 
     def test_min_first_element_is_min(self, backend):
         """Min is the first element in the array."""
@@ -131,7 +132,7 @@ class TestTensorMin:
         def my_min(a: Array[f32, 4]) -> f32:
             return tensor_min(a)
 
-        assert abs(my_min([-9.0, 2.0, 3.0, 4.0]) - (-9.0)) < 1e-5
+        assert abs(my_min(np.array([-9.0, 2.0, 3.0, 4.0], dtype=np.float32)) - (-9.0)) < 1e-5
 
 
 # ==================== general reduce ====================
@@ -145,7 +146,7 @@ class TestReduce:
         def custom_sum(a: Array[f32, 4]) -> f32:
             return reduce(a, to_value(0.0), lambda elem, acc: acc + elem)
 
-        assert abs(custom_sum([1.0, 2.0, 3.0, 4.0]) - 10.0) < 1e-5
+        assert abs(custom_sum(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)) - 10.0) < 1e-5
 
     def test_custom_product(self, backend):
         """reduce with multiplication computes product."""
@@ -153,7 +154,7 @@ class TestReduce:
         def product(a: Array[f32, 4]) -> f32:
             return reduce(a, to_value(1.0), lambda elem, acc: acc * elem)
 
-        assert abs(product([1.0, 2.0, 3.0, 4.0]) - 24.0) < 1e-4
+        assert abs(product(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)) - 24.0) < 1e-4
 
     def test_reduce_composable_with_other_ops(self, backend):
         """Result of tensor_sum can be used in further arithmetic."""
@@ -161,7 +162,7 @@ class TestReduce:
         def sum_times_two(a: Array[f32, 4]) -> f32:
             return tensor_sum(a) * to_value(2.0)
 
-        assert abs(sum_times_two([1.0, 2.0, 3.0, 4.0]) - 20.0) < 1e-4
+        assert abs(sum_times_two(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)) - 20.0) < 1e-4
 
 
 # ==================== type validation ====================

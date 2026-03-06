@@ -644,38 +644,29 @@ class TypeSystem:
             param_name: Parameter name for error messages
         """
         if isinstance(type_spec, ArrayType):
-            _is_ndarray = hasattr(value, 'shape') and hasattr(value, 'dtype')
-            if _is_ndarray:
+            if hasattr(value, 'shape') and hasattr(value, 'dtype'):
                 if tuple(value.shape) != tuple(type_spec.shape):
                     raise ValueError(
                         f"Parameter '{param_name}': expected shape {type_spec.shape}, "
                         f"got {tuple(value.shape)}"
                     )
-            elif isinstance(value, list):
-                cls._check_nested_shape(value, type_spec.shape, param_name)
             else:
                 raise TypeError(
-                    f"Parameter '{param_name}': expected list or ndarray for {type_spec}, "
+                    f"Parameter '{param_name}': expected ndarray for {type_spec}, "
                     f"got {type(value).__name__}"
                 )
             return
 
         if isinstance(type_spec, TensorType):
-            _is_ndarray = hasattr(value, 'shape') and hasattr(value, 'dtype')
-            if _is_ndarray:
+            if hasattr(value, 'shape') and hasattr(value, 'dtype'):
                 if not type_spec.is_dynamic and tuple(value.shape) != tuple(type_spec.shape):
                     raise ValueError(
                         f"Parameter '{param_name}': expected shape {type_spec.shape}, "
                         f"got {tuple(value.shape)}"
                     )
-            elif isinstance(value, list):
-                if not type_spec.is_dynamic:
-                    cls._check_nested_shape(value, type_spec.shape, param_name)
-                else:
-                    cls._check_nested_ndim(value, type_spec.ndim, param_name)
             else:
                 raise TypeError(
-                    f"Parameter '{param_name}': expected list or ndarray for {type_spec}, "
+                    f"Parameter '{param_name}': expected ndarray for {type_spec}, "
                     f"got {type(value).__name__}"
                 )
             return
@@ -693,29 +684,6 @@ class TypeSystem:
         else:
             raise TypeError(f"Parameter '{param_name}': unknown scalar type {type_spec}")
 
-    @classmethod
-    def _check_nested_shape(cls, data: list, shape: tuple, param_name: str):
-        """Recursively verify data has the expected shape."""
-        if not isinstance(data, list) or len(data) != shape[0]:
-            got = len(data) if isinstance(data, list) else f"non-list ({type(data).__name__})"
-            raise ValueError(
-                f"Parameter '{param_name}': expected {shape[0]} elements, got {got}"
-            )
-        if len(shape) > 1:
-            for i, item in enumerate(data):
-                cls._check_nested_shape(item, shape[1:], f"{param_name}[{i}]")
-
-    @classmethod
-    def _check_nested_ndim(cls, data: list, ndim: int, param_name: str):
-        """Verify data has the right number of dimensions (for dynamic tensors)."""
-        if not isinstance(data, list):
-            raise ValueError(
-                f"Parameter '{param_name}': expected list, got {type(data).__name__}"
-            )
-        if ndim > 1:
-            for i, item in enumerate(data):
-                cls._check_nested_ndim(item, ndim - 1, f"{param_name}[{i}]")
-        
     @classmethod
     def types_match(cls, inferred: Type, declared: Type) -> Tuple[bool, str]:
         """Check if inferred type matches declared type.

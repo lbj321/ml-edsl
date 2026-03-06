@@ -5,6 +5,7 @@ Post-lowering: verify linalg ops are replaced by scf.for after convert-linalg-to
 """
 
 import pytest
+import numpy as np
 from mlir_edsl import ml_function, Array, f32, dot, matmul
 
 
@@ -17,7 +18,8 @@ class TestLinalgDotIR:
         def dot_fn(a: Array[f32, 4], b: Array[f32, 4]) -> f32:
             return dot(a, b)
 
-        dot_fn([1.0, 2.0, 3.0, 4.0], [1.0, 1.0, 1.0, 1.0])
+        dot_fn(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32),
+               np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32))
         check_ir("""
         // CHECK: linalg.dot
         """)
@@ -28,7 +30,8 @@ class TestLinalgDotIR:
         def dot_fn(a: Array[f32, 4], b: Array[f32, 4]) -> f32:
             return dot(a, b)
 
-        dot_fn([1.0, 2.0, 3.0, 4.0], [1.0, 1.0, 1.0, 1.0])
+        dot_fn(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32),
+               np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32))
         check_ir("""
         // CHECK: memref.alloca() : memref<f32>
         // CHECK: linalg.dot
@@ -42,7 +45,8 @@ class TestLinalgDotIR:
         def dot_fn(a: Array[f32, 4], b: Array[f32, 4]) -> f32:
             return dot(a, b)
 
-        dot_fn([1.0, 2.0, 3.0, 4.0], [1.0, 1.0, 1.0, 1.0])
+        dot_fn(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32),
+               np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32))
         check_lowered_ir("""
         // CHECK: scf.for
         // CHECK-NOT: linalg.dot
@@ -58,7 +62,8 @@ class TestLinalgMatmulIR:
         def mm_fn(A: Array[f32, 2, 2], B: Array[f32, 2, 2]) -> Array[f32, 2, 2]:
             return matmul(A, B)
 
-        mm_fn([[1.0, 0.0], [0.0, 1.0]], [[1.0, 2.0], [3.0, 4.0]])
+        mm_fn(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+              np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
         check_ir("""
         // CHECK: linalg.fill
         // CHECK: linalg.matmul
@@ -70,7 +75,8 @@ class TestLinalgMatmulIR:
         def mm_fn(A: Array[f32, 2, 2], B: Array[f32, 2, 2]) -> Array[f32, 2, 2]:
             return matmul(A, B)
 
-        mm_fn([[1.0, 0.0], [0.0, 1.0]], [[1.0, 2.0], [3.0, 4.0]])
+        mm_fn(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+              np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
         check_lowered_ir("""
         // CHECK: scf.for
         // CHECK-NOT: linalg.matmul

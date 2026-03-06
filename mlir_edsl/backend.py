@@ -42,24 +42,6 @@ if _HAS_NUMPY:
 _global_backend = None
 
 
-def _flatten_list(data: list) -> list:
-    """Flatten a nested list to 1D in row-major order."""
-    if not data or not isinstance(data[0], list):
-        return list(data)
-    result = []
-    for item in data:
-        result.extend(_flatten_list(item))
-    return result
-
-
-def _unflatten(flat: list, shape: list) -> list:
-    """Reconstruct a nested list from a flat row-major list."""
-    if len(shape) == 1:
-        return flat
-    stride = len(flat) // shape[0]
-    return [_unflatten(flat[i * stride:(i + 1) * stride], shape[1:])
-            for i in range(shape[0])]
-
 
 def _make_output_descriptor(array_type) -> tuple:
     """Allocate a zeroed output buffer and build its memref descriptor.
@@ -111,14 +93,9 @@ def _make_memref_descriptor(data, array_type) -> tuple:
     MLIR lowers memref<NxT> to individual LLVM args:
         alloc_ptr, aligned_ptr, offset, size0[, size1, ...], stride0[, stride1, ...]
 
-    Accepts list (copy) or np.ndarray (zero-copy).
+    Accepts np.ndarray (zero-copy).
     The buffer must be kept alive by the caller until after the ctypes call.
     """
-    _ELEM_CTYPES = {
-        ScalarType.I32: ctypes.c_int32,
-        ScalarType.F32: ctypes.c_float,
-        ScalarType.I1: ctypes.c_bool,
-    }
     shape = array_type.shape
     ndim = len(shape)
 
@@ -134,19 +111,9 @@ def _make_memref_descriptor(data, array_type) -> tuple:
         ptr = data.ctypes.data_as(ctypes.c_void_p)
         strides = [s // data.itemsize for s in data.strides]
         buf = data
-    elif isinstance(data, list):
-        elem_ctype = _ELEM_CTYPES[array_type.element_type.kind]
-        total = array_type.total_elements
-        flat = _flatten_list(data)
-        buf = (elem_ctype * total)(*flat)
-        ptr = ctypes.cast(buf, ctypes.c_void_p)
-        # Row-major strides: shape (2,3,4) → strides (12, 4, 1)
-        strides = [1] * ndim
-        for i in range(ndim - 2, -1, -1):
-            strides[i] = strides[i + 1] * shape[i + 1]
     else:
         raise TypeError(
-            f"Expected list or np.ndarray for array parameter, got {type(data).__name__}"
+            f"Expected np.ndarray for array parameter, got {type(data).__name__}"
         )
 
     c_types = (

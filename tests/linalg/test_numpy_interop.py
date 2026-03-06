@@ -35,16 +35,6 @@ class TestNumpyInput:
         assert isinstance(result, np.ndarray)
         np.testing.assert_allclose(result, [2.0, 4.0, 6.0, 8.0], rtol=1e-5)
 
-    def test_list_input_still_works(self, backend):
-        """Existing list-based calling convention is unchanged."""
-        @ml_function
-        def scale(a: Array[f32, 4]) -> Array[f32, 4]:
-            return tensor_map(a, lambda v: v * 2.0)
-
-        result = scale([1.0, 2.0, 3.0, 4.0])
-        assert isinstance(result, np.ndarray)
-        np.testing.assert_allclose(result, [2.0, 4.0, 6.0, 8.0], rtol=1e-5)
-
 
 # ==================== VALIDATION ====================
 

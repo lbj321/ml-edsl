@@ -4,17 +4,12 @@ Validates that matmul(A, B) compiles through the full pipeline:
   Python AST → Protobuf → C++ LinalgBuilder → linalg.matmul IR
   → convert-linalg-to-loops → scf.for → LLVM IR → JIT execution
 
-2D arrays are passed and returned as nested lists (row-major):
-  [[row0_col0, row0_col1], [row1_col0, row1_col1]]
+2D arrays are passed as np.ndarray with shape (M, N) and returned as np.ndarray.
 """
 
 import pytest
+import numpy as np
 from mlir_edsl import ml_function, Array, f32, i32, matmul
-
-
-def _flat(nested):
-    """Flatten a 2D nested list to a 1D list for assertions."""
-    return [v for row in nested for v in row]
 
 
 # ==================== BASIC MATMUL ====================
@@ -28,13 +23,11 @@ class TestMatmulExecution:
         def matmul_fn(A: Array[f32, 2, 2], B: Array[f32, 2, 2]) -> Array[f32, 2, 2]:
             return matmul(A, B)
 
-        A = [[1.0, 2.0], [3.0, 4.0]]
-        I = [[1.0, 0.0], [0.0, 1.0]]
+        A = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        I = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
         result = matmul_fn(A, I)
 
-        expected = [[1.0, 2.0], [3.0, 4.0]]
-        for r, e in zip(_flat(result), _flat(expected)):
-            assert abs(r - e) < 1e-4
+        np.testing.assert_allclose(result, A, rtol=1e-4)
 
     def test_matmul_known_result_2x2(self, backend):
         """[[1,2],[3,4]] @ [[5,6],[7,8]] == [[19,22],[43,50]]"""
@@ -42,13 +35,11 @@ class TestMatmulExecution:
         def matmul_2x2(A: Array[f32, 2, 2], B: Array[f32, 2, 2]) -> Array[f32, 2, 2]:
             return matmul(A, B)
 
-        A = [[1.0, 2.0], [3.0, 4.0]]
-        B = [[5.0, 6.0], [7.0, 8.0]]
+        A = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        B = np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32)
         result = matmul_2x2(A, B)
 
-        expected = [[19.0, 22.0], [43.0, 50.0]]
-        for r, e in zip(_flat(result), _flat(expected)):
-            assert abs(r - e) < 1e-3
+        np.testing.assert_allclose(result, [[19.0, 22.0], [43.0, 50.0]], rtol=1e-3)
 
     def test_matmul_zeros(self, backend):
         """A @ 0 == 0"""
@@ -56,12 +47,11 @@ class TestMatmulExecution:
         def matmul_zeros(A: Array[f32, 2, 2], B: Array[f32, 2, 2]) -> Array[f32, 2, 2]:
             return matmul(A, B)
 
-        A = [[1.0, 2.0], [3.0, 4.0]]
-        B = [[0.0, 0.0], [0.0, 0.0]]
+        A = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        B = np.zeros((2, 2), dtype=np.float32)
         result = matmul_zeros(A, B)
 
-        for r in _flat(result):
-            assert abs(r) < 1e-5
+        np.testing.assert_allclose(result, np.zeros((2, 2)), atol=1e-5)
 
     def test_matmul_integer(self, backend):
         """Integer matmul: I @ [[5,6],[7,8]] == [[5,6],[7,8]]"""
@@ -69,12 +59,11 @@ class TestMatmulExecution:
         def matmul_int(A: Array[i32, 2, 2], B: Array[i32, 2, 2]) -> Array[i32, 2, 2]:
             return matmul(A, B)
 
-        I = [[1, 0], [0, 1]]
-        B = [[5, 6], [7, 8]]
+        I = np.array([[1, 0], [0, 1]], dtype=np.int32)
+        B = np.array([[5, 6], [7, 8]], dtype=np.int32)
         result = matmul_int(I, B)
 
-        expected = [[5, 6], [7, 8]]
-        assert _flat(result) == _flat(expected)
+        np.testing.assert_array_equal(result, [[5, 6], [7, 8]])
 
 
 # ==================== TYPE VALIDATION ====================

@@ -6,6 +6,7 @@ Validates that element-wise map compiles through the full pipeline:
 """
 
 import pytest
+import numpy as np
 from mlir_edsl import ml_function, Array, f32, i32, tensor_map, relu, leaky_relu
 
 
@@ -20,7 +21,7 @@ class TestMapExecution:
         def identity(a: Array[f32, 4]) -> Array[f32, 4]:
             return tensor_map(a, lambda v: v)
 
-        result = identity([1.0, 2.0, 3.0, 4.0])
+        result = identity(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
         assert len(result) == 4
         for got, expected in zip(result, [1.0, 2.0, 3.0, 4.0]):
             assert abs(got - expected) < 1e-5
@@ -31,7 +32,7 @@ class TestMapExecution:
         def scale(a: Array[f32, 4]) -> Array[f32, 4]:
             return tensor_map(a, lambda v: v * 2.0)
 
-        result = scale([1.0, 2.0, 3.0, 4.0])
+        result = scale(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
         assert len(result) == 4
         for got, expected in zip(result, [2.0, 4.0, 6.0, 8.0]):
             assert abs(got - expected) < 1e-5
@@ -45,7 +46,7 @@ class TestMapExecution:
         def manual_relu(a: Array[f32, 4]) -> Array[f32, 4]:
             return tensor_map(a, lambda v: If(v > to_value(0.0), v, to_value(0.0)))
 
-        result = manual_relu([-1.0, 0.0, 2.0, -3.0])
+        result = manual_relu(np.array([-1.0, 0.0, 2.0, -3.0], dtype=np.float32))
         assert len(result) == 4
         for got, expected in zip(result, [0.0, 0.0, 2.0, 0.0]):
             assert abs(got - expected) < 1e-5
@@ -56,7 +57,7 @@ class TestMapExecution:
         def apply_relu(a: Array[f32, 4]) -> Array[f32, 4]:
             return relu(a)
 
-        result = apply_relu([1.0, 2.0, 3.0, 4.0])
+        result = apply_relu(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
         for got, expected in zip(result, [1.0, 2.0, 3.0, 4.0]):
             assert abs(got - expected) < 1e-5
 
@@ -66,7 +67,7 @@ class TestMapExecution:
         def apply_relu(a: Array[f32, 4]) -> Array[f32, 4]:
             return relu(a)
 
-        result = apply_relu([-1.0, -2.0, -3.0, -4.0])
+        result = apply_relu(np.array([-1.0, -2.0, -3.0, -4.0], dtype=np.float32))
         for got in result:
             assert abs(got) < 1e-5
 
@@ -76,7 +77,7 @@ class TestMapExecution:
         def apply_relu(a: Array[f32, 4]) -> Array[f32, 4]:
             return relu(a)
 
-        result = apply_relu([-1.0, 2.0, -3.0, 4.0])
+        result = apply_relu(np.array([-1.0, 2.0, -3.0, 4.0], dtype=np.float32))
         for got, expected in zip(result, [0.0, 2.0, 0.0, 4.0]):
             assert abs(got - expected) < 1e-5
 
@@ -86,7 +87,7 @@ class TestMapExecution:
         def apply_leaky(a: Array[f32, 4]) -> Array[f32, 4]:
             return leaky_relu(a, alpha=0.1)
 
-        result = apply_leaky([1.0, 2.0, 3.0, 4.0])
+        result = apply_leaky(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
         for got, expected in zip(result, [1.0, 2.0, 3.0, 4.0]):
             assert abs(got - expected) < 1e-5
 
@@ -96,7 +97,7 @@ class TestMapExecution:
         def apply_leaky(a: Array[f32, 4]) -> Array[f32, 4]:
             return leaky_relu(a, alpha=0.1)
 
-        result = apply_leaky([-1.0, -2.0, -10.0, -0.5])
+        result = apply_leaky(np.array([-1.0, -2.0, -10.0, -0.5], dtype=np.float32))
         expected = [-0.1, -0.2, -1.0, -0.05]
         for got, exp in zip(result, expected):
             assert abs(got - exp) < 1e-5
@@ -107,7 +108,7 @@ class TestMapExecution:
         def scale_one(a: Array[f32, 1]) -> Array[f32, 1]:
             return tensor_map(a, lambda v: v * 3.0)
 
-        result = scale_one([5.0])
+        result = scale_one(np.array([5.0], dtype=np.float32))
         assert abs(result[0] - 15.0) < 1e-5
 
 

@@ -6,6 +6,7 @@ Validates that dot(a, b) compiles through the full pipeline:
 """
 
 import pytest
+import numpy as np
 from mlir_edsl import ml_function, Array, f32, i32, dot
 
 
@@ -20,8 +21,8 @@ class TestDotExecution:
         def dot_ones(a: Array[f32, 4], b: Array[f32, 4]) -> f32:
             return dot(a, b)
 
-        import ctypes
-        result = dot_ones([1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0])
+        result = dot_ones(np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32),
+                          np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32))
         assert abs(result - 4.0) < 1e-5
 
     def test_dot_known_result(self, backend):
@@ -30,7 +31,8 @@ class TestDotExecution:
         def dot_known(a: Array[f32, 4], b: Array[f32, 4]) -> f32:
             return dot(a, b)
 
-        result = dot_known([1.0, 2.0, 3.0, 4.0], [1.0, 1.0, 1.0, 1.0])
+        result = dot_known(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32),
+                           np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32))
         assert abs(result - 10.0) < 1e-5
 
     def test_dot_sum_of_squares(self, backend):
@@ -39,7 +41,8 @@ class TestDotExecution:
         def dot_squares(a: Array[f32, 3], b: Array[f32, 3]) -> f32:
             return dot(a, b)
 
-        result = dot_squares([1.0, 2.0, 3.0], [1.0, 2.0, 3.0])
+        result = dot_squares(np.array([1.0, 2.0, 3.0], dtype=np.float32),
+                             np.array([1.0, 2.0, 3.0], dtype=np.float32))
         assert abs(result - 14.0) < 1e-5
 
     def test_dot_integer(self, backend):
@@ -48,7 +51,8 @@ class TestDotExecution:
         def dot_int(a: Array[i32, 4], b: Array[i32, 4]) -> i32:
             return dot(a, b)
 
-        result = dot_int([1, 2, 3, 4], [4, 3, 2, 1])
+        result = dot_int(np.array([1, 2, 3, 4], dtype=np.int32),
+                         np.array([4, 3, 2, 1], dtype=np.int32))
         assert result == 20  # 1*4 + 2*3 + 3*2 + 4*1 = 4+6+6+4 = 20
 
     def test_dot_with_zeros(self, backend):
@@ -57,7 +61,8 @@ class TestDotExecution:
         def dot_zero(a: Array[f32, 3], b: Array[f32, 3]) -> f32:
             return dot(a, b)
 
-        result = dot_zero([1.0, 2.0, 3.0], [0.0, 0.0, 0.0])
+        result = dot_zero(np.array([1.0, 2.0, 3.0], dtype=np.float32),
+                          np.array([0.0, 0.0, 0.0], dtype=np.float32))
         assert abs(result - 0.0) < 1e-5
 
     def test_dot_single_element(self, backend):
@@ -66,7 +71,8 @@ class TestDotExecution:
         def dot_single(a: Array[f32, 1], b: Array[f32, 1]) -> f32:
             return dot(a, b)
 
-        result = dot_single([3.0], [7.0])
+        result = dot_single(np.array([3.0], dtype=np.float32),
+                            np.array([7.0], dtype=np.float32))
         assert abs(result - 21.0) < 1e-5
 
 
