@@ -644,24 +644,40 @@ class TypeSystem:
             param_name: Parameter name for error messages
         """
         if isinstance(type_spec, ArrayType):
-            if not isinstance(value, list):
+            _is_ndarray = hasattr(value, 'shape') and hasattr(value, 'dtype')
+            if _is_ndarray:
+                if tuple(value.shape) != tuple(type_spec.shape):
+                    raise ValueError(
+                        f"Parameter '{param_name}': expected shape {type_spec.shape}, "
+                        f"got {tuple(value.shape)}"
+                    )
+            elif isinstance(value, list):
+                cls._check_nested_shape(value, type_spec.shape, param_name)
+            else:
                 raise TypeError(
-                    f"Parameter '{param_name}': expected list for {type_spec}, "
+                    f"Parameter '{param_name}': expected list or ndarray for {type_spec}, "
                     f"got {type(value).__name__}"
                 )
-            cls._check_nested_shape(value, type_spec.shape, param_name)
             return
 
         if isinstance(type_spec, TensorType):
-            if not isinstance(value, list):
+            _is_ndarray = hasattr(value, 'shape') and hasattr(value, 'dtype')
+            if _is_ndarray:
+                if not type_spec.is_dynamic and tuple(value.shape) != tuple(type_spec.shape):
+                    raise ValueError(
+                        f"Parameter '{param_name}': expected shape {type_spec.shape}, "
+                        f"got {tuple(value.shape)}"
+                    )
+            elif isinstance(value, list):
+                if not type_spec.is_dynamic:
+                    cls._check_nested_shape(value, type_spec.shape, param_name)
+                else:
+                    cls._check_nested_ndim(value, type_spec.ndim, param_name)
+            else:
                 raise TypeError(
-                    f"Parameter '{param_name}': expected list for {type_spec}, "
+                    f"Parameter '{param_name}': expected list or ndarray for {type_spec}, "
                     f"got {type(value).__name__}"
                 )
-            if not type_spec.is_dynamic:
-                cls._check_nested_shape(value, type_spec.shape, param_name)
-            else:
-                cls._check_nested_ndim(value, type_spec.ndim, param_name)
             return
 
         # Scalar validation

@@ -3,6 +3,13 @@ import ctypes
 from typing import Union
 from .types import Type, ScalarType, ArrayType, TensorType
 
+try:
+    import numpy as np
+    _HAS_NUMPY = True
+except ImportError:
+    np = None  # type: ignore[assignment]
+    _HAS_NUMPY = False
+
 
 try:
     from . import _mlir_backend
@@ -22,6 +29,15 @@ TYPE_TO_CTYPES = {
     ScalarType.F32: ctypes.c_float,
     ScalarType.I1: ctypes.c_bool,
 }
+
+# Populated once numpy is confirmed available (same shape as TYPE_TO_CTYPES)
+SCALAR_TYPE_TO_NUMPY_DTYPE: dict = {}
+if _HAS_NUMPY:
+    SCALAR_TYPE_TO_NUMPY_DTYPE = {
+        ScalarType.F32: np.float32,
+        ScalarType.I32: np.int32,
+        ScalarType.I1: np.bool_,
+    }
 
 _global_backend = None
 
@@ -50,23 +66,34 @@ def _make_output_descriptor(array_type) -> tuple:
 
     Returns (c_types, c_vals, buf) matching the standard MLIR memref descriptor
     layout. buf is Python-owned and must be kept alive through the ctypes call.
+    Returns np.ndarray as buf when numpy is available, otherwise ctypes array.
     """
     _ELEM_CTYPES = {
         ScalarType.I32: ctypes.c_int32,
         ScalarType.F32: ctypes.c_float,
         ScalarType.I1: ctypes.c_bool,
     }
-    elem_ctype = _ELEM_CTYPES[array_type.element_type.kind]
     shape = array_type.shape
     ndim = len(shape)
-    total = array_type.total_elements
 
-    buf = (elem_ctype * total)()  # zeroed, Python-owned
-    ptr = ctypes.cast(buf, ctypes.c_void_p)
-
+    # Row-major strides: shape (2,3,4) → strides (12, 4, 1)
     strides = [1] * ndim
     for i in range(ndim - 2, -1, -1):
         strides[i] = strides[i + 1] * shape[i + 1]
+
+    if _HAS_NUMPY:
+        dtype = SCALAR_TYPE_TO_NUMPY_DTYPE[array_type.element_type.kind]
+        buf = np.empty(shape, dtype=dtype)
+        ptr = buf.ctypes.data_as(ctypes.c_void_p)
+    elif array_type.element_type.kind in _ELEM_CTYPES:
+        elem_ctype = _ELEM_CTYPES[array_type.element_type.kind]
+        total = array_type.total_elements
+        buf = (elem_ctype * total)()  # zeroed, Python-owned
+        ptr = ctypes.cast(buf, ctypes.c_void_p)
+    else:
+        raise TypeError(
+            f"Unsupported element type {array_type.element_type} for output descriptor"
+        )
 
     c_types = (
         [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
@@ -78,12 +105,13 @@ def _make_output_descriptor(array_type) -> tuple:
     return c_types, c_vals, buf
 
 
-def _make_memref_descriptor(data: list, array_type) -> tuple:
+def _make_memref_descriptor(data, array_type) -> tuple:
     """Build (c_types, c_vals, buffer) for the standard MLIR memref descriptor.
 
     MLIR lowers memref<NxT> to individual LLVM args:
         alloc_ptr, aligned_ptr, offset, size0[, size1, ...], stride0[, stride1, ...]
 
+    Accepts list (copy) or np.ndarray (zero-copy).
     The buffer must be kept alive by the caller until after the ctypes call.
     """
     _ELEM_CTYPES = {
@@ -91,19 +119,35 @@ def _make_memref_descriptor(data: list, array_type) -> tuple:
         ScalarType.F32: ctypes.c_float,
         ScalarType.I1: ctypes.c_bool,
     }
-    elem_ctype = _ELEM_CTYPES[array_type.element_type.kind]
     shape = array_type.shape
     ndim = len(shape)
-    total = array_type.total_elements
 
-    flat = _flatten_list(data)
-    buf = (elem_ctype * total)(*flat)
-    ptr = ctypes.cast(buf, ctypes.c_void_p)
-
-    # Row-major strides: shape (2,3,4) → strides (12, 4, 1)
-    strides = [1] * ndim
-    for i in range(ndim - 2, -1, -1):
-        strides[i] = strides[i + 1] * shape[i + 1]
+    if _HAS_NUMPY and isinstance(data, np.ndarray):
+        expected_dtype = SCALAR_TYPE_TO_NUMPY_DTYPE[array_type.element_type.kind]
+        if data.dtype != expected_dtype:
+            raise TypeError(
+                f"ndarray dtype {data.dtype} does not match expected "
+                f"{expected_dtype} for {array_type}"
+            )
+        if not data.flags['C_CONTIGUOUS']:
+            data = np.ascontiguousarray(data)
+        ptr = data.ctypes.data_as(ctypes.c_void_p)
+        strides = [s // data.itemsize for s in data.strides]
+        buf = data
+    elif isinstance(data, list):
+        elem_ctype = _ELEM_CTYPES[array_type.element_type.kind]
+        total = array_type.total_elements
+        flat = _flatten_list(data)
+        buf = (elem_ctype * total)(*flat)
+        ptr = ctypes.cast(buf, ctypes.c_void_p)
+        # Row-major strides: shape (2,3,4) → strides (12, 4, 1)
+        strides = [1] * ndim
+        for i in range(ndim - 2, -1, -1):
+            strides[i] = strides[i + 1] * shape[i + 1]
+    else:
+        raise TypeError(
+            f"Expected list or np.ndarray for array parameter, got {type(data).__name__}"
+        )
 
     c_types = (
         [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
@@ -201,7 +245,10 @@ class CppMLIRBackend:
             flat_args.extend(out_c_vals)
             live_buffers.append(out_buf)
             ctypes.CFUNCTYPE(None, *flat_c_types)(ptr)(*flat_args)
-            return _unflatten(list(out_buf), return_type.shape)
+            if _HAS_NUMPY and isinstance(out_buf, np.ndarray):
+                return out_buf
+            else:
+                return _unflatten(list(out_buf), return_type.shape)
         elif isinstance(return_type, ScalarType):
             c_ret = self._type_to_ctype(return_type, "return type")
             return ctypes.CFUNCTYPE(c_ret, *flat_c_types)(ptr)(*flat_args)
