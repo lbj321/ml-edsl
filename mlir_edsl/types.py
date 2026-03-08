@@ -213,8 +213,8 @@ class ArrayType(Type):
             raise TypeError(f"Array shape must be int or tuple, got {type(shape).__name__}")
 
         # Validate dimensions
-        if not all(isinstance(d, int) and d > 0 for d in self.shape):
-            raise TypeError(f"All dimensions must be positive integers, got {self.shape}")
+        if not all(isinstance(d, int) and (d > 0 or d == DYN) for d in self.shape):
+            raise TypeError(f"All dimensions must be positive integers or DYN, got {self.shape}")
 
         # Validate dimensionality (1D, 2D, 3D only)
         if len(self.shape) == 0 or len(self.shape) > 3:
@@ -246,8 +246,15 @@ class ArrayType(Type):
         return len(self.shape)
 
     @property
+    def is_dynamic(self) -> bool:
+        """True if any dimension is dynamic."""
+        return DYN in self.shape
+
+    @property
     def total_elements(self) -> int:
         """Total number of elements (product of all dimensions)"""
+        if self.is_dynamic:
+            raise ValueError("Cannot compute total_elements for dynamic array")
         result = 1
         for dim in self.shape:
             result *= dim
@@ -286,7 +293,7 @@ class ArrayType(Type):
 
     def to_mlir_string(self) -> str:
         """Convert to MLIR type string: memref<10xi32>, memref<2x3xf32>, etc."""
-        dims = 'x'.join(str(d) for d in self.shape)
+        dims = 'x'.join('?' if d == DYN else str(d) for d in self.shape)
         return f"memref<{dims}x{self.element_type.name}>"
 
     # Equality and hashing
@@ -481,10 +488,10 @@ class ArrayMeta(type):
                 f"Only 1D, 2D, and 3D arrays supported, got {len(dims)}D"
             )
 
-        # Validate dimensions are positive integers
+        # Validate dimensions are positive integers or DYN
         for i, dim in enumerate(dims):
-            if not isinstance(dim, int) or dim <= 0:
-                raise TypeError(f"Dimension {i} must be positive integer, got {dim!r}")
+            if not isinstance(dim, int) or (dim <= 0 and dim != DYN):
+                raise TypeError(f"Dimension {i} must be positive integer or DYN, got {dim!r}")
 
         # Create ArrayType
         if len(dims) == 1:
@@ -645,11 +652,17 @@ class TypeSystem:
         """
         if isinstance(type_spec, ArrayType):
             if hasattr(value, 'shape') and hasattr(value, 'dtype'):
-                if tuple(value.shape) != tuple(type_spec.shape):
+                if len(value.shape) != len(type_spec.shape):
                     raise ValueError(
-                        f"Parameter '{param_name}': expected shape {type_spec.shape}, "
-                        f"got {tuple(value.shape)}"
+                        f"Parameter '{param_name}': expected {len(type_spec.shape)}D array, "
+                        f"got {len(value.shape)}D"
                     )
+                for i, (got, expected) in enumerate(zip(value.shape, type_spec.shape)):
+                    if expected != DYN and got != expected:
+                        raise ValueError(
+                            f"Parameter '{param_name}': expected shape {type_spec.shape}, "
+                            f"got {tuple(value.shape)}"
+                        )
             else:
                 raise TypeError(
                     f"Parameter '{param_name}': expected ndarray for {type_spec}, "
