@@ -82,6 +82,12 @@ class MLFunction:
             specialized_sig = self.signature.specialize(concrete_shapes)
             specialized_ast = validate_function_body(self.func, specialized_sig)
             self._compiled_variants[shape_key] = compile_function(specialized_sig, specialized_ast)
+            if os.getenv("SAVE_IR"):
+                from ..backend import get_backend
+                b = get_backend()
+                if b is not None:
+                    src = b._func_sources.get(self.signature.name, "")
+                    b._func_sources[specialized_sig.name] = src
 
         variant = self._compiled_variants[shape_key]
         variant.signature.validate_runtime_args(args, kwargs)
