@@ -62,7 +62,8 @@ mlir::Value LinalgBuilder::buildDot(const mlir_edsl::LinalgDot &node) {
                                               mlir::ValueRange{} /*no indices*/);
 }
 
-mlir::Value LinalgBuilder::buildMatmul(const mlir_edsl::LinalgMatmul &node) {
+mlir::Value LinalgBuilder::buildMatmul(const mlir_edsl::LinalgMatmul &node,
+                                       mlir::Value outParam) {
   auto loc = builder.getUnknownLoc();
 
   // 1. Build the 2D memref inputs
@@ -77,24 +78,26 @@ mlir::Value LinalgBuilder::buildMatmul(const mlir_edsl::LinalgMatmul &node) {
   }
   mlir::Type elemType = outMemRefType.getElementType();
 
-  // 3. Allocate and zero-initialise the output memref
-  mlir::Value tmp = builder.create<mlir::memref::AllocaOp>(loc, outMemRefType);
+  // 3. Use Python-allocated out-param directly, or fall back to alloca
+  mlir::Value out = outParam
+      ? outParam
+      : builder.create<mlir::memref::AllocaOp>(loc, outMemRefType);
 
   mlir::Value zero = buildZero(builder, loc, elemType);
 
   // 4. Zero-fill via linalg.fill
   builder.create<mlir::linalg::FillOp>(loc, mlir::ValueRange{zero},
-                                       mlir::ValueRange{tmp});
+                                       mlir::ValueRange{out});
 
-  // 5. Emit linalg.matmul ins(%lhs, %rhs) outs(%tmp)
+  // 5. Emit linalg.matmul ins(%lhs, %rhs) outs(%out)
   builder.create<mlir::linalg::MatmulOp>(loc, mlir::ValueRange{lhs, rhs},
-                                         mlir::ValueRange{tmp});
+                                         mlir::ValueRange{out});
 
-  // 6. Return the output memref; finalizeFunction will copy it to out-param
-  return tmp;
+  return out;
 }
 
-mlir::Value LinalgBuilder::buildMap(const mlir_edsl::LinalgMap &node) {
+mlir::Value LinalgBuilder::buildMap(const mlir_edsl::LinalgMap &node,
+                                    mlir::Value outParam) {
   auto loc = builder.getUnknownLoc();
 
   // 1. Build the 1D memref input
@@ -102,13 +105,15 @@ mlir::Value LinalgBuilder::buildMap(const mlir_edsl::LinalgMap &node) {
   if (!mlir::isa<mlir::MemRefType>(input.getType()))
     throw std::runtime_error("tensor_map: input must be a memref type");
 
-  // 2. Determine output type and allocate output memref
+  // 2. Determine output type; use Python-allocated out-param or fall back to alloca
   mlir::Type outMLIRType = parent->convertType(node.out_type());
   auto outType = mlir::dyn_cast<mlir::MemRefType>(outMLIRType);
   if (!outType)
     throw std::runtime_error("tensor_map: out_type must be a memref type");
 
-  mlir::Value output = builder.create<mlir::memref::AllocaOp>(loc, outType);
+  mlir::Value output = outParam
+      ? outParam
+      : builder.create<mlir::memref::AllocaOp>(loc, outType);
 
   int64_t elementNodeId = node.element_node_id();
   const auto &bodyProto = node.body();

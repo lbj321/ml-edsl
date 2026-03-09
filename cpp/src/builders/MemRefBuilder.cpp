@@ -37,7 +37,8 @@ mlir::MemRefType MemRefBuilder::buildMemRefType(const MemRefTypeSpec &spec) {
   return mlir::MemRefType::get(shape, elementType);
 }
 
-mlir::Value MemRefBuilder::buildArrayLiteral(const ArrayLiteral &arrayLit) {
+mlir::Value MemRefBuilder::buildArrayLiteral(const ArrayLiteral &arrayLit,
+                                             mlir::Value outParam) {
   auto loc = builder.getUnknownLoc();
 
   // 1. Build memref type from TypeSpec
@@ -46,9 +47,10 @@ mlir::Value MemRefBuilder::buildArrayLiteral(const ArrayLiteral &arrayLit) {
   }
   mlir::MemRefType memrefType = buildMemRefType(arrayLit.type().memref());
 
-  // 2. Allocate with memref.alloca (stack allocation)
-  auto allocOp = builder.create<mlir::memref::AllocaOp>(loc, memrefType);
-  mlir::Value memref = allocOp.getResult();
+  // 2. Use Python-allocated out-param directly, or fall back to alloca
+  mlir::Value memref = outParam
+      ? outParam
+      : builder.create<mlir::memref::AllocaOp>(loc, memrefType).getResult();
 
   // 3. Get shape and pre-build index constants (one per unique value)
   llvm::ArrayRef<int64_t> shape = memrefType.getShape();
@@ -118,7 +120,8 @@ mlir::Value MemRefBuilder::buildArrayStore(const ArrayStore &store) {
   return memref;
 }
 
-mlir::Value MemRefBuilder::buildArrayBinaryOp(const ArrayBinaryOp &op) {
+mlir::Value MemRefBuilder::buildArrayBinaryOp(const ArrayBinaryOp &op,
+                                              mlir::Value outParam) {
   auto loc = builder.getUnknownLoc();
 
   // 1. Build operands
@@ -129,13 +132,14 @@ mlir::Value MemRefBuilder::buildArrayBinaryOp(const ArrayBinaryOp &op) {
   auto broadcastMode = op.broadcast();
   auto opType = op.op_type();
 
-  // 3. Allocate result memref
+  // 3. Use Python-allocated out-param directly, or fall back to alloca
   if (!op.result_type().has_memref()) {
     throw std::runtime_error("ArrayBinaryOp must have memref result type");
   }
   mlir::MemRefType resultType = buildMemRefType(op.result_type().memref());
-  auto allocOp = builder.create<mlir::memref::AllocaOp>(loc, resultType);
-  mlir::Value resultArray = allocOp.getResult();
+  mlir::Value resultArray = outParam
+      ? outParam
+      : builder.create<mlir::memref::AllocaOp>(loc, resultType).getResult();
 
   // 4. Build element-wise nested loops over result shape
   llvm::ArrayRef<int64_t> shape = resultType.getShape();

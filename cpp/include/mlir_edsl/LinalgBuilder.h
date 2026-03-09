@@ -20,10 +20,12 @@ public:
   mlir::Value buildDot(const mlir_edsl::LinalgDot &node);
 
   /// Build matrix multiply: linalg.matmul ins(%A, %B) outs(%C) → returns memref
-  mlir::Value buildMatmul(const mlir_edsl::LinalgMatmul &node);
+  mlir::Value buildMatmul(const mlir_edsl::LinalgMatmul &node,
+                          mlir::Value outParam = {});
 
   /// Element-wise map via linalg.generic: returns output memref of same type as input.
-  mlir::Value buildMap(const mlir_edsl::LinalgMap &node);
+  mlir::Value buildMap(const mlir_edsl::LinalgMap &node,
+                       mlir::Value outParam = {});
 
   /// Reduction over a 1D memref: linalg.reduce ins(%input) outs(%acc) → returns scalar.
   mlir::Value buildReduce(const mlir_edsl::LinalgReduce &node);

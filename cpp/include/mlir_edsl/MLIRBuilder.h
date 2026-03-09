@@ -38,7 +38,8 @@ public:
   void clearValueCache();
 
   // ==================== CORE BUILDING ====================
-  mlir::Value buildFromProtobufNode(const mlir_edsl::ASTNode &node);
+  mlir::Value buildFromProtobufNode(const mlir_edsl::ASTNode &node,
+                                    mlir::Value outParam = {});
 
   // ==================== PUBLIC UTILITIES (for dialect builders) ====================
   mlir::Type convertType(const mlir_edsl::TypeSpec &typeSpec) const;
@@ -80,11 +81,13 @@ private:
 
   // AST node category dispatchers
   mlir::Value buildFromScalarNode(const mlir_edsl::ScalarNode &node);
-  mlir::Value buildFromArrayNode(const mlir_edsl::ArrayNode &node);
+  mlir::Value buildFromArrayNode(const mlir_edsl::ArrayNode &node,
+                                 mlir::Value outParam = {});
   mlir::Value buildFromControlFlowNode(const mlir_edsl::ControlFlowNode &node);
   mlir::Value buildFromFunctionNode(const mlir_edsl::FunctionNode &node);
   mlir::Value buildFromTensorNode(const mlir_edsl::TensorNode &node);
-  mlir::Value buildFromLinalgNode(const mlir_edsl::LinalgNode &node);
+  mlir::Value buildFromLinalgNode(const mlir_edsl::LinalgNode &node,
+                                  mlir::Value outParam = {});
   mlir::Value buildFromBindingNode(const mlir_edsl::BindingNode &node);
 
   // Node handlers

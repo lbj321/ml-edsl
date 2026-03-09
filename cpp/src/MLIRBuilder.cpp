@@ -56,12 +56,13 @@ void MLIRBuilder::setValueCacheEntry(int64_t nodeId, mlir::Value value) {
 
 // ==================== AST DISPATCH ====================
 
-mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
+mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node,
+                                               mlir::Value outParam) {
   switch (node.node_case()) {
     case mlir_edsl::ASTNode::kScalar:
       return buildFromScalarNode(node.scalar());
     case mlir_edsl::ASTNode::kArray:
-      return buildFromArrayNode(node.array());
+      return buildFromArrayNode(node.array(), outParam);
     case mlir_edsl::ASTNode::kControlFlow:
       return buildFromControlFlowNode(node.control_flow());
     case mlir_edsl::ASTNode::kFunction:
@@ -69,7 +70,7 @@ mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
     case mlir_edsl::ASTNode::kTensor:
       return buildFromTensorNode(node.tensor());
     case mlir_edsl::ASTNode::kLinalg:
-      return buildFromLinalgNode(node.linalg());
+      return buildFromLinalgNode(node.linalg(), outParam);
     case mlir_edsl::ASTNode::kBinding:
       return buildFromBindingNode(node.binding());
     default:
@@ -92,16 +93,17 @@ mlir::Value MLIRBuilder::buildFromScalarNode(const mlir_edsl::ScalarNode &node) 
   }
 }
 
-mlir::Value MLIRBuilder::buildFromArrayNode(const mlir_edsl::ArrayNode &node) {
+mlir::Value MLIRBuilder::buildFromArrayNode(const mlir_edsl::ArrayNode &node,
+                                            mlir::Value outParam) {
   switch (node.value_case()) {
     case mlir_edsl::ArrayNode::kLiteral:
-      return memrefBuilder->buildArrayLiteral(node.literal());
+      return memrefBuilder->buildArrayLiteral(node.literal(), outParam);
     case mlir_edsl::ArrayNode::kAccess:
       return memrefBuilder->buildArrayAccess(node.access());
     case mlir_edsl::ArrayNode::kStore:
       return memrefBuilder->buildArrayStore(node.store());
     case mlir_edsl::ArrayNode::kBinaryOp:
-      return memrefBuilder->buildArrayBinaryOp(node.binary_op());
+      return memrefBuilder->buildArrayBinaryOp(node.binary_op(), outParam);
     default:
       throw std::runtime_error("Unknown array node type");
   }
@@ -122,14 +124,15 @@ mlir::Value MLIRBuilder::buildFromTensorNode(const mlir_edsl::TensorNode &node) 
   }
 }
 
-mlir::Value MLIRBuilder::buildFromLinalgNode(const mlir_edsl::LinalgNode &node) {
+mlir::Value MLIRBuilder::buildFromLinalgNode(const mlir_edsl::LinalgNode &node,
+                                             mlir::Value outParam) {
   switch (node.value_case()) {
     case mlir_edsl::LinalgNode::kDot:
       return linalgBuilder->buildDot(node.dot());
     case mlir_edsl::LinalgNode::kMatmul:
-      return linalgBuilder->buildMatmul(node.matmul());
+      return linalgBuilder->buildMatmul(node.matmul(), outParam);
     case mlir_edsl::LinalgNode::kMap:
-      return linalgBuilder->buildMap(node.map());
+      return linalgBuilder->buildMap(node.map(), outParam);
     case mlir_edsl::LinalgNode::kMapElement:
       return handleLinalgMapElement(node.map_element());
     case mlir_edsl::LinalgNode::kReduce:

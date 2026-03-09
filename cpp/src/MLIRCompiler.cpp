@@ -104,9 +104,13 @@ void MLIRCompiler::finalizeFunction(const std::string &name,
   }
 
   if (currentOutParam) {
-    // Aggregate return: copy result into Python-allocated out-param buffer.
-    opBuilder->create<mlir::memref::CopyOp>(
-        opBuilder->getUnknownLoc(), result, currentOutParam);
+    // Aggregate return: result should already be the out-param (written directly).
+    // Only emit memref.copy as a fallback for identity returns (e.g. "return a"
+    // where a is a parameter) or other cases where result != currentOutParam.
+    if (result != currentOutParam) {
+      opBuilder->create<mlir::memref::CopyOp>(
+          opBuilder->getUnknownLoc(), result, currentOutParam);
+    }
     opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc());
   } else if (mlir::isa<mlir::IntegerType, mlir::FloatType>(result.getType())) {
     // Scalar return — normal path.
@@ -178,7 +182,10 @@ void MLIRCompiler::compileFunction(const mlir_edsl::FunctionDef &funcDef) {
 
   // Create function, build body, finalize
   createFunction(funcDef.name(), params, returnType);
-  mlir::Value result = builder->buildFromProtobufNode(funcDef.body());
+  // Pass currentOutParam so array-producing ops write directly into the
+  // Python-allocated output buffer, skipping the intermediate alloca+copy.
+  mlir::Value result = builder->buildFromProtobufNode(funcDef.body(),
+                                                      currentOutParam);
   finalizeFunction(funcDef.name(), result);
 }
 

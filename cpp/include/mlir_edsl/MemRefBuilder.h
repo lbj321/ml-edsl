@@ -25,7 +25,8 @@ public:
   mlir::MemRefType buildMemRefType(const MemRefTypeSpec &spec);
 
   /// Build array literal: allocate + initialize
-  mlir::Value buildArrayLiteral(const ArrayLiteral &arrayLit);
+  mlir::Value buildArrayLiteral(const ArrayLiteral &arrayLit,
+                                mlir::Value outParam = {});
 
   /// Build array access (memref.load)
   mlir::Value buildArrayAccess(const ArrayAccess &access);
@@ -34,7 +35,8 @@ public:
   mlir::Value buildArrayStore(const ArrayStore &store);
 
   /// Build element-wise binary operation on arrays
-  mlir::Value buildArrayBinaryOp(const ArrayBinaryOp &op);
+  mlir::Value buildArrayBinaryOp(const ArrayBinaryOp &op,
+                                 mlir::Value outParam = {});
 
 private:
   mlir::OpBuilder &builder;
