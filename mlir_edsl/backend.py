@@ -205,7 +205,7 @@ class CppMLIRBackend:
 
         ptr = self.compiler.get_function_pointer(name)
 
-        if isinstance(return_type, ArrayType):
+        if isinstance(return_type, (ArrayType, TensorType)):
             # Aggregate return: append Python-allocated output descriptor.
             out_c_types, out_c_vals, out_buf = _make_output_descriptor(return_type)
             flat_c_types.extend(out_c_types)
