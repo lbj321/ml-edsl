@@ -80,7 +80,7 @@ class FunctionSignature:
     def has_dynamic_dims(self) -> bool:
         """True if any parameter has a dynamic (DYN) dimension."""
         return any(
-            isinstance(t, ArrayType) and t.is_dynamic
+            isinstance(t, (ArrayType, TensorType)) and t.is_dynamic
             for t in self.param_types.values()
         )
 
@@ -98,6 +98,8 @@ class FunctionSignature:
             t = self.param_types[name]
             if isinstance(t, ArrayType) and t.is_dynamic and name in concrete_shapes:
                 new_types[name] = ArrayType(concrete_shapes[name], t.element_type)
+            elif isinstance(t, TensorType) and t.is_dynamic and name in concrete_shapes:
+                new_types[name] = TensorType(concrete_shapes[name], t.element_type)
             else:
                 new_types[name] = t
 

@@ -82,6 +82,11 @@ def _make_output_descriptor(array_type) -> tuple:
         + [ctypes.c_int64] * ndim
         + [ctypes.c_int64] * ndim
     )
+    if any(d == -1 for d in shape):
+        raise NotImplementedError(
+            f"Dynamic return type {array_type} is not yet supported. "
+            "Only static return shapes are supported."
+        )
     c_vals = [ptr, ptr, 0] + list(shape) + strides
 
     return c_types, c_vals, buf
@@ -121,7 +126,9 @@ def _make_memref_descriptor(data, array_type) -> tuple:
         + [ctypes.c_int64] * ndim
         + [ctypes.c_int64] * ndim
     )
-    c_vals = [ptr, ptr, 0] + list(shape) + strides
+    # Use data.shape for size fields — array_type.shape contains -1 for DYN
+    # dimensions, but MLIR needs the actual runtime sizes in the descriptor.
+    c_vals = [ptr, ptr, 0] + list(data.shape) + strides
 
     return c_types, c_vals, buf
 

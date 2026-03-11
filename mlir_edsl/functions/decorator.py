@@ -5,7 +5,7 @@ import os
 import textwrap
 from typing import Callable, Dict, Tuple, Union
 from ..ast import CallOp, Value
-from ..types import ArrayType
+from ..types import ArrayType, TensorType
 from .context import in_symbolic_context
 from .signature import FunctionSignature
 from .validation import validate_function_body
@@ -69,7 +69,7 @@ class MLFunction:
         concrete_shapes = {}
         for name, val in zip(self.signature.param_names, ordered):
             t = self.signature.param_types[name]
-            if isinstance(t, ArrayType) and t.is_dynamic:
+            if isinstance(t, (ArrayType, TensorType)) and t.is_dynamic:
                 concrete_shapes[name] = tuple(val.shape)
 
         shape_key = tuple(
