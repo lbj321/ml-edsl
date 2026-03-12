@@ -82,11 +82,10 @@ def _make_output_descriptor(array_type) -> tuple:
         + [ctypes.c_int64] * ndim
         + [ctypes.c_int64] * ndim
     )
-    if any(d == -1 for d in shape):
-        raise NotImplementedError(
-            f"Dynamic return type {array_type} is not yet supported. "
-            "Only static return shapes are supported."
-        )
+    assert not any(d == -1 for d in shape), (
+        f"Internal error: DYN return type reached output descriptor for {array_type}. "
+        "Abstract evaluation should have resolved concrete shapes before compilation."
+    )
     c_vals = [ptr, ptr, 0] + list(shape) + strides
 
     return c_types, c_vals, buf

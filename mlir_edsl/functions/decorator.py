@@ -33,7 +33,7 @@ class MLFunction:
             self._compiled_variants: Dict[Tuple, CompiledFunction] = {}
 
         # Validate and cache AST for later compilation (also serves as early syntax check for DYN)
-        self._cached_ast: Value = validate_function_body(func, self.signature)
+        self._cached_ast, _ = validate_function_body(func, self.signature)
 
         # Store Python source on backend for HTML report (SAVE_IR=1)
         if os.getenv("SAVE_IR"):
@@ -80,7 +80,22 @@ class MLFunction:
 
         if shape_key not in self._compiled_variants:
             specialized_sig = self.signature.specialize(concrete_shapes)
-            specialized_ast = validate_function_body(self.func, specialized_sig)
+            specialized_ast, inferred_return = validate_function_body(self.func, specialized_sig)
+            # Replace DYN return type with the concrete shape inferred by abstract evaluation
+            ret = specialized_sig.return_type
+            if isinstance(ret, (ArrayType, TensorType)) and ret.is_dynamic:
+                if inferred_return.is_dynamic:
+                    raise TypeError(
+                        f"Cannot determine return shape for DYN return type in '{self.func.__name__}': "
+                        "abstract evaluation produced dynamic shape. "
+                        "Output shape must be deterministic from input shapes."
+                    )
+                specialized_sig = FunctionSignature(
+                    name=specialized_sig.name,
+                    param_names=specialized_sig.param_names,
+                    param_types=specialized_sig.param_types,
+                    return_type=inferred_return,
+                )
             self._compiled_variants[shape_key] = compile_function(specialized_sig, specialized_ast)
             if os.getenv("SAVE_IR"):
                 from ..backend import get_backend

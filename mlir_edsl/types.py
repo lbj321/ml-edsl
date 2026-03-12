@@ -725,6 +725,13 @@ class TypeSystem:
                 f"  Hint: Change return type or add explicit cast"
             )
         else:
+            # Concrete inferred type satisfies a DYN declared type
+            if (type(inferred) == type(declared)
+                    and inferred.element_type == declared.element_type
+                    and len(inferred.shape) == len(declared.shape)
+                    and all(d == -1 or d == i
+                            for d, i in zip(declared.shape, inferred.shape))):
+                return True, ""
             return False, (
                 f"Array type mismatch:\n"
                 f"  Declared: {declared}\n"
