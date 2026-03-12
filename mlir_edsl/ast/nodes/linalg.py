@@ -49,6 +49,15 @@ class LinalgDot(Value):
                 f"linalg.dot: operand element types must match, "
                 f"got {lhs_type.element_type} and {rhs_type.element_type}"
             )
+        # Only check length compatibility when both dimensions are concrete.
+        # DYN (-1) dims are deferred to specialization time when abstract eval
+        # runs with concrete shapes. Restricted to 1D arrays only (no batched dot).
+        lhs_len, rhs_len = lhs_type.shape[0], rhs_type.shape[0]
+        if lhs_len != -1 and rhs_len != -1 and lhs_len != rhs_len:
+            raise TypeError(
+                f"linalg.dot: operand lengths must match, "
+                f"got {lhs_type.shape} and {rhs_type.shape}"
+            )
         self._element_type = lhs_type.element_type
 
     def infer_type(self) -> Type:
@@ -108,7 +117,10 @@ class LinalgMatmul(Value):
         M, K_lhs = lhs_type.shape
         K_rhs, N = rhs_type.shape
 
-        if K_lhs != K_rhs:
+        # Only check inner-dimension compatibility when both K values are concrete.
+        # DYN (-1) dims are deferred to specialization time when abstract eval
+        # runs with concrete shapes. Restricted to 2D arrays only (no batched matmul).
+        if K_lhs != -1 and K_rhs != -1 and K_lhs != K_rhs:
             raise TypeError(
                 f"linalg.matmul: inner dimensions must match, "
                 f"got lhs shape {lhs_type.shape} and rhs shape {rhs_type.shape}"
