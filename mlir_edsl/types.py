@@ -672,6 +672,11 @@ class TypeSystem:
 
         if isinstance(type_spec, TensorType):
             if hasattr(value, 'shape') and hasattr(value, 'dtype'):
+                if len(value.shape) != len(type_spec.shape):
+                    raise ValueError(
+                        f"Parameter '{param_name}': expected {len(type_spec.shape)}D tensor, "
+                        f"got {len(value.shape)}D"
+                    )
                 if not type_spec.is_dynamic and tuple(value.shape) != tuple(type_spec.shape):
                     raise ValueError(
                         f"Parameter '{param_name}': expected shape {type_spec.shape}, "

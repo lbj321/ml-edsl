@@ -1,7 +1,7 @@
 """Linalg AST nodes: LinalgDot, LinalgMatmul, LinalgMapElement, LinalgMap, LinalgReduce"""
 
 from ..base import Value
-from ...types import Type, ScalarType, ArrayType
+from ...types import Type, ScalarType, ArrayType, TensorType
 
 # Import generated protobuf code
 try:
@@ -36,22 +36,19 @@ class LinalgDot(Value):
         lhs_type = self.lhs.infer_type()
         rhs_type = self.rhs.infer_type()
 
-        if not isinstance(lhs_type, ArrayType) or lhs_type.ndim != 1:
+        if not isinstance(lhs_type, TensorType) or lhs_type.ndim != 1:
             raise TypeError(
-                f"linalg.dot: lhs must be a 1D array, got {lhs_type}"
+                f"linalg.dot: lhs must be a 1D tensor, got {lhs_type}"
             )
-        if not isinstance(rhs_type, ArrayType) or rhs_type.ndim != 1:
+        if not isinstance(rhs_type, TensorType) or rhs_type.ndim != 1:
             raise TypeError(
-                f"linalg.dot: rhs must be a 1D array, got {rhs_type}"
+                f"linalg.dot: rhs must be a 1D tensor, got {rhs_type}"
             )
         if lhs_type.element_type != rhs_type.element_type:
             raise TypeError(
                 f"linalg.dot: operand element types must match, "
                 f"got {lhs_type.element_type} and {rhs_type.element_type}"
             )
-        # Only check length compatibility when both dimensions are concrete.
-        # DYN (-1) dims are deferred to specialization time when abstract eval
-        # runs with concrete shapes. Restricted to 1D arrays only (no batched dot).
         lhs_len, rhs_len = lhs_type.shape[0], rhs_type.shape[0]
         if lhs_len != -1 and rhs_len != -1 and lhs_len != rhs_len:
             raise TypeError(
@@ -100,13 +97,13 @@ class LinalgMatmul(Value):
         lhs_type = self.lhs.infer_type()
         rhs_type = self.rhs.infer_type()
 
-        if not isinstance(lhs_type, ArrayType) or lhs_type.ndim != 2:
+        if not isinstance(lhs_type, TensorType) or lhs_type.ndim != 2:
             raise TypeError(
-                f"linalg.matmul: lhs must be a 2D array, got {lhs_type}"
+                f"linalg.matmul: lhs must be a 2D tensor, got {lhs_type}"
             )
-        if not isinstance(rhs_type, ArrayType) or rhs_type.ndim != 2:
+        if not isinstance(rhs_type, TensorType) or rhs_type.ndim != 2:
             raise TypeError(
-                f"linalg.matmul: rhs must be a 2D array, got {rhs_type}"
+                f"linalg.matmul: rhs must be a 2D tensor, got {rhs_type}"
             )
         if lhs_type.element_type != rhs_type.element_type:
             raise TypeError(
@@ -117,16 +114,13 @@ class LinalgMatmul(Value):
         M, K_lhs = lhs_type.shape
         K_rhs, N = rhs_type.shape
 
-        # Only check inner-dimension compatibility when both K values are concrete.
-        # DYN (-1) dims are deferred to specialization time when abstract eval
-        # runs with concrete shapes. Restricted to 2D arrays only (no batched matmul).
         if K_lhs != -1 and K_rhs != -1 and K_lhs != K_rhs:
             raise TypeError(
                 f"linalg.matmul: inner dimensions must match, "
                 f"got lhs shape {lhs_type.shape} and rhs shape {rhs_type.shape}"
             )
 
-        self._out_type = ArrayType((M, N), lhs_type.element_type)
+        self._out_type = TensorType((M, N), lhs_type.element_type)
 
     def infer_type(self) -> Type:
         """Matmul returns a 2D array of shape [M, N]."""
@@ -184,9 +178,9 @@ class LinalgMap(Value):
         super().__init__()
         self.input = input
         input_type = input.infer_type()
-        if not isinstance(input_type, ArrayType) or input_type.ndim != 1:
+        if not isinstance(input_type, TensorType) or input_type.ndim != 1:
             raise TypeError(
-                f"tensor_map: input must be a 1D array, got {input_type}"
+                f"tensor_map: input must be a 1D tensor, got {input_type}"
             )
         self._out_type = input_type
         self._element_placeholder = LinalgMapElement(input_type.element_type)
@@ -285,9 +279,9 @@ class LinalgReduce(Value):
         self.init = init
 
         input_type = input.infer_type()
-        if not isinstance(input_type, ArrayType) or input_type.ndim != 1:
+        if not isinstance(input_type, TensorType) or input_type.ndim != 1:
             raise TypeError(
-                f"linalg.reduce: input must be a 1D array, got {input_type}"
+                f"linalg.reduce: input must be a 1D tensor, got {input_type}"
             )
         self._element_type = input_type.element_type
 

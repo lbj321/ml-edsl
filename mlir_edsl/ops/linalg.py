@@ -5,80 +5,80 @@ from ..ast.base import Value
 
 
 def dot(a: Value, b: Value) -> LinalgDot:
-    """Compute dot product of two 1D arrays.
+    """Compute dot product of two 1D tensors.
 
     Args:
-        a: 1D array (Array[f32, N] or Array[i32, N])
-        b: 1D array of the same element type and length
+        a: 1D tensor (Tensor[f32, N] or Tensor[i32, N])
+        b: 1D tensor of the same element type and length
 
     Returns:
         LinalgDot AST node; evaluates to a scalar of the element type
 
     Raises:
-        TypeError: if operands are not 1D arrays with matching element types
+        TypeError: if operands are not 1D tensors with matching element types
 
     Example:
         @ml_function
-        def dot_product(a: Array[f32, 4], b: Array[f32, 4]) -> f32:
+        def dot_product(a: Tensor[f32, 4], b: Tensor[f32, 4]) -> f32:
             return dot(a, b)
     """
     return LinalgDot(a, b)
 
 
 def matmul(A: Value, B: Value) -> LinalgMatmul:
-    """Compute matrix multiplication of two 2D arrays.
+    """Compute matrix multiplication of two 2D tensors.
 
     Args:
-        A: 2D array of shape [M, K]
-        B: 2D array of shape [K, N]
+        A: 2D tensor of shape [M, K]
+        B: 2D tensor of shape [K, N]
 
     Returns:
-        LinalgMatmul AST node; evaluates to a 2D array of shape [M, N]
+        LinalgMatmul AST node; evaluates to a 2D tensor of shape [M, N]
 
     Raises:
-        TypeError: if operands are not 2D arrays with compatible shapes/types
+        TypeError: if operands are not 2D tensors with compatible shapes/types
 
     Example:
         @ml_function
-        def matrix_mul(A: Array[f32, 4, 4], B: Array[f32, 4, 4]) -> Array[f32, 4, 4]:
+        def matrix_mul(A: Tensor[f32, 4, 4], B: Tensor[f32, 4, 4]) -> Tensor[f32, 4, 4]:
             return matmul(A, B)
     """
     return LinalgMatmul(A, B)
 
 
 def tensor_map(arr: Value, fn) -> LinalgMap:
-    """Apply fn element-wise over a 1D array (linalg.map under the hood).
+    """Apply fn element-wise over a 1D tensor (linalg.map under the hood).
 
     Args:
-        arr: 1D array (Array[f32, N] or Array[i32, N])
+        arr: 1D tensor (Tensor[f32, N] or Tensor[i32, N])
         fn: callable accepting a scalar Value placeholder, returning a scalar Value
 
     Returns:
-        LinalgMap AST node; evaluates to a 1D array of the same type
+        LinalgMap AST node; evaluates to a 1D tensor of the same type
 
     Raises:
-        TypeError: if arr is not a 1D array, or fn returns wrong element type
+        TypeError: if arr is not a 1D tensor, or fn returns wrong element type
 
     Example:
         @ml_function
-        def scale(a: Array[f32, 4]) -> Array[f32, 4]:
+        def scale(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return tensor_map(a, lambda v: v * 2.0)
     """
     return LinalgMap(arr, fn)
 
 
 def relu(arr: Value) -> LinalgMap:
-    """ReLU: max(0, x) element-wise over a 1D float array.
+    """ReLU: max(0, x) element-wise over a 1D float tensor.
 
     Args:
-        arr: 1D array of f32 values
+        arr: 1D tensor of f32 values
 
     Returns:
-        LinalgMap AST node; evaluates to a 1D array with negative values clamped to 0
+        LinalgMap AST node; evaluates to a 1D tensor with negative values clamped to 0
 
     Example:
         @ml_function
-        def apply_relu(a: Array[f32, 4]) -> Array[f32, 4]:
+        def apply_relu(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return relu(a)
     """
     from ..ast.nodes.control_flow import IfOp
@@ -87,10 +87,10 @@ def relu(arr: Value) -> LinalgMap:
 
 
 def reduce(arr: Value, init: Value, fn) -> LinalgReduce:
-    """Reduce a 1D array to a scalar using a binary combining function.
+    """Reduce a 1D tensor to a scalar using a binary combining function.
 
     Args:
-        arr: 1D array (Array[f32, N] or Array[i32, N])
+        arr: 1D tensor (Tensor[f32, N] or Tensor[i32, N])
         init: scalar initial accumulator value (same element type as arr)
         fn: callable(element, accumulator) → scalar Value
 
@@ -102,24 +102,24 @@ def reduce(arr: Value, init: Value, fn) -> LinalgReduce:
 
     Example:
         @ml_function
-        def my_sum(a: Array[f32, 4]) -> f32:
+        def my_sum(a: Tensor[f32, 4]) -> f32:
             return reduce(a, to_value(0.0), lambda elem, acc: acc + elem)
     """
     return LinalgReduce(arr, init, fn)
 
 
 def tensor_sum(arr: Value) -> LinalgReduce:
-    """Sum all elements of a 1D float array.
+    """Sum all elements of a 1D float tensor.
 
     Args:
-        arr: 1D array of f32 values
+        arr: 1D tensor of f32 values
 
     Returns:
         LinalgReduce AST node; evaluates to the sum as f32
 
     Example:
         @ml_function
-        def my_sum(a: Array[f32, 4]) -> f32:
+        def my_sum(a: Tensor[f32, 4]) -> f32:
             return tensor_sum(a)
     """
     from ..ast.helpers import to_value
@@ -127,19 +127,19 @@ def tensor_sum(arr: Value) -> LinalgReduce:
 
 
 def tensor_max(arr: Value) -> LinalgReduce:
-    """Return the maximum element of a 1D float array.
+    """Return the maximum element of a 1D float tensor.
 
     Uses -infinity as the initial accumulator so any element beats it.
 
     Args:
-        arr: 1D array of f32 values
+        arr: 1D tensor of f32 values
 
     Returns:
         LinalgReduce AST node; evaluates to the maximum element as f32
 
     Example:
         @ml_function
-        def my_max(a: Array[f32, 4]) -> f32:
+        def my_max(a: Tensor[f32, 4]) -> f32:
             return tensor_max(a)
     """
     from ..ast.helpers import to_value
@@ -152,19 +152,19 @@ def tensor_max(arr: Value) -> LinalgReduce:
 
 
 def tensor_min(arr: Value) -> LinalgReduce:
-    """Return the minimum element of a 1D float array.
+    """Return the minimum element of a 1D float tensor.
 
     Uses +infinity as the initial accumulator so any element beats it.
 
     Args:
-        arr: 1D array of f32 values
+        arr: 1D tensor of f32 values
 
     Returns:
         LinalgReduce AST node; evaluates to the minimum element as f32
 
     Example:
         @ml_function
-        def my_min(a: Array[f32, 4]) -> f32:
+        def my_min(a: Tensor[f32, 4]) -> f32:
             return tensor_min(a)
     """
     from ..ast.helpers import to_value
@@ -177,18 +177,18 @@ def tensor_min(arr: Value) -> LinalgReduce:
 
 
 def leaky_relu(arr: Value, alpha: float = 0.01) -> LinalgMap:
-    """Leaky ReLU: v if v > 0 else alpha * v, element-wise over a 1D float array.
+    """Leaky ReLU: v if v > 0 else alpha * v, element-wise over a 1D float tensor.
 
     Args:
-        arr: 1D array of f32 values
+        arr: 1D tensor of f32 values
         alpha: negative slope coefficient (default 0.01)
 
     Returns:
-        LinalgMap AST node; evaluates to a 1D array with leaky relu applied
+        LinalgMap AST node; evaluates to a 1D tensor with leaky relu applied
 
     Example:
         @ml_function
-        def apply_leaky_relu(a: Array[f32, 4]) -> Array[f32, 4]:
+        def apply_leaky_relu(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return leaky_relu(a, alpha=0.1)
     """
     from ..ast.nodes.control_flow import IfOp

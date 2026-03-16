@@ -12,7 +12,7 @@ tests verify that:
 
 import numpy as np
 import pytest
-from mlir_edsl import ml_function, Array, f32, i32, dot, matmul
+from mlir_edsl import ml_function, Tensor, f32, i32, dot, matmul
 from mlir_edsl.types import DYN
 
 
@@ -22,15 +22,15 @@ class TestDotDynValidation:
     """linalg.dot length check is deferred for DYN operands."""
 
     def test_dyn_dot_decoration_accepted(self):
-        """Array[f32, DYN] dot operands are accepted at decoration time."""
+        """Tensor[f32, DYN] dot operands are accepted at decoration time."""
         @ml_function
-        def dot_dyn(a: Array[f32, DYN], b: Array[f32, DYN]) -> f32:
+        def dot_dyn(a: Tensor[f32, DYN], b: Tensor[f32, DYN]) -> f32:
             return dot(a, b)
 
     def test_dyn_dot_mismatched_lengths_raises_at_call(self, backend):
         """Calling dot with DYN operands of different lengths raises TypeError."""
         @ml_function
-        def dot_dyn_mismatch(a: Array[f32, DYN], b: Array[f32, DYN]) -> f32:
+        def dot_dyn_mismatch(a: Tensor[f32, DYN], b: Tensor[f32, DYN]) -> f32:
             return dot(a, b)
 
         a = np.array([1.0, 2.0, 3.0], dtype=np.float32)
@@ -41,7 +41,7 @@ class TestDotDynValidation:
     def test_dyn_dot_matching_lengths_correct_result(self, backend):
         """dot with DYN operands of matching length compiles and returns correct result."""
         @ml_function
-        def dot_dyn_ok(a: Array[f32, DYN], b: Array[f32, DYN]) -> f32:
+        def dot_dyn_ok(a: Tensor[f32, DYN], b: Tensor[f32, DYN]) -> f32:
             return dot(a, b)
 
         a = np.array([1.0, 2.0, 3.0], dtype=np.float32)
@@ -53,7 +53,7 @@ class TestDotDynValidation:
         """Statically incompatible dot operands are caught at decoration time."""
         with pytest.raises(TypeError, match="lengths must match"):
             @ml_function
-            def dot_static_mismatch(a: Array[f32, 3], b: Array[f32, 4]) -> f32:
+            def dot_static_mismatch(a: Tensor[f32, 3], b: Tensor[f32, 4]) -> f32:
                 return dot(a, b)
 
 
@@ -63,15 +63,15 @@ class TestMatmulDynValidation:
     """linalg.matmul inner-dimension check is deferred for DYN operands."""
 
     def test_dyn_matmul_decoration_accepted(self):
-        """Array[f32, DYN, DYN] matmul operands are accepted at decoration time."""
+        """Tensor[f32, DYN, DYN] matmul operands are accepted at decoration time."""
         @ml_function
-        def matmul_dyn(A: Array[f32, DYN, DYN], B: Array[f32, DYN, DYN]) -> Array[f32, DYN, DYN]:
+        def matmul_dyn(A: Tensor[f32, DYN, DYN], B: Tensor[f32, DYN, DYN]) -> Tensor[f32, DYN, DYN]:
             return matmul(A, B)
 
     def test_dyn_matmul_incompatible_inner_dims_raises_at_call(self, backend):
         """Calling matmul with DYN operands whose inner dims mismatch raises TypeError."""
         @ml_function
-        def matmul_dyn_mismatch(A: Array[f32, DYN, DYN], B: Array[f32, DYN, DYN]) -> Array[f32, DYN, DYN]:
+        def matmul_dyn_mismatch(A: Tensor[f32, DYN, DYN], B: Tensor[f32, DYN, DYN]) -> Tensor[f32, DYN, DYN]:
             return matmul(A, B)
 
         # A is [2, 3], B is [4, 2] — inner dims 3 != 4
@@ -83,7 +83,7 @@ class TestMatmulDynValidation:
     def test_dyn_matmul_compatible_dims_correct_result(self, backend):
         """matmul with DYN operands of compatible dims compiles and returns correct result."""
         @ml_function
-        def matmul_dyn_ok(A: Array[f32, DYN, DYN], B: Array[f32, DYN, DYN]) -> Array[f32, DYN, DYN]:
+        def matmul_dyn_ok(A: Tensor[f32, DYN, DYN], B: Tensor[f32, DYN, DYN]) -> Tensor[f32, DYN, DYN]:
             return matmul(A, B)
 
         A = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
@@ -95,7 +95,7 @@ class TestMatmulDynValidation:
         """Statically incompatible matmul inner dims are caught at decoration time."""
         with pytest.raises(TypeError, match="inner dimensions must match"):
             @ml_function
-            def matmul_static_mismatch(A: Array[f32, 2, 3], B: Array[f32, 4, 2]) -> Array[f32, 2, 2]:
+            def matmul_static_mismatch(A: Tensor[f32, 2, 3], B: Tensor[f32, 4, 2]) -> Tensor[f32, 2, 2]:
                 return matmul(A, B)
 
 

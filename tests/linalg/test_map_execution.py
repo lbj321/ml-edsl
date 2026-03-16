@@ -7,7 +7,7 @@ Validates that element-wise map compiles through the full pipeline:
 
 import pytest
 import numpy as np
-from mlir_edsl import ml_function, Array, f32, i32, tensor_map, relu, leaky_relu
+from mlir_edsl import ml_function, Tensor, f32, i32, tensor_map, relu, leaky_relu
 
 
 # ==================== EXECUTION TESTS ====================
@@ -18,7 +18,7 @@ class TestMapExecution:
     def test_identity_map(self, backend):
         """tensor_map with identity body returns a copy of the input."""
         @ml_function
-        def identity(a: Array[f32, 4]) -> Array[f32, 4]:
+        def identity(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return tensor_map(a, lambda v: v)
 
         result = identity(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
@@ -29,7 +29,7 @@ class TestMapExecution:
     def test_scale_map(self, backend):
         """tensor_map scales each element by a constant factor."""
         @ml_function
-        def scale(a: Array[f32, 4]) -> Array[f32, 4]:
+        def scale(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return tensor_map(a, lambda v: v * 2.0)
 
         result = scale(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
@@ -43,7 +43,7 @@ class TestMapExecution:
         from mlir_edsl.ast.helpers import to_value
 
         @ml_function
-        def manual_relu(a: Array[f32, 4]) -> Array[f32, 4]:
+        def manual_relu(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return tensor_map(a, lambda v: If(v > to_value(0.0), v, to_value(0.0)))
 
         result = manual_relu(np.array([-1.0, 0.0, 2.0, -3.0], dtype=np.float32))
@@ -54,7 +54,7 @@ class TestMapExecution:
     def test_relu_all_positive(self, backend):
         """relu on all-positive input is identity."""
         @ml_function
-        def apply_relu(a: Array[f32, 4]) -> Array[f32, 4]:
+        def apply_relu(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return relu(a)
 
         result = apply_relu(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
@@ -64,7 +64,7 @@ class TestMapExecution:
     def test_relu_all_negative(self, backend):
         """relu on all-negative input is all zeros."""
         @ml_function
-        def apply_relu(a: Array[f32, 4]) -> Array[f32, 4]:
+        def apply_relu(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return relu(a)
 
         result = apply_relu(np.array([-1.0, -2.0, -3.0, -4.0], dtype=np.float32))
@@ -74,7 +74,7 @@ class TestMapExecution:
     def test_relu_mixed(self, backend):
         """relu clamps negatives to zero and passes positives through."""
         @ml_function
-        def apply_relu(a: Array[f32, 4]) -> Array[f32, 4]:
+        def apply_relu(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return relu(a)
 
         result = apply_relu(np.array([-1.0, 2.0, -3.0, 4.0], dtype=np.float32))
@@ -84,7 +84,7 @@ class TestMapExecution:
     def test_leaky_relu_positive_passthrough(self, backend):
         """leaky_relu passes positive values through unchanged."""
         @ml_function
-        def apply_leaky(a: Array[f32, 4]) -> Array[f32, 4]:
+        def apply_leaky(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return leaky_relu(a, alpha=0.1)
 
         result = apply_leaky(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
@@ -94,7 +94,7 @@ class TestMapExecution:
     def test_leaky_relu_negative_scaling(self, backend):
         """leaky_relu scales negative values by alpha."""
         @ml_function
-        def apply_leaky(a: Array[f32, 4]) -> Array[f32, 4]:
+        def apply_leaky(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return leaky_relu(a, alpha=0.1)
 
         result = apply_leaky(np.array([-1.0, -2.0, -10.0, -0.5], dtype=np.float32))
@@ -105,7 +105,7 @@ class TestMapExecution:
     def test_single_element_array(self, backend):
         """tensor_map works on a 1-element array."""
         @ml_function
-        def scale_one(a: Array[f32, 1]) -> Array[f32, 1]:
+        def scale_one(a: Tensor[f32, 1]) -> Tensor[f32, 1]:
             return tensor_map(a, lambda v: v * 3.0)
 
         result = scale_one(np.array([5.0], dtype=np.float32))
@@ -118,15 +118,12 @@ class TestMapTypeValidation:
     """Test that invalid inputs are rejected at Python AST construction time"""
 
     def test_2d_array_rejected(self):
-        """tensor_map requires a 1D array."""
-        from mlir_edsl.ast.nodes.arrays import ArrayLiteral
-        from mlir_edsl.types import ArrayType, f32 as f32_type
+        """tensor_map requires a 1D tensor."""
+        from mlir_edsl.ast.nodes.functions import Parameter
+        from mlir_edsl.types import TensorType, f32 as f32_type
 
-        arr_2d = ArrayLiteral(
-            [[1.0, 2.0], [3.0, 4.0]],
-            ArrayType((2, 2), f32_type)
-        )
-        with pytest.raises(TypeError, match="1D array"):
+        arr_2d = Parameter("a", TensorType((2, 2), f32_type))
+        with pytest.raises(TypeError, match="1D tensor"):
             tensor_map(arr_2d, lambda v: v)
 
     def test_scalar_rejected(self):
@@ -135,16 +132,15 @@ class TestMapTypeValidation:
         from mlir_edsl.types import f32 as f32_type
 
         scalar = Constant(1.0, f32_type)
-        with pytest.raises(TypeError, match="1D array"):
+        with pytest.raises(TypeError, match="1D tensor"):
             tensor_map(scalar, lambda v: v)
 
     def test_body_type_mismatch_rejected(self):
         """tensor_map body must return the same element type as the input."""
-        from mlir_edsl.ast.nodes.arrays import ArrayLiteral
-        from mlir_edsl.types import ArrayType, f32 as f32_type
+        from mlir_edsl.ast.nodes.functions import Parameter
+        from mlir_edsl.types import TensorType, f32 as f32_type
         from mlir_edsl.ast.helpers import to_value
 
-        arr = ArrayLiteral([1.0, 2.0, 3.0], ArrayType(3, f32_type))
+        arr = Parameter("a", TensorType(3, f32_type))
         with pytest.raises(TypeError, match="element type"):
-            # Body returns i32 constant instead of f32
             tensor_map(arr, lambda v: to_value(1))

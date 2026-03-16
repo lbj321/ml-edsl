@@ -6,7 +6,7 @@ array outputs are returned as np.ndarray.
 
 import pytest
 import numpy as np
-from mlir_edsl import ml_function, Array, f32, i32, tensor_map, tensor_sum
+from mlir_edsl import ml_function, Tensor, f32, i32, tensor_map, tensor_sum
 from mlir_edsl.types import DYN
 
 
@@ -18,7 +18,7 @@ class TestNumpyInput:
     def test_scalar_return_from_ndarray_input(self, backend):
         """tensor_sum of a numpy array returns correct scalar."""
         @ml_function
-        def my_sum(a: Array[f32, 4]) -> f32:
+        def my_sum(a: Tensor[f32, 4]) -> f32:
             return tensor_sum(a)
 
         a = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
@@ -28,7 +28,7 @@ class TestNumpyInput:
     def test_array_return_is_ndarray(self, backend):
         """Array return type comes back as np.ndarray."""
         @ml_function
-        def scale(a: Array[f32, 4]) -> Array[f32, 4]:
+        def scale(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return tensor_map(a, lambda v: v * 2.0)
 
         a = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
@@ -45,7 +45,7 @@ class TestNumpyValidation:
     def test_wrong_dtype_raises(self):
         """Passing float64 where float32 is expected raises TypeError."""
         @ml_function
-        def my_sum(a: Array[f32, 4]) -> f32:
+        def my_sum(a: Tensor[f32, 4]) -> f32:
             return tensor_sum(a)
 
         a = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64)
@@ -55,7 +55,7 @@ class TestNumpyValidation:
     def test_wrong_shape_raises(self):
         """Passing wrong shape raises ValueError."""
         @ml_function
-        def my_sum(a: Array[f32, 4]) -> f32:
+        def my_sum(a: Tensor[f32, 4]) -> f32:
             return tensor_sum(a)
 
         a = np.array([1.0, 2.0, 3.0], dtype=np.float32)
@@ -65,7 +65,7 @@ class TestNumpyValidation:
     def test_non_contiguous_accepted(self, backend):
         """Non-contiguous ndarray is auto-copied to contiguous before call."""
         @ml_function
-        def my_sum(a: Array[f32, 4]) -> f32:
+        def my_sum(a: Tensor[f32, 4]) -> f32:
             return tensor_sum(a)
 
         # Slice every other element from an 8-element array → non-contiguous
@@ -79,18 +79,18 @@ class TestNumpyValidation:
 # ==================== SHAPE SPECIALIZATION ====================
 
 class TestShapeSpecialization:
-    """Array[f32, DYN] compiles a static variant per unique input shape."""
+    """Tensor[f32, DYN] compiles a static variant per unique input shape."""
 
     def test_dyn_syntax_accepted(self):
-        """Array[f32, DYN] in a type hint does not raise at decoration time."""
+        """Tensor[f32, DYN] in a type hint does not raise at decoration time."""
         @ml_function
-        def my_sum(a: Array[f32, DYN]) -> f32:
+        def my_sum(a: Tensor[f32, DYN]) -> f32:
             return tensor_sum(a)
 
     def test_dyn_sum_correct(self, backend):
         """DYN function returns correct scalar result."""
         @ml_function
-        def my_sum(a: Array[f32, DYN]) -> f32:
+        def my_sum(a: Tensor[f32, DYN]) -> f32:
             return tensor_sum(a)
 
         a = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
@@ -100,7 +100,7 @@ class TestShapeSpecialization:
     def test_different_shapes_compiled_separately(self, backend):
         """Calling with shape 4 then shape 8 both produce correct results."""
         @ml_function
-        def my_sum(a: Array[f32, DYN]) -> f32:
+        def my_sum(a: Tensor[f32, DYN]) -> f32:
             return tensor_sum(a)
 
         a4 = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
@@ -112,7 +112,7 @@ class TestShapeSpecialization:
     def test_shape_cache_hit(self, backend):
         """Second call with same shape reuses the compiled variant."""
         @ml_function
-        def my_sum(a: Array[f32, DYN]) -> f32:
+        def my_sum(a: Tensor[f32, DYN]) -> f32:
             return tensor_sum(a)
 
         a = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
@@ -124,7 +124,7 @@ class TestShapeSpecialization:
     def test_static_and_dyn_mixed(self, backend):
         """Function with one static and one DYN param compiles correctly."""
         @ml_function
-        def scale_sum(a: Array[f32, 4], b: Array[f32, DYN]) -> f32:
+        def scale_sum(a: Tensor[f32, 4], b: Tensor[f32, DYN]) -> f32:
             return tensor_sum(tensor_map(a, lambda v: v * 2.0))
 
         a = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
@@ -133,9 +133,9 @@ class TestShapeSpecialization:
         assert abs(result - 20.0) < 1e-5
 
     def test_wrong_ndim_raises(self):
-        """Passing a 2D array to Array[f32, DYN] (1D) raises ValueError."""
+        """Passing a 2D array to Tensor[f32, DYN] (1D) raises ValueError."""
         @ml_function
-        def my_sum(a: Array[f32, DYN]) -> f32:
+        def my_sum(a: Tensor[f32, DYN]) -> f32:
             return tensor_sum(a)
 
         a2d = np.ones((4, 4), dtype=np.float32)

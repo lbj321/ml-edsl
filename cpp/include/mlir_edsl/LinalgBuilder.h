@@ -16,18 +16,18 @@ public:
   LinalgBuilder(mlir::OpBuilder &builder, mlir::MLIRContext *context,
                 MLIRBuilder *parent);
 
-  /// Build dot product: linalg.dot ins(%a, %b) outs(%out) → returns scalar
+  /// Build dot product: linalg.dot ins(%a, %b) outs(%acc) → returns scalar
   mlir::Value buildDot(const mlir_edsl::LinalgDot &node);
 
-  /// Build matrix multiply: linalg.matmul ins(%A, %B) outs(%C) → returns memref
+  /// Build matrix multiply: linalg.matmul ins(%A, %B) outs(%C) → returns tensor
   mlir::Value buildMatmul(const mlir_edsl::LinalgMatmul &node,
                           mlir::Value outParam = {});
 
-  /// Element-wise map via linalg.generic: returns output memref of same type as input.
+  /// Element-wise map via linalg.map: returns output tensor of same type as input.
   mlir::Value buildMap(const mlir_edsl::LinalgMap &node,
                        mlir::Value outParam = {});
 
-  /// Reduction over a 1D memref: linalg.reduce ins(%input) outs(%acc) → returns scalar.
+  /// Reduction over a 1D tensor: linalg.reduce ins(%input) outs(%acc) → returns scalar.
   mlir::Value buildReduce(const mlir_edsl::LinalgReduce &node);
 
 private:
