@@ -1,12 +1,12 @@
 """Test linalg IR structure (Phase 8.2)
 
-Pre-lowering: verify linalg.dot and linalg.matmul appear in MLIR IR.
+Pre-lowering: verify linalg.dot, linalg.matmul, linalg.reduce appear in MLIR IR.
 Post-lowering: verify linalg ops are replaced by scf.for after convert-linalg-to-loops.
 """
 
 import pytest
 import numpy as np
-from mlir_edsl import ml_function, Tensor, f32, dot, matmul, tensor_map
+from mlir_edsl import ml_function, Tensor, f32, dot, matmul, tensor_map, tensor_sum
 
 
 class TestLinalgDotIR:
@@ -119,3 +119,68 @@ class TestDirectOutputBuffer:
         // CHECK-NOT: memref.copy
         // CHECK-NOT: memref.alloca() : memref<2x2xf32>
         """)
+
+    def test_map_materializes_into_out_param(self, check_ir):
+        """linalg.map result is materialized into the out-param via materialize_in_destination."""
+        @ml_function
+        def scale(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
+            return tensor_map(a, lambda x: x * 2.0)
+
+        scale(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
+        check_ir("""
+        // CHECK: bufferization.materialize_in_destination {{.*}} in restrict writable %arg1
+        """)
+
+    def test_matmul_materializes_into_out_param(self, check_ir):
+        """linalg.matmul result is materialized into the out-param via materialize_in_destination."""
+        @ml_function
+        def mm(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
+            return matmul(A, B)
+
+        mm(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+           np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32))
+        check_ir("""
+        // CHECK: bufferization.materialize_in_destination {{.*}} in restrict writable %arg2
+        """)
+
+
+class TestLinalgReduceIR:
+    """IR structure tests for linalg.reduce (via tensor_sum)"""
+
+    def test_reduce_uses_0d_tensor_accumulator(self, check_ir):
+        """Pre-lowering IR: tensor_sum uses tensor.from_elements init, linalg.reduce, tensor.extract."""
+        @ml_function
+        def my_sum(a: Tensor[f32, 4]) -> f32:
+            return tensor_sum(a)
+
+        my_sum(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
+        check_ir("""
+        // CHECK: tensor.from_elements
+        // CHECK: linalg.reduce
+        // CHECK: tensor.extract
+        // CHECK: return {{.*}} : f32
+        """)
+
+    def test_reduce_no_alloca(self, check_ir):
+        """Pre-lowering IR: no memref.alloca for the scalar accumulator."""
+        @ml_function
+        def my_sum(a: Tensor[f32, 4]) -> f32:
+            return tensor_sum(a)
+
+        my_sum(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
+        check_ir("""
+        // CHECK-NOT: memref.alloca
+        // CHECK: linalg.reduce
+        """)
+
+    def test_reduce_lowered_to_loops(self, check_lowered_ir):
+        """After convert-linalg-to-loops, linalg.reduce is gone and scf.for appears."""
+        @ml_function
+        def my_sum(a: Tensor[f32, 4]) -> f32:
+            return tensor_sum(a)
+
+        my_sum(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: scf.for
+        // CHECK-NOT: linalg.reduce
+        """, after="convert-linalg-to-loops")

@@ -45,8 +45,8 @@ mlir::Value LinalgBuilder::buildDot(const mlir_edsl::LinalgDot &node) {
   // 0-D tensor accumulator: empty() → fill(zero) → dot → extract scalar
   auto initType = mlir::RankedTensorType::get({}, elemType);
   mlir::Value zero = buildZero(builder, loc, elemType);
-  mlir::Value emptyInit = builder.create<mlir::tensor::EmptyOp>(
-      loc, initType, mlir::ValueRange{});
+  mlir::Value emptyInit =
+      builder.create<mlir::tensor::EmptyOp>(loc, initType, mlir::ValueRange{});
   mlir::Value filledInit =
       builder
           .create<mlir::linalg::FillOp>(loc, mlir::ValueRange{zero},
@@ -75,14 +75,18 @@ mlir::Value LinalgBuilder::buildMatmul(const mlir_edsl::LinalgMatmul &node,
   mlir::Type elemType = outTensorType.getElementType();
   mlir::Value zero = buildZero(builder, loc, elemType);
 
-  // Use out-param as init tensor so linalg writes directly into Python's buffer.
-  // Fall back to tensor.empty for sub-expression use (no out-param).
+  // Use out-param as init tensor so linalg writes directly into Python's
+  // buffer. Fall back to tensor.empty for sub-expression use (no out-param).
   mlir::Value dest;
   if (outParam)
-    dest = builder.create<mlir::bufferization::ToTensorOp>(
-        loc, outTensorType, outParam, /*restrict=*/true, /*writable=*/true).getResult();
+    dest = builder
+               .create<mlir::bufferization::ToTensorOp>(
+                   loc, outTensorType, outParam, /*restrict=*/true,
+                   /*writable=*/true)
+               .getResult();
   else
-    dest = builder.create<mlir::tensor::EmptyOp>(loc, outTensorType, mlir::ValueRange{});
+    dest = builder.create<mlir::tensor::EmptyOp>(loc, outTensorType,
+                                                 mlir::ValueRange{});
   mlir::Value init =
       builder
           .create<mlir::linalg::FillOp>(loc, mlir::ValueRange{zero},
@@ -111,13 +115,18 @@ mlir::Value LinalgBuilder::buildMap(const mlir_edsl::LinalgMap &node,
   int64_t elementNodeId = node.element_node_id();
   const auto &bodyProto = node.body();
 
-  // Use out-param as init tensor so linalg writes directly into Python's buffer.
+  // Use out-param as init tensor so linalg writes directly into Python's
+  // buffer.
   mlir::Value init;
   if (outParam)
-    init = builder.create<mlir::bufferization::ToTensorOp>(
-        loc, outTensorType, outParam, /*restrict=*/true, /*writable=*/true).getResult();
+    init = builder
+               .create<mlir::bufferization::ToTensorOp>(
+                   loc, outTensorType, outParam, /*restrict=*/true,
+                   /*writable=*/true)
+               .getResult();
   else
-    init = builder.create<mlir::tensor::EmptyOp>(loc, outTensorType, mlir::ValueRange{});
+    init = builder.create<mlir::tensor::EmptyOp>(loc, outTensorType,
+                                                 mlir::ValueRange{});
 
   auto mapOp = builder.create<mlir::linalg::MapOp>(
       loc,
@@ -137,7 +146,8 @@ mlir::Value LinalgBuilder::buildReduce(const mlir_edsl::LinalgReduce &node) {
   auto loc = builder.getUnknownLoc();
 
   mlir::Value input = parent->buildFromProtobufNode(node.input());
-  auto inputTensorType = mlir::dyn_cast<mlir::RankedTensorType>(input.getType());
+  auto inputTensorType =
+      mlir::dyn_cast<mlir::RankedTensorType>(input.getType());
   if (!inputTensorType)
     throw std::runtime_error("linalg.reduce: input must be a tensor type");
   mlir::Type elemType = inputTensorType.getElementType();
