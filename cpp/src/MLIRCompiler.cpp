@@ -65,31 +65,24 @@ void MLIRCompiler::createFunction(
     mlir::Type returnType) {
   resetFunctionState();
 
-  // Convert parameter types.
-  // When returning a tensor, convert tensor params to memref in the signature
-  // to keep a pure-memref boundary. bufferizeFunctionBoundaries=true asserts
-  // all function args are tensors when hasTensorSemantics=true, so a mixed
-  // tensor/memref signature causes a crash. We replicate what that pass would
-  // do at the boundary: memref args + to_tensor at the top of the body.
-  const bool isTensorReturn = mlir::isa<mlir::RankedTensorType>(returnType);
+  // Convert parameter types: tensor params are always pre-converted to memref
+  // in the function signature, keeping a pure-memref boundary for all
+  // functions. to_tensor is inserted at the top of the body so the function
+  // body still operates on tensors.
   std::vector<mlir::Type> paramTypes;
-  std::vector<mlir::Type> originalParamTypes;
   for (const auto &[paramName, typeSpec] : params) {
     mlir::Type t = builder->convertType(typeSpec);
-    originalParamTypes.push_back(t);
-    if (isTensorReturn) {
-      if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(t)) {
-        t = mlir::MemRefType::get(tensorType.getShape(),
-                                  tensorType.getElementType());
-      }
-    }
+    if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(t))
+      t = mlir::MemRefType::get(tensorType.getShape(),
+                                tensorType.getElementType());
     paramTypes.push_back(t);
   }
 
   // Aggregate return: append a hidden memref out-param and use void return.
   // Python allocates the output buffer and passes it as a memref descriptor.
   const bool aggregateReturn =
-      mlir::isa<mlir::MemRefType>(returnType) || isTensorReturn;
+      mlir::isa<mlir::MemRefType>(returnType) ||
+      mlir::isa<mlir::RankedTensorType>(returnType);
 
   mlir::Type outParamType = returnType;
   if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(returnType)) {
@@ -111,21 +104,19 @@ void MLIRCompiler::createFunction(
   opBuilder->setInsertionPointToStart(entryBlock);
 
   // Map parameter names to block arguments.
-  // For tensor-return functions, tensor params were lowered to memref in the
-  // signature — insert to_tensor so the body still operates on tensors.
+  // Tensor params were converted to memref in the signature — insert to_tensor
+  // so the body still operates on tensors.
   auto loc = opBuilder->getUnknownLoc();
   for (size_t i = 0; i < params.size(); i++) {
     mlir::Value arg = entryBlock->getArgument(i);
-    if (isTensorReturn) {
-      if (auto tensorType =
-              mlir::dyn_cast<mlir::RankedTensorType>(originalParamTypes[i])) {
-        auto toTensor = opBuilder->create<mlir::bufferization::ToTensorOp>(
-            loc, tensorType, arg, /*restrict=*/true, /*writable=*/true);
-        parameterMap[params[i].first] = toTensor.getResult();
-        continue;
-      }
+    mlir::Type originalType = builder->convertType(params[i].second);
+    if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(originalType)) {
+      auto toTensor = opBuilder->create<mlir::bufferization::ToTensorOp>(
+          loc, tensorType, arg, /*restrict=*/true, /*writable=*/true);
+      parameterMap[params[i].first] = toTensor.getResult();
+    } else {
+      parameterMap[params[i].first] = arg;
     }
-    parameterMap[params[i].first] = arg;
   }
 
   // Store the out-param block arg (memref) for use in finalizeFunction.

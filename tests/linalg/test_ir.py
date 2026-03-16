@@ -25,7 +25,7 @@ class TestLinalgDotIR:
         """)
 
     def test_dot_result_is_scalar(self, check_ir):
-        """Pre-lowering IR: linalg.dot result is loaded as f32"""
+        """Pre-lowering IR: memref inputs wrapped with to_tensor, dot extracts scalar"""
         @ml_function
         def dot_fn(a: Tensor[f32, 4], b: Tensor[f32, 4]) -> f32:
             return dot(a, b)
@@ -33,6 +33,9 @@ class TestLinalgDotIR:
         dot_fn(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32),
                np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32))
         check_ir("""
+        // CHECK: func.func @dot_fn(%arg0: memref<4xf32>, %arg1: memref<4xf32>)
+        // CHECK: bufferization.to_tensor %arg0
+        // CHECK: bufferization.to_tensor %arg1
         // CHECK: tensor.empty
         // CHECK: linalg.fill
         // CHECK: linalg.dot
