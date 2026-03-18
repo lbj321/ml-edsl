@@ -447,6 +447,14 @@ mlir::Type MLIRBuilder::convertMemRefType(
       memrefSpec.shape().end()
   );
 
+  // Dynamic dims are not supported: shapes are fully resolved on the Python
+  // frontend before protobuf serialization, and the memref pipeline has no
+  // support for dynamic dimensions at function boundaries.
+  for (auto d : shape) {
+    if (d == kProtoDynamicDim)
+      throw std::runtime_error("Dynamic memref dimensions not supported");
+  }
+
   if (shape.empty() || shape.size() > 3) {
     throw std::runtime_error("Only 1D, 2D, and 3D arrays supported, got " +
                              std::to_string(shape.size()) + "D");
@@ -464,9 +472,12 @@ mlir::Type MLIRBuilder::convertTensorType(
       tensorSpec.shape().end()
   );
 
-  // Map protobuf sentinel (-1) to MLIR's kDynamic
-  for (auto &d : shape) {
-    if (d == kProtoDynamicDim) d = mlir::ShapedType::kDynamic;
+  // Dynamic dims are not supported: shapes are fully resolved on the Python
+  // frontend before protobuf serialization, and the memref pipeline has no
+  // support for dynamic dimensions at function boundaries.
+  for (auto d : shape) {
+    if (d == kProtoDynamicDim)
+      throw std::runtime_error("Dynamic tensor dimensions not supported");
   }
 
   if (shape.empty() || shape.size() > 3) {
