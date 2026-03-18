@@ -80,9 +80,8 @@ void MLIRCompiler::createFunction(
 
   // Aggregate return: append a hidden memref out-param and use void return.
   // Python allocates the output buffer and passes it as a memref descriptor.
-  const bool aggregateReturn =
-      mlir::isa<mlir::MemRefType>(returnType) ||
-      mlir::isa<mlir::RankedTensorType>(returnType);
+  const bool aggregateReturn = mlir::isa<mlir::MemRefType>(returnType) ||
+                               mlir::isa<mlir::RankedTensorType>(returnType);
 
   mlir::Type outParamType = returnType;
   if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(returnType)) {
@@ -94,7 +93,8 @@ void MLIRCompiler::createFunction(
   }
 
   auto funcType = opBuilder->getFunctionType(
-      paramTypes, aggregateReturn ? mlir::TypeRange{} : mlir::TypeRange{returnType});
+      paramTypes,
+      aggregateReturn ? mlir::TypeRange{} : mlir::TypeRange{returnType});
   currentFunction = opBuilder->create<mlir::func::FuncOp>(
       opBuilder->getUnknownLoc(), name, funcType);
 
@@ -110,7 +110,8 @@ void MLIRCompiler::createFunction(
   for (size_t i = 0; i < params.size(); i++) {
     mlir::Value arg = entryBlock->getArgument(i);
     mlir::Type originalType = builder->convertType(params[i].second);
-    if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(originalType)) {
+    if (auto tensorType =
+            mlir::dyn_cast<mlir::RankedTensorType>(originalType)) {
       auto toTensor = opBuilder->create<mlir::bufferization::ToTensorOp>(
           loc, tensorType, arg, /*restrict=*/true, /*writable=*/true);
       parameterMap[params[i].first] = toTensor.getResult();
@@ -131,6 +132,7 @@ void MLIRCompiler::finalizeFunction(const std::string &name,
     throw std::runtime_error("No current function to finish");
   }
 
+  // Aggregate return: write result into the caller-allocated out-param.
   if (currentOutParam) {
     auto loc = opBuilder->getUnknownLoc();
     if (mlir::isa<mlir::RankedTensorType>(result.getType())) {
@@ -140,21 +142,24 @@ void MLIRCompiler::finalizeFunction(const std::string &name,
       opBuilder->create<mlir::bufferization::MaterializeInDestinationOp>(
           loc, /*result=*/mlir::Type{}, result, currentOutParam,
           /*restrict=*/true, /*writable=*/true);
-    } else if (result != currentOutParam) {
-      // MemRef result: copy only when not already writing into the out-param.
-      opBuilder->create<mlir::memref::CopyOp>(loc, result, currentOutParam);
+    } else if (mlir::isa<mlir::MemRefType>(result.getType())) {
+      // MemRef result: copy only when result is not already the out-param.
+      if (result != currentOutParam)
+        opBuilder->create<mlir::memref::CopyOp>(loc, result, currentOutParam);
+    } else {
+      throw std::runtime_error(
+          "finalizeFunction: out-param set for non-aggregate type");
     }
     opBuilder->create<mlir::func::ReturnOp>(loc);
   } else if (mlir::isa<mlir::IntegerType, mlir::FloatType>(result.getType())) {
     // Scalar return — normal path.
-    opBuilder->create<mlir::func::ReturnOp>(
-        opBuilder->getUnknownLoc(), result);
+    opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(), result);
   } else {
     std::string typeName;
     llvm::raw_string_ostream os(typeName);
     result.getType().print(os);
-    throw std::runtime_error(
-        "finalizeFunction: unhandled result type '" + typeName + "'");
+    throw std::runtime_error("finalizeFunction: unhandled result type '" +
+                             typeName + "'");
   }
 
   compiledFunctions.insert(name);
@@ -217,8 +222,8 @@ void MLIRCompiler::compileFunction(const mlir_edsl::FunctionDef &funcDef) {
   createFunction(funcDef.name(), params, returnType);
   // Pass currentOutParam so array-producing ops write directly into the
   // Python-allocated output buffer, skipping the intermediate alloca+copy.
-  mlir::Value result = builder->buildFromProtobufNode(funcDef.body(),
-                                                      currentOutParam);
+  mlir::Value result =
+      builder->buildFromProtobufNode(funcDef.body(), currentOutParam);
   finalizeFunction(funcDef.name(), result);
 }
 
