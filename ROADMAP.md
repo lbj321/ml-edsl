@@ -1,7 +1,7 @@
 # ML-EDSL Development Roadmap
 
 **Architecture**: Python frontend with C++ MLIR backend
-**Current Status**: Phase 8 - linalg dialect and tensor return types
+**Current Status**: Phase 9 - Performance
 **Vision**: Comprehensive ML compilation framework supporting modern AI architectures
 
 ---
@@ -77,7 +77,7 @@ result = sum_range(1, 10) # 55 - Native speed!
 
 ---
 
-## Phase 8: Linear Algebra (linalg dialect) 🚧 CURRENT FOCUS
+## Phase 8: Linear Algebra (linalg dialect) ✅ Complete
 
 **Goal**: Introduce `linalg` as the core abstraction for ML operations. This is the right
 architectural level — `linalg` ops compose with tiling, vectorization, and GPU lowering
@@ -180,21 +180,36 @@ result = process(A, B)  # Returns np.ndarray
 
 ---
 
-### Phase 9: Performance
+## Phase 9: Performance 🚧 CURRENT FOCUS
 
-**Goal**: Make the compiler produce fast code. `linalg` is the key — it's designed to be
-the target of tiling, vectorization, and GPU lowering passes.
+**Goal**: Make the compiler produce fast code on CPU. `linalg` is the key — it's designed
+to be the target of tiling and vectorization passes. GPU is deferred; maintaining two
+execution backends at this stage adds complexity without proportional value.
 
 #### 9.1 Vectorization
 - `linalg` → `vector` dialect transformation (MLIR's built-in vectorization pass)
 - Auto-vectorization of matmul and element-wise ops (AVX2/AVX-512 on x86)
-- Benchmarking infrastructure to measure improvement
 
 #### 9.2 Loop Tiling & Fusion
 - Tiling matmul for cache efficiency (`linalg` tiling pass)
 - Loop fusion for element-wise + matmul chains
 
-#### 9.3 GPU/CUDA Backend
+#### 9.3 OpenMP Multithreading (Optional)
+- `omp` dialect for shared-memory parallelism — annotates parallel `linalg` loops
+- Integrates naturally with `linalg` parallel iterator types (no MPI/distributed needed)
+- Requires linking against OpenMP runtime (`-fopenmp`)
+- Pursue if vectorization alone leaves a meaningful gap vs numpy on multicore machines
+
+#### 9.4 NumPy Benchmark Suite
+- Compare MLIR-compiled ops against equivalent numpy operations
+- **Data passing**: zero-copy via Python buffer protocol — numpy C-contiguous arrays match
+  MLIR memref layout; enforce `np.ascontiguousarray()` at boundary for non-contiguous input
+- **Scope**: element-wise ops (Python overhead favors MLIR), matmul (numpy/BLAS wins —
+  goal is to understand the gap, not close it)
+- Benchmark harness measures compute time only (pre-allocate arrays outside timing loop)
+
+#### 9.5 GPU/CUDA Backend (Deferred)
+- Deferred to a later phase when model-scale workloads justify the complexity
 - `linalg` → `gpu` dialect → NVVM/CUBIN
 - CUDA kernel launch via MLIR's GPU execution engine
 - Memory transfer: host ↔ device
