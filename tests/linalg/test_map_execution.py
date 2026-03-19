@@ -112,6 +112,21 @@ class TestMapExecution:
         assert abs(result[0] - 15.0) < 1e-5
 
 
+# ==================== CHAINED MAP ====================
+
+class TestMapChained:
+    """Test tensor_map used as a sub-expression (no outParam — tensor.empty path)"""
+
+    def test_map_chained(self, backend):
+        """tensor_map(tensor_map(a, f), g) exercises the tensor.empty fallback for the inner map"""
+        @ml_function
+        def chained(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
+            return tensor_map(tensor_map(a, lambda v: v * 2.0), lambda v: v + 1.0)
+
+        result = chained(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
+        np.testing.assert_allclose(result, [3.0, 5.0, 7.0, 9.0], rtol=1e-5)
+
+
 # ==================== TYPE VALIDATION TESTS ====================
 
 class TestMapTypeValidation:
