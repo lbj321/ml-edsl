@@ -66,6 +66,25 @@ class TestMatmulExecution:
         np.testing.assert_array_equal(result, [[5, 6], [7, 8]])
 
 
+# ==================== CHAINED MATMUL ====================
+
+class TestMatmulChained:
+    """Test matmul used as a sub-expression (no outParam — tensor.empty path)"""
+
+    def test_matmul_chained(self, backend):
+        """(A @ B) @ C exercises the tensor.empty fallback for the inner matmul"""
+        @ml_function
+        def chained(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2], C: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
+            return matmul(matmul(A, B), C)
+
+        A = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)  # identity
+        B = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        C = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)  # identity
+
+        result = chained(A, B, C)
+        np.testing.assert_allclose(result, B, rtol=1e-4)
+
+
 # ==================== TYPE VALIDATION ====================
 
 class TestMatmulTypeValidation:
