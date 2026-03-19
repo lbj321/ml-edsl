@@ -40,7 +40,17 @@ mlir::Value LinalgBuilder::buildDot(const mlir_edsl::LinalgDot &node) {
   auto lhsTensorType = mlir::dyn_cast<mlir::RankedTensorType>(lhs.getType());
   if (!lhsTensorType)
     throw std::runtime_error("linalg.dot: lhs must be a tensor type");
+  if (lhsTensorType.getRank() != 1)
+    throw std::runtime_error("linalg.dot: lhs must be a 1D tensor");
   mlir::Type elemType = lhsTensorType.getElementType();
+
+  auto rhsTensorType = mlir::dyn_cast<mlir::RankedTensorType>(rhs.getType());
+  if (!rhsTensorType)
+    throw std::runtime_error("linalg.dot: rhs must be a tensor type");
+  if (rhsTensorType.getRank() != 1)
+    throw std::runtime_error("linalg.dot: rhs must be a 1D tensor");
+  if (rhsTensorType.getElementType() != elemType)
+    throw std::runtime_error("linalg.dot: lhs and rhs element types must match");
 
   // 0-D tensor accumulator: empty() → fill(zero) → dot → extract scalar
   auto initType = mlir::RankedTensorType::get({}, elemType);
