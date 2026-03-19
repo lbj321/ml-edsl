@@ -74,6 +74,7 @@ private:
   // Declared before builder/executor: builder holds raw pointers into these,
   // so they must outlive it (members destroy in reverse declaration order).
   mlir::func::FuncOp currentFunction;
+  mlir::BlockArgument currentOutParam; // set when return type is aggregate
   std::unordered_map<std::string, mlir::Value> parameterMap;
   std::unordered_map<std::string, mlir::func::FuncOp> functionTable;
   std::unordered_set<std::string> compiledFunctions;

@@ -7,7 +7,7 @@ from .context import symbolic_execution
 from .signature import FunctionSignature
 
 
-def validate_function_body(func: Callable, signature: FunctionSignature) -> Value:
+def validate_function_body(func: Callable, signature: FunctionSignature):
     """Execute function symbolically to catch type errors at decoration time.
 
     This runs the function with Parameter objects to trigger type checking
@@ -18,7 +18,7 @@ def validate_function_body(func: Callable, signature: FunctionSignature) -> Valu
         signature: Parsed function signature with types
 
     Returns:
-        The result AST node for reuse in compilation.
+        Tuple of (result_ast, inferred_type) for reuse in compilation.
 
     Raises:
         TypeError: If type errors are detected in the function body
@@ -36,4 +36,4 @@ def validate_function_body(func: Callable, signature: FunctionSignature) -> Valu
     if not matches:
         raise TypeError(f"Return type mismatch in '{signature.name}':\n{error_msg}")
 
-    return result_ast
+    return result_ast, inferred_type

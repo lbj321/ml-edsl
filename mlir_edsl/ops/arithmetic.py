@@ -6,18 +6,22 @@ All operations (add, sub, mul, div) automatically dispatch to:
 """
 
 from ..ast import BinaryOp, Value, ArrayBinaryOp, to_value
-from ..types import ArrayType
+from ..types import ArrayType, ScalarType  # ScalarType used in dispatch guard
 from .. import ast_pb2
 
 
 def _dispatch_binary_op(op: int, left: Value, right: Value):
-    left_is_array = isinstance(left.infer_type(), ArrayType)
-    right_is_array = isinstance(right.infer_type(), ArrayType)
-
-    if left_is_array or right_is_array:
+    left_type = left.infer_type()
+    right_type = right.infer_type()
+    if isinstance(left_type, ArrayType) or isinstance(right_type, ArrayType):
         return ArrayBinaryOp(op, left, right)
-    else:
+    elif isinstance(left_type, ScalarType) and isinstance(right_type, ScalarType):
         return BinaryOp(op, left, right)
+    else:
+        raise TypeError(
+            f"Arithmetic not supported for operand types "
+            f"{left_type} and {right_type}."
+        )
 
 
 def add(left, right):

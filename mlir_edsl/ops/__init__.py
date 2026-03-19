@@ -4,6 +4,7 @@ from .arithmetic import add, sub, mul, div
 from .comparison import lt, le, gt, ge, eq, ne
 from .control_flow import If, For
 from .conversion import cast, call
+from .linalg import dot, matmul, tensor_map, relu, leaky_relu, reduce, tensor_sum, tensor_max, tensor_min
 
 __all__ = [
     # Arithmetic
@@ -14,4 +15,7 @@ __all__ = [
     'If', 'For',
     # Utilities
     'cast', 'call',
+    # Linear algebra
+    'dot', 'matmul', 'tensor_map', 'relu', 'leaky_relu',
+    'reduce', 'tensor_sum', 'tensor_max', 'tensor_min',
 ]

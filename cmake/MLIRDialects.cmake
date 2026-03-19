@@ -39,11 +39,13 @@ set(MLIR_SCF_LIBS
 )
 
 # Memory and tensor dialects (for Phase 7)
+# Linalg transforms (for Phase 8.2 - provides createConvertLinalgToLoopsPass)
 set(MLIR_MEMORY_LIBS
     MLIRMemRefDialect
     MLIRMemRefToLLVM
     MLIRTensorDialect
     MLIRLinalgDialect
+    MLIRLinalgTransforms
     MLIRBufferizationDialect
     MLIRBufferizationTransforms
     MLIRTensorTransforms

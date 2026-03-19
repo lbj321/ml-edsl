@@ -5,7 +5,9 @@
 #include "mlir_edsl/MLIRLowering.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -25,6 +27,8 @@ MLIRCompiler::MLIRCompiler()
   mlirContext->getOrLoadDialect<mlir::scf::SCFDialect>();
   mlirContext->getOrLoadDialect<mlir::memref::MemRefDialect>();
   mlirContext->getOrLoadDialect<mlir::tensor::TensorDialect>();
+  mlirContext->getOrLoadDialect<mlir::linalg::LinalgDialect>();
+  mlirContext->getOrLoadDialect<mlir::bufferization::BufferizationDialect>();
 
   // Initialize OpBuilder and module
   opBuilder = std::make_unique<mlir::OpBuilder>(mlirContext.get());
@@ -47,6 +51,7 @@ MLIRCompiler::~MLIRCompiler() = default;
 
 void MLIRCompiler::resetFunctionState() {
   currentFunction = nullptr;
+  currentOutParam = {};
   parameterMap.clear();
   builder->clearValueCache();
   opBuilder->setInsertionPointToEnd(module->getBody());
@@ -60,13 +65,36 @@ void MLIRCompiler::createFunction(
     mlir::Type returnType) {
   resetFunctionState();
 
-  // Convert parameter types
+  // Convert parameter types: tensor params are always pre-converted to memref
+  // in the function signature, keeping a pure-memref boundary for all
+  // functions. to_tensor is inserted at the top of the body so the function
+  // body still operates on tensors.
   std::vector<mlir::Type> paramTypes;
   for (const auto &[paramName, typeSpec] : params) {
-    paramTypes.push_back(builder->convertType(typeSpec));
+    mlir::Type t = builder->convertType(typeSpec);
+    if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(t))
+      t = mlir::MemRefType::get(tensorType.getShape(),
+                                tensorType.getElementType());
+    paramTypes.push_back(t);
   }
 
-  auto funcType = opBuilder->getFunctionType(paramTypes, {returnType});
+  // Aggregate return: append a hidden memref out-param and use void return.
+  // Python allocates the output buffer and passes it as a memref descriptor.
+  const bool aggregateReturn = mlir::isa<mlir::MemRefType>(returnType) ||
+                               mlir::isa<mlir::RankedTensorType>(returnType);
+
+  mlir::Type outParamType = returnType;
+  if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(returnType)) {
+    outParamType = mlir::MemRefType::get(tensorType.getShape(),
+                                         tensorType.getElementType());
+  }
+  if (aggregateReturn) {
+    paramTypes.push_back(outParamType);
+  }
+
+  auto funcType = opBuilder->getFunctionType(
+      paramTypes,
+      aggregateReturn ? mlir::TypeRange{} : mlir::TypeRange{returnType});
   currentFunction = opBuilder->create<mlir::func::FuncOp>(
       opBuilder->getUnknownLoc(), name, funcType);
 
@@ -75,9 +103,26 @@ void MLIRCompiler::createFunction(
   auto *entryBlock = currentFunction.addEntryBlock();
   opBuilder->setInsertionPointToStart(entryBlock);
 
-  // Map parameter names to block arguments
+  // Map parameter names to block arguments.
+  // Tensor params were converted to memref in the signature — insert to_tensor
+  // so the body still operates on tensors.
+  auto loc = opBuilder->getUnknownLoc();
   for (size_t i = 0; i < params.size(); i++) {
-    parameterMap[params[i].first] = entryBlock->getArgument(i);
+    mlir::Value arg = entryBlock->getArgument(i);
+    mlir::Type originalType = builder->convertType(params[i].second);
+    if (auto tensorType =
+            mlir::dyn_cast<mlir::RankedTensorType>(originalType)) {
+      auto toTensor = opBuilder->create<mlir::bufferization::ToTensorOp>(
+          loc, tensorType, arg, /*restrict=*/true, /*writable=*/true);
+      parameterMap[params[i].first] = toTensor.getResult();
+    } else {
+      parameterMap[params[i].first] = arg;
+    }
+  }
+
+  // Store the out-param block arg (memref) for use in finalizeFunction.
+  if (aggregateReturn) {
+    currentOutParam = entryBlock->getArgument(params.size());
   }
 }
 
@@ -86,7 +131,37 @@ void MLIRCompiler::finalizeFunction(const std::string &name,
   if (!currentFunction) {
     throw std::runtime_error("No current function to finish");
   }
-  opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(), result);
+
+  // Aggregate return: write result into the caller-allocated out-param.
+  if (currentOutParam) {
+    auto loc = opBuilder->getUnknownLoc();
+    if (mlir::isa<mlir::RankedTensorType>(result.getType())) {
+      // Tensor result: materialize into the Python-owned memref out-param.
+      // restrict+writable: the out-param is the sole alias and is writable,
+      // enabling empty-tensor-elimination to skip the memcpy when possible.
+      opBuilder->create<mlir::bufferization::MaterializeInDestinationOp>(
+          loc, /*result=*/mlir::Type{}, result, currentOutParam,
+          /*restrict=*/true, /*writable=*/true);
+    } else if (mlir::isa<mlir::MemRefType>(result.getType())) {
+      // MemRef result: copy only when result is not already the out-param.
+      if (result != currentOutParam)
+        opBuilder->create<mlir::memref::CopyOp>(loc, result, currentOutParam);
+    } else {
+      throw std::runtime_error(
+          "finalizeFunction: out-param set for non-aggregate type");
+    }
+    opBuilder->create<mlir::func::ReturnOp>(loc);
+  } else if (mlir::isa<mlir::IntegerType, mlir::FloatType>(result.getType())) {
+    // Scalar return — normal path.
+    opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(), result);
+  } else {
+    std::string typeName;
+    llvm::raw_string_ostream os(typeName);
+    result.getType().print(os);
+    throw std::runtime_error("finalizeFunction: unhandled result type '" +
+                             typeName + "'");
+  }
+
   compiledFunctions.insert(name);
 
   // Save MLIR to file if SAVE_IR environment variable is set
@@ -113,7 +188,7 @@ bool MLIRCompiler::isValidParameterType(const mlir_edsl::TypeSpec &type) const {
 }
 
 bool MLIRCompiler::isValidReturnType(const mlir_edsl::TypeSpec &type) const {
-  return type.has_scalar();
+  return type.has_scalar() || type.has_memref() || type.has_tensor();
 }
 
 // ==================== COMPILATION ====================
@@ -145,7 +220,10 @@ void MLIRCompiler::compileFunction(const mlir_edsl::FunctionDef &funcDef) {
 
   // Create function, build body, finalize
   createFunction(funcDef.name(), params, returnType);
-  mlir::Value result = builder->buildFromProtobufNode(funcDef.body());
+  // Pass currentOutParam so array-producing ops write directly into the
+  // Python-allocated output buffer, skipping the intermediate alloca+copy.
+  mlir::Value result =
+      builder->buildFromProtobufNode(funcDef.body(), currentOutParam);
   finalizeFunction(funcDef.name(), result);
 }
 

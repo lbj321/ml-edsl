@@ -11,6 +11,7 @@ add_library(mlir_edsl_core STATIC
     src/builders/SCFBuilder.cpp
     src/builders/MemRefBuilder.cpp
     src/builders/TensorBuilder.cpp
+    src/builders/LinalgBuilder.cpp
 )
 
 # MLIRLowering subclasses mlir::PassInstrumentation which requires -fno-rtti

@@ -9,7 +9,7 @@ Phase 3: C++ MLIR Backend
 """
 
 from .types import i32, f32, i1, DYN, Array, Tensor
-from .ops import add, sub, mul, div, lt, le, gt, ge, eq, ne, If, For, cast, call
+from .ops import add, sub, mul, div, lt, le, gt, ge, eq, ne, If, For, cast, call, dot, matmul, tensor_map, relu, leaky_relu, reduce, tensor_sum, tensor_max, tensor_min
 from .functions import ml_function
 from .ast import Value, Constant, BinaryOp, CastOp, ArrayLiteral, ArrayAccess, ArrayStore, TensorFromElements, TensorExtract, TensorInsert
 from . import ast_pb2
@@ -67,6 +67,10 @@ __all__ = [
 
     # Function calls (for recursion)
     "call",
+
+    # Linear algebra
+    "dot", "matmul", "tensor_map", "relu", "leaky_relu",
+    "reduce", "tensor_sum", "tensor_max", "tensor_min",
 
     # Operation constants (for For loops)
     "ADD", "SUB", "MUL", "DIV",

@@ -16,6 +16,7 @@ class ArithBuilder;
 class SCFBuilder;
 class MemRefBuilder;
 class TensorBuilder;
+class LinalgBuilder;
 }
 
 // Forward declarations for protobuf classes
@@ -37,12 +38,14 @@ public:
   void clearValueCache();
 
   // ==================== CORE BUILDING ====================
-  mlir::Value buildFromProtobufNode(const mlir_edsl::ASTNode &node);
+  mlir::Value buildFromProtobufNode(const mlir_edsl::ASTNode &node,
+                                    mlir::Value outParam = {});
 
   // ==================== PUBLIC UTILITIES (for dialect builders) ====================
   mlir::Type convertType(const mlir_edsl::TypeSpec &typeSpec) const;
   mlir::Value buildIndexConstant(int64_t value);
   mlir::Value castToIndexType(mlir::Value value);
+  void setValueCacheEntry(int64_t nodeId, mlir::Value value);
 
 private:
   // Non-owning references (owned by MLIRCompiler)
@@ -61,6 +64,7 @@ private:
   std::unique_ptr<mlir_edsl::SCFBuilder> scfBuilder;
   std::unique_ptr<mlir_edsl::MemRefBuilder> memrefBuilder;
   std::unique_ptr<mlir_edsl::TensorBuilder> tensorBuilder;
+  std::unique_ptr<mlir_edsl::LinalgBuilder> linalgBuilder;
 
   // Helper methods
   bool isIntegerType(mlir::Type type) const;
@@ -77,10 +81,13 @@ private:
 
   // AST node category dispatchers
   mlir::Value buildFromScalarNode(const mlir_edsl::ScalarNode &node);
-  mlir::Value buildFromArrayNode(const mlir_edsl::ArrayNode &node);
+  mlir::Value buildFromArrayNode(const mlir_edsl::ArrayNode &node,
+                                 mlir::Value outParam = {});
   mlir::Value buildFromControlFlowNode(const mlir_edsl::ControlFlowNode &node);
   mlir::Value buildFromFunctionNode(const mlir_edsl::FunctionNode &node);
   mlir::Value buildFromTensorNode(const mlir_edsl::TensorNode &node);
+  mlir::Value buildFromLinalgNode(const mlir_edsl::LinalgNode &node,
+                                  mlir::Value outParam = {});
   mlir::Value buildFromBindingNode(const mlir_edsl::BindingNode &node);
 
   // Node handlers
@@ -92,6 +99,8 @@ private:
   mlir::Value handleForLoopOp(const mlir_edsl::ForLoopOp &op);
   mlir::Value handleForIndex(const mlir_edsl::ForIndex &node);
   mlir::Value handleForIterArg(const mlir_edsl::ForIterArg &node);
+  mlir::Value handleLinalgMapElement(const mlir_edsl::LinalgMapElement &node);
+  mlir::Value handleLinalgPlaceholder(int64_t nodeId, const char *name);
   mlir::Value handleParameter(const mlir_edsl::Parameter &param);
   mlir::Value handleCallOp(const mlir_edsl::CallOp &op);
   mlir::Value handleLetBinding(const mlir_edsl::LetBinding &binding);

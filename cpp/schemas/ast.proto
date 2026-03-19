@@ -120,6 +120,7 @@ message ASTNode {
     FunctionNode function = 4;
     BindingNode binding = 5;
     TensorNode tensor = 6;
+    LinalgNode linalg = 7;
   }
 }
 
@@ -322,6 +323,74 @@ message TensorInsert {
 message TensorEmpty {
   TypeSpec type = 1;               // Tensor type (TensorTypeSpec with shape + element type)
   repeated ASTNode dynamic_dims = 2; // Runtime values for dynamic (?) dimensions, in order
+}
+
+// ============================================================================
+// LINALG OPERATIONS
+// ============================================================================
+
+// Top-level linalg node container
+message LinalgNode {
+  oneof value {
+    LinalgDot             dot             = 1;
+    LinalgMatmul          matmul          = 2;
+    LinalgMap             map             = 3;
+    LinalgMapElement      map_element     = 4;
+    LinalgReduce          reduce          = 5;
+    LinalgReduceElement   reduce_element  = 6;
+    LinalgReduceAccumulator reduce_accum  = 7;
+  }
+}
+
+// Dot product of two 1D arrays: linalg.dot
+// Returns a scalar of the operand element type.
+message LinalgDot {
+  ASTNode lhs = 1;  // 1D memref (memref<Nxf32>, memref<Nxi32>, etc.)
+  ASTNode rhs = 2;  // 1D memref, same element type as lhs
+}
+
+// Matrix multiply of two 2D arrays: linalg.matmul
+// Returns a 2D memref (out_type). Shape: lhs[M,K] x rhs[K,N] → out[M,N].
+message LinalgMatmul {
+  ASTNode  lhs      = 1;  // 2D memref (memref<MxKxf32>)
+  ASTNode  rhs      = 2;  // 2D memref (memref<KxNxf32>)
+  TypeSpec out_type = 3;  // Output MemRefTypeSpec (memref<MxNxf32>)
+}
+
+// Element-wise map over a 1D array: linalg.map (MapOp)
+// body references LinalgMapElement placeholder via element_node_id.
+message LinalgMap {
+  ASTNode  input           = 1;  // 1D memref input
+  ASTNode  body            = 2;  // body expression (references LinalgMapElement)
+  int64    element_node_id = 3;  // LinalgMapElement placeholder node ID
+  TypeSpec out_type        = 4;  // output MemRefTypeSpec (same shape as input)
+}
+
+// Placeholder for the linalg.map body block argument.
+// Leaf node — resolved to linalg.map body block arg at build time via valueCache.
+message LinalgMapElement {
+  int64 node_id = 1;  // resolved to linalg.map body block arg at build time
+}
+
+// Reduction over a 1D array: linalg.reduce
+// body references LinalgReduceElement and LinalgReduceAccumulator via their node_ids.
+message LinalgReduce {
+  ASTNode  input           = 1;  // 1D memref input
+  ASTNode  init            = 2;  // scalar init value (stored into 0-D accumulator)
+  ASTNode  body            = 3;  // body expression: fn(element, accumulator) → scalar
+  int64    element_node_id = 4;  // LinalgReduceElement placeholder node ID
+  int64    accum_node_id   = 5;  // LinalgReduceAccumulator placeholder node ID
+  TypeSpec elem_type       = 6;  // element type (for type inference)
+}
+
+// Placeholder for the input element in linalg.reduce body.
+message LinalgReduceElement {
+  int64 node_id = 1;
+}
+
+// Placeholder for the accumulator in linalg.reduce body.
+message LinalgReduceAccumulator {
+  int64 node_id = 1;
 }
 
 // ============================================================================

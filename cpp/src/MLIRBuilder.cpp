@@ -3,6 +3,7 @@
 #include "mlir_edsl/SCFBuilder.h"
 #include "mlir_edsl/MemRefBuilder.h"
 #include "mlir_edsl/TensorBuilder.h"
+#include "mlir_edsl/LinalgBuilder.h"
 
 #include "ast.pb.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -27,6 +28,8 @@ MLIRBuilder::MLIRBuilder(mlir::MLIRContext *context, mlir::OpBuilder *builder)
       *builder, context, this, arithBuilder.get(), scfBuilder.get());
   tensorBuilder = std::make_unique<mlir_edsl::TensorBuilder>(
       *builder, context, this);
+  linalgBuilder = std::make_unique<mlir_edsl::LinalgBuilder>(
+      *builder, context, this);
 }
 
 MLIRBuilder::~MLIRBuilder() = default;
@@ -47,20 +50,27 @@ void MLIRBuilder::clearValueCache() {
   valueCache.clear();
 }
 
+void MLIRBuilder::setValueCacheEntry(int64_t nodeId, mlir::Value value) {
+  valueCache[nodeId] = value;
+}
+
 // ==================== AST DISPATCH ====================
 
-mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node) {
+mlir::Value MLIRBuilder::buildFromProtobufNode(const mlir_edsl::ASTNode &node,
+                                               mlir::Value outParam) {
   switch (node.node_case()) {
     case mlir_edsl::ASTNode::kScalar:
       return buildFromScalarNode(node.scalar());
     case mlir_edsl::ASTNode::kArray:
-      return buildFromArrayNode(node.array());
+      return buildFromArrayNode(node.array(), outParam);
     case mlir_edsl::ASTNode::kControlFlow:
       return buildFromControlFlowNode(node.control_flow());
     case mlir_edsl::ASTNode::kFunction:
       return buildFromFunctionNode(node.function());
     case mlir_edsl::ASTNode::kTensor:
       return buildFromTensorNode(node.tensor());
+    case mlir_edsl::ASTNode::kLinalg:
+      return buildFromLinalgNode(node.linalg(), outParam);
     case mlir_edsl::ASTNode::kBinding:
       return buildFromBindingNode(node.binding());
     default:
@@ -83,16 +93,17 @@ mlir::Value MLIRBuilder::buildFromScalarNode(const mlir_edsl::ScalarNode &node) 
   }
 }
 
-mlir::Value MLIRBuilder::buildFromArrayNode(const mlir_edsl::ArrayNode &node) {
+mlir::Value MLIRBuilder::buildFromArrayNode(const mlir_edsl::ArrayNode &node,
+                                            mlir::Value outParam) {
   switch (node.value_case()) {
     case mlir_edsl::ArrayNode::kLiteral:
-      return memrefBuilder->buildArrayLiteral(node.literal());
+      return memrefBuilder->buildArrayLiteral(node.literal(), outParam);
     case mlir_edsl::ArrayNode::kAccess:
       return memrefBuilder->buildArrayAccess(node.access());
     case mlir_edsl::ArrayNode::kStore:
       return memrefBuilder->buildArrayStore(node.store());
     case mlir_edsl::ArrayNode::kBinaryOp:
-      return memrefBuilder->buildArrayBinaryOp(node.binary_op());
+      return memrefBuilder->buildArrayBinaryOp(node.binary_op(), outParam);
     default:
       throw std::runtime_error("Unknown array node type");
   }
@@ -110,6 +121,30 @@ mlir::Value MLIRBuilder::buildFromTensorNode(const mlir_edsl::TensorNode &node) 
       return tensorBuilder->buildEmpty(node.empty());
     default:
       throw std::runtime_error("Unknown tensor node type");
+  }
+}
+
+mlir::Value MLIRBuilder::buildFromLinalgNode(const mlir_edsl::LinalgNode &node,
+                                             mlir::Value outParam) {
+  switch (node.value_case()) {
+    case mlir_edsl::LinalgNode::kDot:
+      return linalgBuilder->buildDot(node.dot());
+    case mlir_edsl::LinalgNode::kMatmul:
+      return linalgBuilder->buildMatmul(node.matmul(), outParam);
+    case mlir_edsl::LinalgNode::kMap:
+      return linalgBuilder->buildMap(node.map(), outParam);
+    case mlir_edsl::LinalgNode::kMapElement:
+      return handleLinalgMapElement(node.map_element());
+    case mlir_edsl::LinalgNode::kReduce:
+      return linalgBuilder->buildReduce(node.reduce());
+    case mlir_edsl::LinalgNode::kReduceElement:
+      return handleLinalgPlaceholder(node.reduce_element().node_id(),
+                                     "LinalgReduceElement");
+    case mlir_edsl::LinalgNode::kReduceAccum:
+      return handleLinalgPlaceholder(node.reduce_accum().node_id(),
+                                     "LinalgReduceAccumulator");
+    default:
+      throw std::runtime_error("Unknown linalg node type");
   }
 }
 
@@ -289,6 +324,25 @@ mlir::Value MLIRBuilder::handleForIterArg(const mlir_edsl::ForIterArg &node) {
                            std::to_string(node.node_id()));
 }
 
+mlir::Value MLIRBuilder::handleLinalgMapElement(const mlir_edsl::LinalgMapElement &node) {
+  auto it = valueCache.find(node.node_id());
+  if (it != valueCache.end()) {
+    return it->second;
+  }
+  throw std::runtime_error("LinalgMapElement: no value in cache for node_id " +
+                           std::to_string(node.node_id()));
+}
+
+mlir::Value MLIRBuilder::handleLinalgPlaceholder(int64_t nodeId,
+                                                  const char *name) {
+  auto it = valueCache.find(nodeId);
+  if (it != valueCache.end()) {
+    return it->second;
+  }
+  throw std::runtime_error(std::string(name) + ": no value in cache for node_id " +
+                           std::to_string(nodeId));
+}
+
 // Function node handlers
 mlir::Value MLIRBuilder::handleParameter(const mlir_edsl::Parameter &param) {
   return getParameter(param.name());
@@ -393,6 +447,14 @@ mlir::Type MLIRBuilder::convertMemRefType(
       memrefSpec.shape().end()
   );
 
+  // Dynamic dims are not supported: shapes are fully resolved on the Python
+  // frontend before protobuf serialization, and the memref pipeline has no
+  // support for dynamic dimensions at function boundaries.
+  for (auto d : shape) {
+    if (d == kProtoDynamicDim)
+      throw std::runtime_error("Dynamic memref dimensions not supported");
+  }
+
   if (shape.empty() || shape.size() > 3) {
     throw std::runtime_error("Only 1D, 2D, and 3D arrays supported, got " +
                              std::to_string(shape.size()) + "D");
@@ -410,9 +472,12 @@ mlir::Type MLIRBuilder::convertTensorType(
       tensorSpec.shape().end()
   );
 
-  // Map protobuf sentinel (-1) to MLIR's kDynamic
-  for (auto &d : shape) {
-    if (d == kProtoDynamicDim) d = mlir::ShapedType::kDynamic;
+  // Dynamic dims are not supported: shapes are fully resolved on the Python
+  // frontend before protobuf serialization, and the memref pipeline has no
+  // support for dynamic dimensions at function boundaries.
+  for (auto d : shape) {
+    if (d == kProtoDynamicDim)
+      throw std::runtime_error("Dynamic tensor dimensions not supported");
   }
 
   if (shape.empty() || shape.size() > 3) {

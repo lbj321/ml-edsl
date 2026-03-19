@@ -213,8 +213,8 @@ class ArrayType(Type):
             raise TypeError(f"Array shape must be int or tuple, got {type(shape).__name__}")
 
         # Validate dimensions
-        if not all(isinstance(d, int) and d > 0 for d in self.shape):
-            raise TypeError(f"All dimensions must be positive integers, got {self.shape}")
+        if not all(isinstance(d, int) and (d > 0 or d == DYN) for d in self.shape):
+            raise TypeError(f"All dimensions must be positive integers or DYN, got {self.shape}")
 
         # Validate dimensionality (1D, 2D, 3D only)
         if len(self.shape) == 0 or len(self.shape) > 3:
@@ -246,8 +246,15 @@ class ArrayType(Type):
         return len(self.shape)
 
     @property
+    def is_dynamic(self) -> bool:
+        """True if any dimension is dynamic."""
+        return DYN in self.shape
+
+    @property
     def total_elements(self) -> int:
         """Total number of elements (product of all dimensions)"""
+        if self.is_dynamic:
+            raise ValueError("Cannot compute total_elements for dynamic array")
         result = 1
         for dim in self.shape:
             result *= dim
@@ -286,7 +293,7 @@ class ArrayType(Type):
 
     def to_mlir_string(self) -> str:
         """Convert to MLIR type string: memref<10xi32>, memref<2x3xf32>, etc."""
-        dims = 'x'.join(str(d) for d in self.shape)
+        dims = 'x'.join('?' if d == DYN else str(d) for d in self.shape)
         return f"memref<{dims}x{self.element_type.name}>"
 
     # Equality and hashing
@@ -481,10 +488,10 @@ class ArrayMeta(type):
                 f"Only 1D, 2D, and 3D arrays supported, got {len(dims)}D"
             )
 
-        # Validate dimensions are positive integers
+        # Validate dimensions are positive integers or DYN
         for i, dim in enumerate(dims):
-            if not isinstance(dim, int) or dim <= 0:
-                raise TypeError(f"Dimension {i} must be positive integer, got {dim!r}")
+            if not isinstance(dim, int) or (dim <= 0 and dim != DYN):
+                raise TypeError(f"Dimension {i} must be positive integer or DYN, got {dim!r}")
 
         # Create ArrayType
         if len(dims) == 1:
@@ -644,24 +651,42 @@ class TypeSystem:
             param_name: Parameter name for error messages
         """
         if isinstance(type_spec, ArrayType):
-            if not isinstance(value, list):
+            if hasattr(value, 'shape') and hasattr(value, 'dtype'):
+                if len(value.shape) != len(type_spec.shape):
+                    raise ValueError(
+                        f"Parameter '{param_name}': expected {len(type_spec.shape)}D array, "
+                        f"got {len(value.shape)}D"
+                    )
+                for i, (got, expected) in enumerate(zip(value.shape, type_spec.shape)):
+                    if expected != DYN and got != expected:
+                        raise ValueError(
+                            f"Parameter '{param_name}': expected shape {type_spec.shape}, "
+                            f"got {tuple(value.shape)}"
+                        )
+            else:
                 raise TypeError(
-                    f"Parameter '{param_name}': expected list for {type_spec}, "
+                    f"Parameter '{param_name}': expected ndarray for {type_spec}, "
                     f"got {type(value).__name__}"
                 )
-            cls._check_nested_shape(value, type_spec.shape, param_name)
             return
 
         if isinstance(type_spec, TensorType):
-            if not isinstance(value, list):
+            if hasattr(value, 'shape') and hasattr(value, 'dtype'):
+                if len(value.shape) != len(type_spec.shape):
+                    raise ValueError(
+                        f"Parameter '{param_name}': expected {len(type_spec.shape)}D tensor, "
+                        f"got {len(value.shape)}D"
+                    )
+                if not type_spec.is_dynamic and tuple(value.shape) != tuple(type_spec.shape):
+                    raise ValueError(
+                        f"Parameter '{param_name}': expected shape {type_spec.shape}, "
+                        f"got {tuple(value.shape)}"
+                    )
+            else:
                 raise TypeError(
-                    f"Parameter '{param_name}': expected list for {type_spec}, "
+                    f"Parameter '{param_name}': expected ndarray for {type_spec}, "
                     f"got {type(value).__name__}"
                 )
-            if not type_spec.is_dynamic:
-                cls._check_nested_shape(value, type_spec.shape, param_name)
-            else:
-                cls._check_nested_ndim(value, type_spec.ndim, param_name)
             return
 
         # Scalar validation
@@ -677,29 +702,6 @@ class TypeSystem:
         else:
             raise TypeError(f"Parameter '{param_name}': unknown scalar type {type_spec}")
 
-    @classmethod
-    def _check_nested_shape(cls, data: list, shape: tuple, param_name: str):
-        """Recursively verify data has the expected shape."""
-        if not isinstance(data, list) or len(data) != shape[0]:
-            got = len(data) if isinstance(data, list) else f"non-list ({type(data).__name__})"
-            raise ValueError(
-                f"Parameter '{param_name}': expected {shape[0]} elements, got {got}"
-            )
-        if len(shape) > 1:
-            for i, item in enumerate(data):
-                cls._check_nested_shape(item, shape[1:], f"{param_name}[{i}]")
-
-    @classmethod
-    def _check_nested_ndim(cls, data: list, ndim: int, param_name: str):
-        """Verify data has the right number of dimensions (for dynamic tensors)."""
-        if not isinstance(data, list):
-            raise ValueError(
-                f"Parameter '{param_name}': expected list, got {type(data).__name__}"
-            )
-        if ndim > 1:
-            for i, item in enumerate(data):
-                cls._check_nested_ndim(item, ndim - 1, f"{param_name}[{i}]")
-        
     @classmethod
     def types_match(cls, inferred: Type, declared: Type) -> Tuple[bool, str]:
         """Check if inferred type matches declared type.
@@ -728,6 +730,13 @@ class TypeSystem:
                 f"  Hint: Change return type or add explicit cast"
             )
         else:
+            # Concrete inferred type satisfies a DYN declared type
+            if (type(inferred) == type(declared)
+                    and inferred.element_type == declared.element_type
+                    and len(inferred.shape) == len(declared.shape)
+                    and all(d == -1 or d == i
+                            for d, i in zip(declared.shape, inferred.shape))):
+                return True, ""
             return False, (
                 f"Array type mismatch:\n"
                 f"  Declared: {declared}\n"
