@@ -238,10 +238,20 @@ void MLIRCompiler::ensureFinalized() {
   const bool saveIR = std::getenv("SAVE_IR") != nullptr;
   const bool doCapture = saveIR || captureSnapshots;
   MLIRLowering lowering(mlirContext.get(), /*captureSnapshots=*/doCapture);
-  auto lowered = lowering.lowerToLLVMModule(*module);
-  if (doCapture) {
-    loweringSnapshots = lowering.takeSnapshots();
+
+  LoweredModule lowered;
+  try {
+    lowered = lowering.lowerToLLVMModule(*module);
+  } catch (...) {
+    // Extract failure state before lowering is destroyed on stack unwind
+    failureIR_ = lowering.takeFailureIR();
+    if (doCapture)
+      loweringSnapshots = lowering.takeSnapshots();
+    throw;
   }
+
+  if (doCapture)
+    loweringSnapshots = lowering.takeSnapshots();
 
   // JIT compile with function names to look up
   std::vector<std::string> names(compiledFunctions.begin(),
@@ -276,8 +286,9 @@ void MLIRCompiler::clear() {
   // Clear executor
   executor->clear();
 
-  // Clear lowering snapshots
+  // Clear lowering snapshots and failure IR
   loweringSnapshots.clear();
+  failureIR_.clear();
 
   state = State::Building;
 }
@@ -297,6 +308,27 @@ std::string MLIRCompiler::getModuleIR() {
   llvm::raw_string_ostream os(result);
   module->print(os);
   return result;
+}
+
+// ==================== TESTING UTILITIES ====================
+
+void MLIRCompiler::injectTestFailure() {
+  auto f64Type = mlir::Float64Type::get(mlirContext.get());
+  auto funcType =
+      mlir::FunctionType::get(mlirContext.get(), {}, {f64Type});
+
+  mlir::OpBuilder::InsertionGuard guard(*opBuilder);
+  opBuilder->setInsertionPointToEnd(module->getBody());
+
+  auto func = opBuilder->create<mlir::func::FuncOp>(
+      opBuilder->getUnknownLoc(), "__test_failure_inject__", funcType);
+  auto *block = func.addEntryBlock();
+  opBuilder->setInsertionPointToStart(block);
+  // Return i32 where f64 is expected — type mismatch triggers verifier failure
+  auto zero = opBuilder->create<mlir::arith::ConstantIntOp>(
+      opBuilder->getUnknownLoc(), 0, 32);
+  opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(),
+                                          zero.getResult());
 }
 
 // ==================== CONFIGURATION ====================

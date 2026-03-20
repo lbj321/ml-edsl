@@ -59,6 +59,19 @@ public:
     snapshots->emplace_back(std::move(passName), std::move(ir));
   }
 
+  void runAfterPassFailed(mlir::Pass *pass, mlir::Operation *op) override {
+    std::string ir;
+    llvm::raw_string_ostream os(ir);
+    mlir::Operation *root = op;
+    while (root->getParentOp())
+      root = root->getParentOp();
+    root->print(os);
+    std::string passName = pass->getArgument().str();
+    if (passName.empty())
+      passName = pass->getName().str();
+    snapshots->emplace_back("[FAILED] " + passName, std::move(ir));
+  }
+
 private:
   SnapshotList *snapshots;
 };
@@ -154,7 +167,14 @@ void MLIRLowering::addConversionPasses() {
 bool MLIRLowering::runLoweringPipeline(mlir::ModuleOp module) {
   passManager.clear();
   addConversionPasses();
-  return mlir::succeeded(passManager.run(module));
+  if (mlir::succeeded(passManager.run(module)))
+    return true;
+  // Capture partially-lowered module — always, regardless of snapshotsEnabled
+  llvm::raw_string_ostream os(failureIR_);
+  module.print(os);
+  llvm::errs() << "\n[mlir_edsl] Lowering pipeline failed. IR at failure:\n"
+               << failureIR_ << "\n";
+  return false;
 }
 
 LoweredModule MLIRLowering::lowerToLLVMModule(mlir::ModuleOp module) {

@@ -251,6 +251,14 @@ class CppMLIRBackend:
         """Enable IR snapshot capture for lowering passes."""
         self.compiler.enable_snapshot_capture()
 
+    def get_failure_ir(self) -> str:
+        """IR captured at lowering failure point. Always available (no SAVE_IR needed)."""
+        return self.compiler.get_failure_ir()
+
+    def inject_test_failure(self) -> None:
+        """Testing only: inject a malformed op to trigger lowering failure."""
+        self.compiler.inject_test_failure()
+
     def clear_module(self):
         """Clear all functions and reset completely."""
         self.compiler.clear()
