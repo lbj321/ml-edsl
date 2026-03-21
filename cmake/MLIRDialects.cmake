@@ -52,6 +52,13 @@ set(MLIR_MEMORY_LIBS
     MLIRArithTransforms
 )
 
+# Vector dialect and lowering (Phase 9 - vectorization)
+set(MLIR_VECTOR_LIBS
+    MLIRVectorDialect
+    MLIRVectorTransforms
+    MLIRVectorToLLVMPass
+)
+
 # Combine all current libraries
 set(MLIR_CURRENT_LIBS
     ${MLIR_CORE_LIBS}
@@ -60,6 +67,7 @@ set(MLIR_CURRENT_LIBS
     ${MLIR_LLVM_LIBS}
     ${MLIR_SCF_LIBS}
     ${MLIR_MEMORY_LIBS}
+    ${MLIR_VECTOR_LIBS}
     MLIRReconcileUnrealizedCasts
 )
 

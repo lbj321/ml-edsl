@@ -22,6 +22,11 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/Dialect/Vector/Transforms/Passes.h"
+#include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVMPass.h"
+#include "mlir/Pass/Pass.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/BufferizableOpInterfaceImpl.h"
@@ -76,6 +81,60 @@ private:
   SnapshotList *snapshots;
 };
 
+struct LinalgTilingPass
+    : public mlir::PassWrapper<LinalgTilingPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgTilingPass)
+  llvm::StringRef getArgument() const override { return "linalg-tile"; }
+  llvm::StringRef getDescription() const override {
+    return "Tile linalg.matmul for cache efficiency";
+  }
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
+    func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
+
+    mlir::linalg::LinalgTilingOptions opts;
+    opts.setTileSizes({4, 8, 4}); // M=4, N=8 (AVX2 f32 width), K=4
+
+    for (mlir::linalg::MatmulOp op : matmuls) {
+      rewriter.setInsertionPoint(op);
+      if (mlir::failed(mlir::linalg::tileLinalgOp(rewriter, op, opts)))
+        op.emitWarning("linalg-tile: failed to tile matmul, skipping");
+    }
+  }
+};
+
+struct LinalgVectorizationPass
+    : public mlir::PassWrapper<LinalgVectorizationPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgVectorizationPass)
+  llvm::StringRef getArgument() const override { return "linalg-vectorize"; }
+  llvm::StringRef getDescription() const override {
+    return "Vectorize linalg structured ops to vector dialect";
+  }
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    llvm::SmallVector<mlir::Operation *> linalgOps;
+    func.walk([&](mlir::linalg::LinalgOp op) {
+      linalgOps.push_back(op.getOperation());
+    });
+
+    for (mlir::Operation *op : linalgOps) {
+      if (!mlir::linalg::hasVectorizationImpl(op))
+        continue;
+      rewriter.setInsertionPoint(op);
+      if (mlir::failed(mlir::linalg::vectorize(rewriter, op)))
+        op->emitWarning("linalg-vectorize: vectorization failed, skipping op");
+      // Do NOT signalPassFailure — leave op for fallback loop lowering
+    }
+  }
+};
+
 } // anonymous namespace
 
 namespace mlir_edsl {
@@ -107,6 +166,7 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   context->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
   context->getOrLoadDialect<mlir::tensor::TensorDialect>();
   context->getOrLoadDialect<mlir::linalg::LinalgDialect>();
+  context->getOrLoadDialect<mlir::vector::VectorDialect>();
   context->getOrLoadDialect<mlir::bufferization::BufferizationDialect>();
   context->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
 
@@ -146,11 +206,25 @@ void MLIRLowering::addConversionPasses() {
       mlir::bufferization::createBufferDeallocationSimplificationPass());
   passManager.addPass(mlir::bufferization::createLowerDeallocationsPass());
 
-  // Lower linalg structured ops (dot, matmul) to scf.for loops.
-  // Runs after bufferization because linalg-to-loops uses applyPatternsGreedily
-  // with tensor canonicalization patterns, which would constant-fold tensor ops
-  // in unrelated functions if run before one-shot-bufferize.
+  // Phase 9.2: Tile matmul for cache efficiency (before vectorization)
+  passManager.addNestedPass<mlir::func::FuncOp>(
+      std::make_unique<LinalgTilingPass>());
+  passManager.addPass(mlir::createCanonicalizerPass());
+
+  // Phase 9.1: Vectorize linalg structured ops → vector dialect
+  passManager.addNestedPass<mlir::func::FuncOp>(
+      std::make_unique<LinalgVectorizationPass>());
+  passManager.addPass(mlir::createCanonicalizerPass());
+
+  // Fallback: lower any remaining (un-vectorized) linalg ops to scf.for loops
   passManager.addPass(mlir::createConvertLinalgToLoopsPass());
+
+  // Lower vector.multi_reduction (produced by linalg.reduce vectorization)
+  passManager.addNestedPass<mlir::func::FuncOp>(
+      mlir::vector::createLowerVectorMultiReductionPass());
+
+  // Lower all remaining vector ops → LLVM intrinsics
+  passManager.addPass(mlir::createConvertVectorToLLVMPass());
 
   // Lower SCF to ControlFlow dialect
   passManager.addPass(mlir::createSCFToControlFlowPass());
