@@ -44,7 +44,7 @@ class TestLinalgDotIR:
         """)
 
     def test_dot_lowered_to_loops(self, check_lowered_ir):
-        """After convert-linalg-to-loops, linalg.dot is gone and scf.for appears"""
+        """After linalg-vectorize, linalg.dot is replaced by vector ops"""
         @ml_function
         def dot_fn(a: Tensor[f32, 4], b: Tensor[f32, 4]) -> f32:
             return dot(a, b)
@@ -52,9 +52,9 @@ class TestLinalgDotIR:
         dot_fn(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32),
                np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32))
         check_lowered_ir("""
-        // CHECK: scf.for
+        // CHECK: vector.
         // CHECK-NOT: linalg.dot
-        """, after="convert-linalg-to-loops")
+        """, after="linalg-vectorize")
 
 
 class TestLinalgMatmulIR:
@@ -74,7 +74,7 @@ class TestLinalgMatmulIR:
         """)
 
     def test_matmul_lowered_to_loops(self, check_lowered_ir):
-        """After convert-linalg-to-loops, linalg.matmul is gone"""
+        """After linalg-vectorize, linalg.matmul is replaced by vector ops"""
         @ml_function
         def mm_fn(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
             return matmul(A, B)
@@ -82,9 +82,9 @@ class TestLinalgMatmulIR:
         mm_fn(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
               np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
         check_lowered_ir("""
-        // CHECK: scf.for
+        // CHECK: vector.
         // CHECK-NOT: linalg.matmul
-        """, after="convert-linalg-to-loops")
+        """, after="linalg-vectorize")
 
 
 class TestDirectOutputBuffer:
@@ -177,16 +177,16 @@ class TestLinalgReduceIR:
         """)
 
     def test_reduce_lowered_to_loops(self, check_lowered_ir):
-        """After convert-linalg-to-loops, linalg.reduce is gone and scf.for appears."""
+        """After linalg-vectorize, linalg.reduce is replaced by vector ops."""
         @ml_function
         def my_sum(a: Tensor[f32, 4]) -> f32:
             return tensor_sum(a)
 
         my_sum(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
         check_lowered_ir("""
-        // CHECK: scf.for
+        // CHECK: vector.
         // CHECK-NOT: linalg.reduce
-        """, after="convert-linalg-to-loops")
+        """, after="linalg-vectorize")
 
     def test_reduce_vectorized(self, check_lowered_ir):
         """After linalg-vectorize, linalg.reduce is replaced by vector ops."""
