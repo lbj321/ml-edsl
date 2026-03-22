@@ -235,11 +235,11 @@ class TestLinalgMatmulVectorizationIR:
         """, after="linalg-vectorize")
 
 
-class TestLinalgMatmulTilingIR:
-    """IR tests for linalg.matmul tiling (Phase 9.2)"""
+class TestLinalgMatmulLargeIR:
+    """IR tests for larger matmul vectorization"""
 
-    def test_matmul_tiled_generates_scf_loops(self, check_lowered_ir):
-        """8x8 matmul: after linalg-tile, scf.for loops wrap inner linalg.matmul."""
+    def test_matmul_8x8_vectorized(self, check_lowered_ir):
+        """8x8 matmul vectorizes directly without tiling."""
         @ml_function
         def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
             return matmul(A, B)
@@ -247,18 +247,6 @@ class TestLinalgMatmulTilingIR:
         mm_fn(np.ones((8, 8), dtype=np.float32),
               np.ones((8, 8), dtype=np.float32))
         check_lowered_ir("""
-        // CHECK: scf.for
-        // CHECK: linalg.matmul
-        """, after="linalg-tile")
-
-    def test_small_matmul_not_tiled(self, check_lowered_ir):
-        """2x2 matmul: tile sizes exceed dims, linalg.matmul present without scf.for wrapping."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
-            return matmul(A, B)
-
-        mm_fn(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
-              np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: linalg.matmul
-        """, after="linalg-tile")
+        // CHECK: vector.
+        // CHECK-NOT: linalg.matmul
+        """, after="linalg-vectorize")

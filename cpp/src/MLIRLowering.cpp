@@ -83,35 +83,6 @@ private:
   SnapshotList *snapshots;
 };
 
-struct LinalgTilingPass
-    : public mlir::PassWrapper<LinalgTilingPass,
-                               mlir::OperationPass<mlir::func::FuncOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgTilingPass)
-  llvm::StringRef getArgument() const override { return "linalg-tile"; }
-  llvm::StringRef getDescription() const override {
-    return "Tile linalg.matmul for cache efficiency";
-  }
-  void runOnOperation() override {
-    mlir::func::FuncOp func = getOperation();
-    mlir::IRRewriter rewriter(func->getContext());
-
-    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
-    func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
-
-    mlir::linalg::LinalgTilingOptions opts;
-    opts.setTileSizes({4, 8, 4}); // M=4, N=8 (AVX2 f32 width), K=4
-
-    for (mlir::linalg::MatmulOp op : matmuls) {
-      rewriter.setInsertionPoint(op);
-      if (mlir::failed(mlir::linalg::tileLinalgOp(rewriter, op, opts))) {
-        op.emitWarning("linalg-tile: failed to tile matmul, skipping");
-      } else {
-        rewriter.eraseOp(op);
-      }
-    }
-  }
-};
-
 struct LinalgVectorizationPass
     : public mlir::PassWrapper<LinalgVectorizationPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
@@ -211,10 +182,6 @@ void MLIRLowering::addConversionPasses() {
       mlir::bufferization::createBufferDeallocationSimplificationPass());
   passManager.addPass(mlir::bufferization::createLowerDeallocationsPass());
 
-  // Phase 9.2: Tile matmul for cache efficiency (before vectorization)
-  passManager.addNestedPass<mlir::func::FuncOp>(
-      std::make_unique<LinalgTilingPass>());
-  passManager.addPass(mlir::createCanonicalizerPass());
 
   // Phase 9.1: Vectorize linalg structured ops → vector dialect
   passManager.addNestedPass<mlir::func::FuncOp>(

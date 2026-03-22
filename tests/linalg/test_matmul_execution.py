@@ -41,6 +41,18 @@ class TestMatmulExecution:
 
         np.testing.assert_allclose(result, [[19.0, 22.0], [43.0, 50.0]], rtol=1e-3)
 
+    def test_matmul_8x8(self, backend):
+        """8x8 matmul: ones @ ones == 8*ones"""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
+            return matmul(A, B)
+
+        A = np.ones((8, 8), dtype=np.float32)
+        B = np.ones((8, 8), dtype=np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, np.full((8, 8), 8.0), atol=1e-5)
+
     def test_matmul_zeros(self, backend):
         """A @ 0 == 0"""
         @ml_function
