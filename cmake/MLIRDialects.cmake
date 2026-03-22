@@ -57,6 +57,8 @@ set(MLIR_VECTOR_LIBS
     MLIRVectorDialect
     MLIRVectorTransforms
     MLIRVectorToLLVMPass
+    MLIRVectorToSCF
+    MLIRUBToLLVM
 )
 
 # Combine all current libraries
