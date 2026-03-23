@@ -52,6 +52,12 @@ public:
       : snapshots(snapshots) {}
 
   void runAfterPass(mlir::Pass *pass, mlir::Operation *op) override {
+    // OpToOpPassAdaptor is an internal MLIR wrapper for nested passes.
+    // Its snapshot is always identical to the last inner-pass snapshot, so
+    // skip it to avoid duplicate "unchanged" noise in the pipeline view.
+    if (pass->getName().contains("OpToOpPassAdaptor"))
+      return;
+
     std::string ir;
     llvm::raw_string_ostream os(ir);
     // Walk up to module root for consistent full-module snapshots
