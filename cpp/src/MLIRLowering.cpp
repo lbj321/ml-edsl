@@ -24,7 +24,9 @@
 #include "mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/Passes.h"
+#include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVMPass.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Conversion/VectorToSCF/VectorToSCF.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/IR/PatternMatch.h"
@@ -107,6 +109,8 @@ struct LinalgVectorizationPass
     });
 
     for (mlir::Operation *op : linalgOps) {
+      if (!op->getBlock())
+        continue; // erased by a prior iteration (e.g. nested op inside vectorized outer)
       if (!mlir::linalg::hasVectorizationImpl(op))
         continue;
       rewriter.setInsertionPoint(op);
@@ -114,6 +118,27 @@ struct LinalgVectorizationPass
         op->emitWarning("linalg-vectorize: vectorization failed, skipping op");
       // Do NOT signalPassFailure — leave op for fallback loop lowering
     }
+  }
+};
+
+// Fuses the mulf + multi_reduction pattern emitted by linalg::vectorize into
+// vector.contract, giving the LLVM backend a clear contraction semantic.
+// This is the key optimization for larger matmuls.
+struct VectorCleanupPass
+    : public mlir::PassWrapper<VectorCleanupPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VectorCleanupPass)
+  llvm::StringRef getArgument() const override { return "vector-cleanup"; }
+  llvm::StringRef getDescription() const override {
+    return "Fuse mulf+multi_reduction into vector.contract";
+  }
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::RewritePatternSet patterns(func->getContext());
+    mlir::vector::populateVectorReductionToContractPatterns(patterns);
+    if (mlir::failed(mlir::applyPatternsGreedily(
+            func, std::move(patterns))))
+      signalPassFailure();
   }
 };
 
@@ -193,6 +218,10 @@ void MLIRLowering::addConversionPasses() {
   passManager.addNestedPass<mlir::func::FuncOp>(
       std::make_unique<LinalgVectorizationPass>());
   passManager.addPass(mlir::createCanonicalizerPass());
+
+  // Fuse mulf + multi_reduction → vector.contract for better LLVM codegen
+  passManager.addNestedPass<mlir::func::FuncOp>(
+      std::make_unique<VectorCleanupPass>());
 
   // Fallback: lower any remaining (un-vectorized) linalg ops to scf.for loops
   passManager.addPass(mlir::createConvertLinalgToLoopsPass());
