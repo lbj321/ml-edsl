@@ -113,7 +113,7 @@ void MLIRCompiler::createFunction(
     if (auto tensorType =
             mlir::dyn_cast<mlir::RankedTensorType>(originalType)) {
       auto toTensor = opBuilder->create<mlir::bufferization::ToTensorOp>(
-          loc, tensorType, arg, /*restrict=*/true, /*writable=*/true);
+          loc, tensorType, arg, /*restrict=*/true, /*writable=*/false);
       parameterMap[params[i].first] = toTensor.getResult();
     } else {
       parameterMap[params[i].first] = arg;
