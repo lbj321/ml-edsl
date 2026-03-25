@@ -5,10 +5,6 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/TargetSelect.h"
-#include "llvm/Transforms/InstCombine/InstCombine.h"
-#include "llvm/Transforms/Scalar/GVN.h"
-#include "llvm/Transforms/Scalar/SimplifyCFG.h"
-#include "llvm/Transforms/Utils/Mem2Reg.h"
 
 #include <stdexcept>
 #include <cstdlib>
@@ -114,25 +110,11 @@ void MLIRExecutor::optimizeModule(llvm::Module *module) {
   if (optimizationLevel == OptLevel::O0)
     return;
 
+  llvm::OptimizationLevel llvmLevel =
+      (optimizationLevel == OptLevel::O3) ? llvm::OptimizationLevel::O3
+                                           : llvm::OptimizationLevel::O2;
+
   llvm::PassBuilder passBuilder;
-  llvm::FunctionPassManager functionPM;
-  llvm::ModulePassManager modulePM;
-
-  if (optimizationLevel == OptLevel::O2 || optimizationLevel == OptLevel::O3) {
-    functionPM.addPass(llvm::PromotePass());
-    functionPM.addPass(llvm::InstCombinePass());
-    functionPM.addPass(llvm::SimplifyCFGPass());
-
-    if (optimizationLevel == OptLevel::O3) {
-      functionPM.addPass(llvm::GVNPass());
-    }
-  }
-
-  if (!functionPM.isEmpty()) {
-    modulePM.addPass(
-        llvm::createModuleToFunctionPassAdaptor(std::move(functionPM)));
-  }
-
   llvm::LoopAnalysisManager loopAM;
   llvm::FunctionAnalysisManager functionAM;
   llvm::CGSCCAnalysisManager cgsccAM;
@@ -144,6 +126,8 @@ void MLIRExecutor::optimizeModule(llvm::Module *module) {
   passBuilder.registerLoopAnalyses(loopAM);
   passBuilder.crossRegisterProxies(loopAM, functionAM, cgsccAM, moduleAM);
 
+  llvm::ModulePassManager modulePM =
+      passBuilder.buildPerModuleDefaultPipeline(llvmLevel);
   modulePM.run(*module, moduleAM);
 }
 
