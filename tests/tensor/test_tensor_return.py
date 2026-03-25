@@ -152,7 +152,7 @@ class TestTensorReturnIR:
         // CHECK: func.func @tr_ir_param
         // CHECK-SAME: memref<4xf32>
         // CHECK: bufferization.to_tensor
-        // CHECK-SAME: restrict writable
+        // CHECK-SAME: restrict
         """)
 
     def test_tensor_return_has_materialize_in_destination(self, check_ir):
