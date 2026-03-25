@@ -122,25 +122,6 @@ struct LinalgVectorizationPass
                   // vectorized outer)
       if (!mlir::linalg::hasVectorizationImpl(op))
         continue;
-      // Skip ops with strided subview operands (dynamic offset = result of
-      // memref.subview). Vectorizing strided memrefs produces complex broadcast
-      // transfer_reads that generate broken LLVM code. Let
-      // convert-linalg-to-loops handle them with scalar loads instead.
-      bool hasStridedOperand = false;
-      for (mlir::Value operand : op->getOperands()) {
-        auto memrefType = mlir::dyn_cast<mlir::MemRefType>(operand.getType());
-        if (!memrefType)
-          continue;
-        int64_t offset;
-        llvm::SmallVector<int64_t> strides;
-        if (mlir::succeeded(memrefType.getStridesAndOffset(strides, offset)) &&
-            offset == mlir::ShapedType::kDynamic) {
-          hasStridedOperand = true;
-          break;
-        }
-      }
-      if (hasStridedOperand)
-        continue;
       rewriter.setInsertionPoint(op);
       if (mlir::failed(mlir::linalg::vectorize(rewriter, op)))
         op->emitWarning("linalg-vectorize: vectorization failed, skipping op");
