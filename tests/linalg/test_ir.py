@@ -250,3 +250,125 @@ class TestLinalgMatmulLargeIR:
         // CHECK: vector.
         // CHECK-NOT: linalg.matmul
         """, after="linalg-vectorize")
+
+
+class TestLinalgMatmulTilingPass:
+    """IR tests for LinalgMatmulTilingPass (linalg-tile-matmul).
+
+    Matrices with all dims > 8 are tiled into scf.for loops over 8x8 tiles.
+    Matrices with any dim <= 8 are left untouched for direct vectorization.
+    """
+
+    def test_large_matmul_tiled_to_scf_for(self, check_lowered_ir):
+        """16x16 matmul is replaced by two nested scf.for loops over 8x8 tiles."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((16, 16), dtype=np.float32),
+              np.ones((16, 16), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: scf.for
+        // CHECK: scf.for
+        // CHECK: linalg.matmul
+        """, after="linalg-tile-matmul")
+
+    def test_large_matmul_tile_step_is_8(self, check_lowered_ir):
+        """Tiling uses step size 8 for both M and N dimensions."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((16, 16), dtype=np.float32),
+              np.ones((16, 16), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: arith.constant 8 : index
+        // CHECK: scf.for
+        """, after="linalg-tile-matmul")
+
+    def test_large_matmul_produces_subviews(self, check_lowered_ir):
+        """Tiled matmul slices inputs into 8x16, 16x8 and output into 8x8 subviews."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((16, 16), dtype=np.float32),
+              np.ones((16, 16), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: memref.subview {{.*}} [8, 16] [1, 1]
+        // CHECK: memref.subview {{.*}} [16, 8] [1, 1]
+        // CHECK: memref.subview {{.*}} [8, 8] [1, 1]
+        """, after="linalg-tile-matmul")
+
+    def test_boundary_8x8_matmul_not_tiled(self, check_lowered_ir):
+        """8x8 matmul (any dim == 8 satisfies skip condition) is not tiled."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((8, 8), dtype=np.float32),
+              np.ones((8, 8), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK-NOT: scf.for
+        // CHECK: linalg.matmul
+        """, after="linalg-tile-matmul")
+
+    def test_small_matmul_not_tiled(self, check_lowered_ir):
+        """2x2 matmul is not tiled — linalg.matmul passes through untouched."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
+            return matmul(A, B)
+
+        mm_fn(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+              np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK-NOT: scf.for
+        // CHECK: linalg.matmul
+        """, after="linalg-tile-matmul")
+
+
+class TestVectorCleanupPass:
+    """IR tests for VectorCleanupPass (vector-cleanup).
+
+    Fuses the mulf + multi_reduction pattern emitted by linalg::vectorize
+    into vector.contract, giving the LLVM backend explicit contraction semantics.
+    """
+
+    def test_matmul_fused_to_vector_contract(self, check_lowered_ir):
+        """After vector-cleanup, mulf+multi_reduction is fused into vector.contract."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
+            return matmul(A, B)
+
+        mm_fn(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+              np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: vector.contract
+        // CHECK-NOT: vector.multi_reduction
+        """, after="vector-cleanup")
+
+    def test_matmul_contract_has_reduction_iterator(self, check_lowered_ir):
+        """vector.contract encodes matmul semantics: parallel+parallel+reduction."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((8, 8), dtype=np.float32),
+              np.ones((8, 8), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: vector.contract {{.*}} iterator_types = ["parallel", "parallel", "reduction"]
+        """, after="vector-cleanup")
+
+    def test_large_tiled_matmul_fused_to_contract(self, check_lowered_ir):
+        """After tiling + cleanup, each tile's matmul becomes a vector.contract inside scf.for."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((16, 16), dtype=np.float32),
+              np.ones((16, 16), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: scf.for
+        // CHECK: vector.contract
+        // CHECK-NOT: linalg.matmul
+        """, after="vector-cleanup")
