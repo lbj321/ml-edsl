@@ -7,7 +7,7 @@ Validates that tensor element-wise ops and bias add compile and execute correctl
 
 import pytest
 import numpy as np
-from mlir_edsl import ml_function, Tensor, f32, i32, matmul
+from mlir_edsl import ml_function, Tensor, f32, i32, matmul, relu, leaky_relu
 
 
 # ==================== SAME-SHAPE ELEMENT-WISE ====================
@@ -188,7 +188,7 @@ class TestMatmulOperator:
 # ==================== DENSE LAYER PATTERN ====================
 
 class TestDenseLayerPattern:
-    """Compose matmul + bias add to validate the full dense-layer pattern."""
+    """Compose matmul + bias add + relu to validate dense layer patterns."""
 
     def test_dense_layer_no_activation(self, backend):
         """output = X @ W + b matches numpy."""
@@ -202,7 +202,67 @@ class TestDenseLayerPattern:
                       [0.0, 1.0, 0.0, 0.0]], dtype=np.float32)
         W = np.ones((4, 3), dtype=np.float32)
         b = np.array([0.1, 0.2, 0.3], dtype=np.float32)
-
         result = dense(X, W, b)
-        expected = X @ W + b
+        np.testing.assert_allclose(result, X @ W + b, rtol=1e-4)
+
+    def test_dense_layer_with_relu(self, backend):
+        """relu(X @ W + b) matches numpy."""
+        @ml_function
+        def dense_relu(X: Tensor[f32, 2, 4],
+                       W: Tensor[f32, 4, 3],
+                       b: Tensor[f32, 3]) -> Tensor[f32, 2, 3]:
+            return relu(X @ W + b)
+
+        X = np.random.randn(2, 4).astype(np.float32)
+        W = np.random.randn(4, 3).astype(np.float32)
+        b = np.random.randn(3).astype(np.float32)
+        result = dense_relu(X, W, b)
+        expected = np.maximum(X @ W + b, 0.0)
+        np.testing.assert_allclose(result, expected, rtol=1e-4)
+
+    def test_two_layer_net(self, backend):
+        """Two stacked dense layers with relu: relu(relu(X @ W1 + b1) @ W2 + b2)."""
+        @ml_function
+        def two_layer(X:  Tensor[f32, 2, 4],
+                      W1: Tensor[f32, 4, 8],
+                      b1: Tensor[f32, 8],
+                      W2: Tensor[f32, 8, 3],
+                      b2: Tensor[f32, 3]) -> Tensor[f32, 2, 3]:
+            h = relu(X @ W1 + b1)
+            return relu(h @ W2 + b2)
+
+        X  = np.random.randn(2, 4).astype(np.float32)
+        W1 = np.random.randn(4, 8).astype(np.float32)
+        b1 = np.random.randn(8).astype(np.float32)
+        W2 = np.random.randn(8, 3).astype(np.float32)
+        b2 = np.random.randn(3).astype(np.float32)
+        result = two_layer(X, W1, b1, W2, b2)
+        expected = np.maximum(np.maximum(X @ W1 + b1, 0.0) @ W2 + b2, 0.0)
+        np.testing.assert_allclose(result, expected, rtol=1e-4)
+
+    def test_three_layer_net(self, backend):
+        """Three stacked dense layers — verifies arbitrary depth stacking."""
+        @ml_function
+        def three_layer(X:  Tensor[f32, 4, 8],
+                        W1: Tensor[f32, 8, 16],
+                        b1: Tensor[f32, 16],
+                        W2: Tensor[f32, 16, 8],
+                        b2: Tensor[f32, 8],
+                        W3: Tensor[f32, 8, 4],
+                        b3: Tensor[f32, 4]) -> Tensor[f32, 4, 4]:
+            h1 = relu(X  @ W1 + b1)
+            h2 = relu(h1 @ W2 + b2)
+            return relu(h2 @ W3 + b3)
+
+        X  = np.random.randn(4, 8).astype(np.float32)
+        W1 = np.random.randn(8, 16).astype(np.float32)
+        b1 = np.random.randn(16).astype(np.float32)
+        W2 = np.random.randn(16, 8).astype(np.float32)
+        b2 = np.random.randn(8).astype(np.float32)
+        W3 = np.random.randn(8, 4).astype(np.float32)
+        b3 = np.random.randn(4).astype(np.float32)
+        result = three_layer(X, W1, b1, W2, b2, W3, b3)
+        h1 = np.maximum(X @ W1 + b1, 0.0)
+        h2 = np.maximum(h1 @ W2 + b2, 0.0)
+        expected = np.maximum(h2 @ W3 + b3, 0.0)
         np.testing.assert_allclose(result, expected, rtol=1e-4)

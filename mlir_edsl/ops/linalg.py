@@ -47,17 +47,17 @@ def matmul(A: Value, B: Value) -> LinalgMatmul:
 
 
 def tensor_map(arr: Value, fn) -> LinalgMap:
-    """Apply fn element-wise over a 1D tensor (linalg.map under the hood).
+    """Apply fn element-wise over a tensor of any rank (linalg.map under the hood).
 
     Args:
-        arr: 1D tensor (Tensor[f32, N] or Tensor[i32, N])
+        arr: tensor of any shape (Tensor[f32, N], Tensor[f32, M, N], etc.)
         fn: callable accepting a scalar Value placeholder, returning a scalar Value
 
     Returns:
-        LinalgMap AST node; evaluates to a 1D tensor of the same type
+        LinalgMap AST node; evaluates to a tensor of the same type and shape
 
     Raises:
-        TypeError: if arr is not a 1D tensor, or fn returns wrong element type
+        TypeError: if arr is not a tensor, or fn returns wrong element type
 
     Example:
         @ml_function
@@ -68,17 +68,17 @@ def tensor_map(arr: Value, fn) -> LinalgMap:
 
 
 def relu(arr: Value) -> LinalgMap:
-    """ReLU: max(0, x) element-wise over a 1D float tensor.
+    """ReLU: max(0, x) element-wise over a float tensor of any rank.
 
     Args:
-        arr: 1D tensor of f32 values
+        arr: tensor of f32 values (any shape)
 
     Returns:
-        LinalgMap AST node; evaluates to a 1D tensor with negative values clamped to 0
+        LinalgMap AST node; evaluates to a tensor of the same shape with negatives clamped to 0
 
     Example:
         @ml_function
-        def apply_relu(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
+        def apply_relu(a: Tensor[f32, 2, 4]) -> Tensor[f32, 2, 4]:
             return relu(a)
     """
     from ..ast.nodes.control_flow import IfOp
@@ -177,18 +177,18 @@ def tensor_min(arr: Value) -> LinalgReduce:
 
 
 def leaky_relu(arr: Value, alpha: float = 0.01) -> LinalgMap:
-    """Leaky ReLU: v if v > 0 else alpha * v, element-wise over a 1D float tensor.
+    """Leaky ReLU: v if v > 0 else alpha * v, element-wise over a float tensor of any rank.
 
     Args:
-        arr: 1D tensor of f32 values
+        arr: tensor of f32 values (any shape)
         alpha: negative slope coefficient (default 0.01)
 
     Returns:
-        LinalgMap AST node; evaluates to a 1D tensor with leaky relu applied
+        LinalgMap AST node; evaluates to a tensor of the same shape with leaky relu applied
 
     Example:
         @ml_function
-        def apply_leaky_relu(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
+        def apply_leaky_relu(a: Tensor[f32, 2, 4]) -> Tensor[f32, 2, 4]:
             return leaky_relu(a, alpha=0.1)
     """
     from ..ast.nodes.control_flow import IfOp

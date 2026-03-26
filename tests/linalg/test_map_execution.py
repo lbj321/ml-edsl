@@ -112,6 +112,55 @@ class TestMapExecution:
         assert abs(result[0] - 15.0) < 1e-5
 
 
+# ==================== 2D RELU ====================
+
+class TestRelu2D:
+    """Test relu and leaky_relu on 2D tensors (ND tensor_map support)."""
+
+    def test_relu_2d_mixed(self, backend):
+        """relu on a 2D tensor clamps negatives row-by-row."""
+        @ml_function
+        def relu_2d(a: Tensor[f32, 2, 4]) -> Tensor[f32, 2, 4]:
+            return relu(a)
+
+        X = np.array([[-1.0, 2.0, -3.0, 4.0],
+                      [5.0, -6.0, 7.0, -8.0]], dtype=np.float32)
+        result = relu_2d(X)
+        np.testing.assert_allclose(result, np.maximum(X, 0.0), rtol=1e-5)
+
+    def test_relu_2d_all_negative(self, backend):
+        """relu on all-negative 2D tensor gives all zeros."""
+        @ml_function
+        def relu_2d(a: Tensor[f32, 3, 3]) -> Tensor[f32, 3, 3]:
+            return relu(a)
+
+        X = -np.ones((3, 3), dtype=np.float32)
+        result = relu_2d(X)
+        np.testing.assert_allclose(result, np.zeros((3, 3)), atol=1e-5)
+
+    def test_relu_2d_all_positive(self, backend):
+        """relu on all-positive 2D tensor is identity."""
+        @ml_function
+        def relu_2d(a: Tensor[f32, 2, 3]) -> Tensor[f32, 2, 3]:
+            return relu(a)
+
+        X = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
+        result = relu_2d(X)
+        np.testing.assert_allclose(result, X, rtol=1e-5)
+
+    def test_leaky_relu_2d(self, backend):
+        """leaky_relu on a 2D tensor scales negatives by alpha."""
+        @ml_function
+        def leaky_2d(a: Tensor[f32, 2, 4]) -> Tensor[f32, 2, 4]:
+            return leaky_relu(a, alpha=0.1)
+
+        X = np.array([[-1.0, 2.0, -3.0, 4.0],
+                      [5.0, -6.0, 7.0, -8.0]], dtype=np.float32)
+        result = leaky_2d(X)
+        expected = np.where(X > 0, X, X * 0.1)
+        np.testing.assert_allclose(result, expected, rtol=1e-4)
+
+
 # ==================== CHAINED MAP ====================
 
 class TestMapChained:
