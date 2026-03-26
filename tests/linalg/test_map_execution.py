@@ -132,22 +132,22 @@ class TestMapChained:
 class TestMapTypeValidation:
     """Test that invalid inputs are rejected at Python AST construction time"""
 
-    def test_2d_array_rejected(self):
-        """tensor_map requires a 1D tensor."""
+    def test_2d_tensor_accepted(self):
+        """tensor_map supports ND tensors, not just 1D."""
         from mlir_edsl.ast.nodes.functions import Parameter
         from mlir_edsl.types import TensorType, f32 as f32_type
 
         arr_2d = Parameter("a", TensorType((2, 2), f32_type))
-        with pytest.raises(TypeError, match="1D tensor"):
-            tensor_map(arr_2d, lambda v: v)
+        result = tensor_map(arr_2d, lambda v: v)
+        assert result is not None
 
     def test_scalar_rejected(self):
-        """tensor_map requires an array, not a scalar."""
+        """tensor_map requires a tensor, not a scalar."""
         from mlir_edsl.ast.nodes.scalars import Constant
         from mlir_edsl.types import f32 as f32_type
 
         scalar = Constant(1.0, f32_type)
-        with pytest.raises(TypeError, match="1D tensor"):
+        with pytest.raises(TypeError, match="tensor"):
             tensor_map(scalar, lambda v: v)
 
     def test_body_type_mismatch_rejected(self):

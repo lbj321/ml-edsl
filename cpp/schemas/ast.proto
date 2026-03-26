@@ -65,11 +65,13 @@ enum BinaryOpType {
   DIV = 3;
 }
 
-// Broadcast modes for array-scalar operations
+// Broadcast modes for array/tensor binary operations
 enum BroadcastMode {
-  NONE = 0;          // Both operands are arrays (same shape)
-  SCALAR_LEFT = 1;   // Left operand is scalar, right is array
-  SCALAR_RIGHT = 2;  // Left operand is array, right is scalar
+  NONE = 0;                // Both operands are same shape
+  SCALAR_LEFT = 1;         // Left operand is scalar, right is array/tensor
+  SCALAR_RIGHT = 2;        // Left operand is array/tensor, right is scalar
+  TENSOR_BIAS_RIGHT = 3;   // [M,N] op [N] — 1D bias on right, broadcast over rows
+  TENSOR_BIAS_LEFT = 4;    // [N] op [M,N] — 1D bias on left, broadcast over rows
 }
 
 // Comparison predicates
@@ -332,13 +334,14 @@ message TensorEmpty {
 // Top-level linalg node container
 message LinalgNode {
   oneof value {
-    LinalgDot             dot             = 1;
-    LinalgMatmul          matmul          = 2;
-    LinalgMap             map             = 3;
-    LinalgMapElement      map_element     = 4;
-    LinalgReduce          reduce          = 5;
-    LinalgReduceElement   reduce_element  = 6;
-    LinalgReduceAccumulator reduce_accum  = 7;
+    LinalgDot               dot             = 1;
+    LinalgMatmul            matmul          = 2;
+    LinalgMap               map             = 3;
+    LinalgMapElement        map_element     = 4;
+    LinalgReduce            reduce          = 5;
+    LinalgReduceElement     reduce_element  = 6;
+    LinalgReduceAccumulator reduce_accum    = 7;
+    LinalgBinaryOp          binary_op       = 8;
   }
 }
 
@@ -355,6 +358,21 @@ message LinalgMatmul {
   ASTNode  lhs      = 1;  // 2D memref (memref<MxKxf32>)
   ASTNode  rhs      = 2;  // 2D memref (memref<KxNxf32>)
   TypeSpec out_type = 3;  // Output MemRefTypeSpec (memref<MxNxf32>)
+}
+
+// Element-wise binary op on tensors with optional broadcasting.
+// Covers same-shape (NONE), scalar (SCALAR_*), and bias-add (TENSOR_BIAS_*) patterns.
+// NONE:               lhs[...] op rhs[...]   — same shape
+// SCALAR_LEFT:        scalar   op rhs[...]
+// SCALAR_RIGHT:       lhs[...] op scalar
+// TENSOR_BIAS_RIGHT:  lhs[M,N] op rhs[N]     — broadcast bias over rows
+// TENSOR_BIAS_LEFT:   lhs[N]   op rhs[M,N]   — broadcast bias over rows
+message LinalgBinaryOp {
+  ASTNode       lhs       = 1;
+  ASTNode       rhs       = 2;
+  BinaryOpType  op_type   = 3;
+  BroadcastMode broadcast = 4;
+  TypeSpec      out_type  = 5;
 }
 
 // Element-wise map over a 1D array: linalg.map (MapOp)

@@ -6,10 +6,42 @@
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/AffineMap.h"
 
 #include <stdexcept>
 
 namespace {
+
+/// Apply a BinaryOpType arith operation to two scalar values.
+mlir::Value applyArithOp(mlir::OpBuilder &builder, mlir::Location loc,
+                         mlir_edsl::BinaryOpType opType, mlir::Value lhs,
+                         mlir::Value rhs) {
+  bool isFloat = mlir::isa<mlir::FloatType>(lhs.getType());
+  switch (opType) {
+  case mlir_edsl::ADD:
+    return isFloat ? builder.create<mlir::arith::AddFOp>(loc, lhs, rhs)
+                         .getResult()
+                   : builder.create<mlir::arith::AddIOp>(loc, lhs, rhs)
+                         .getResult();
+  case mlir_edsl::SUB:
+    return isFloat ? builder.create<mlir::arith::SubFOp>(loc, lhs, rhs)
+                         .getResult()
+                   : builder.create<mlir::arith::SubIOp>(loc, lhs, rhs)
+                         .getResult();
+  case mlir_edsl::MUL:
+    return isFloat ? builder.create<mlir::arith::MulFOp>(loc, lhs, rhs)
+                         .getResult()
+                   : builder.create<mlir::arith::MulIOp>(loc, lhs, rhs)
+                         .getResult();
+  case mlir_edsl::DIV:
+    return isFloat ? builder.create<mlir::arith::DivFOp>(loc, lhs, rhs)
+                         .getResult()
+                   : builder.create<mlir::arith::DivSIOp>(loc, lhs, rhs)
+                         .getResult();
+  default:
+    throw std::runtime_error("applyArithOp: unsupported op type");
+  }
+}
 
 /// Build arith.constant 0 for any numeric type.
 mlir::Value buildZero(mlir::OpBuilder &builder, mlir::Location loc,
@@ -190,6 +222,105 @@ mlir::Value LinalgBuilder::buildReduce(const mlir_edsl::LinalgReduce &node) {
 
   return builder.create<mlir::tensor::ExtractOp>(loc, reduceResult,
                                                  mlir::ValueRange{});
+}
+
+mlir::Value LinalgBuilder::buildBinaryOp(const mlir_edsl::LinalgBinaryOp &node,
+                                          mlir::Value outParam) {
+  auto loc = builder.getUnknownLoc();
+  auto broadcastMode = node.broadcast();
+  auto opType = node.op_type();
+
+  mlir::Type outMLIRType = parent->convertType(node.out_type());
+  auto outTensorType = mlir::dyn_cast<mlir::RankedTensorType>(outMLIRType);
+  if (!outTensorType)
+    throw std::runtime_error("LinalgBinaryOp: out_type must be a tensor type");
+
+  // Allocate output tensor
+  mlir::Value init;
+  if (outParam)
+    init = builder
+               .create<mlir::bufferization::ToTensorOp>(
+                   loc, outTensorType, outParam, /*restrict=*/true,
+                   /*writable=*/true)
+               .getResult();
+  else
+    init = builder.create<mlir::tensor::EmptyOp>(loc, outTensorType,
+                                                 mlir::ValueRange{});
+
+  if (broadcastMode == mlir_edsl::TENSOR_BIAS_RIGHT ||
+      broadcastMode == mlir_edsl::TENSOR_BIAS_LEFT) {
+    // ----------------------------------------------------------------
+    // Bias broadcast: [M,N] op [N]  (or [N] op [M,N])
+    // Step 1: linalg.broadcast [N] → [M,N]
+    // Step 2: linalg.map(arith op) over the two [M,N] tensors
+    // ----------------------------------------------------------------
+    mlir::Value matrix = parent->buildFromProtobufNode(
+        broadcastMode == mlir_edsl::TENSOR_BIAS_RIGHT ? node.lhs() : node.rhs());
+    mlir::Value bias = parent->buildFromProtobufNode(
+        broadcastMode == mlir_edsl::TENSOR_BIAS_RIGHT ? node.rhs() : node.lhs());
+
+    // Broadcast bias [N] → [M,N] along dimension 0
+    mlir::Value broadcastInit = builder.create<mlir::tensor::EmptyOp>(
+        loc, outTensorType, mlir::ValueRange{});
+    auto broadcastOp = builder.create<mlir::linalg::BroadcastOp>(
+        loc, bias, broadcastInit, builder.getDenseI64ArrayAttr({0}));
+    mlir::Value bias2D = broadcastOp->getResult(0);
+
+    // linalg.map with two inputs: matrix and bias2D
+    auto mapOp = builder.create<mlir::linalg::MapOp>(
+        loc,
+        /*inputs=*/mlir::ValueRange{matrix, bias2D},
+        /*init=*/init,
+        [&](mlir::OpBuilder &, mlir::Location innerLoc,
+            mlir::ValueRange blockArgs) {
+          mlir::Value result =
+              applyArithOp(builder, innerLoc, opType, blockArgs[0], blockArgs[1]);
+          builder.create<mlir::linalg::YieldOp>(innerLoc, result);
+        });
+    return mapOp->getResult(0);
+  }
+
+  // ----------------------------------------------------------------
+  // NONE: same-shape element-wise
+  // SCALAR_LEFT / SCALAR_RIGHT: one operand is a scalar
+  // ----------------------------------------------------------------
+  mlir::Value lhs = parent->buildFromProtobufNode(node.lhs());
+  mlir::Value rhs = parent->buildFromProtobufNode(node.rhs());
+
+  if (broadcastMode == mlir_edsl::NONE) {
+    auto mapOp = builder.create<mlir::linalg::MapOp>(
+        loc,
+        /*inputs=*/mlir::ValueRange{lhs, rhs},
+        /*init=*/init,
+        [&](mlir::OpBuilder &, mlir::Location innerLoc,
+            mlir::ValueRange blockArgs) {
+          mlir::Value result =
+              applyArithOp(builder, innerLoc, opType, blockArgs[0], blockArgs[1]);
+          builder.create<mlir::linalg::YieldOp>(innerLoc, result);
+        });
+    return mapOp->getResult(0);
+  }
+
+  // SCALAR_LEFT or SCALAR_RIGHT: scalar captured directly from outer scope
+  mlir::Value tensorInput =
+      (broadcastMode == mlir_edsl::SCALAR_RIGHT) ? lhs : rhs;
+  mlir::Value scalarInput =
+      (broadcastMode == mlir_edsl::SCALAR_RIGHT) ? rhs : lhs;
+
+  auto mapOp = builder.create<mlir::linalg::MapOp>(
+      loc,
+      /*inputs=*/mlir::ValueRange{tensorInput},
+      /*init=*/init,
+      [&](mlir::OpBuilder &, mlir::Location innerLoc,
+          mlir::ValueRange blockArgs) {
+        mlir::Value elemVal = blockArgs[0];
+        mlir::Value result =
+            (broadcastMode == mlir_edsl::SCALAR_RIGHT)
+                ? applyArithOp(builder, innerLoc, opType, elemVal, scalarInput)
+                : applyArithOp(builder, innerLoc, opType, scalarInput, elemVal);
+        builder.create<mlir::linalg::YieldOp>(innerLoc, result);
+      });
+  return mapOp->getResult(0);
 }
 
 } // namespace mlir_edsl

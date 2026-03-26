@@ -372,3 +372,43 @@ class TestVectorCleanupPass:
         // CHECK: vector.contract
         // CHECK-NOT: linalg.matmul
         """, after="vector-cleanup")
+
+
+class TestLinalgBinaryOpIR:
+    """IR structure tests for LinalgBinaryOp (same-shape, scalar, bias add)."""
+
+    def test_same_shape_add_emits_linalg_map(self, check_ir):
+        """Tensor + Tensor (same shape) emits linalg.map with two inputs."""
+        @ml_function
+        def add_fn(a: Tensor[f32, 4], b: Tensor[f32, 4]) -> Tensor[f32, 4]:
+            return a + b
+
+        add_fn(np.ones(4, dtype=np.float32), np.ones(4, dtype=np.float32))
+        check_ir("""
+        // CHECK: linalg.map
+        // CHECK-NOT: linalg.broadcast
+        """)
+
+    def test_scalar_broadcast_emits_linalg_map(self, check_ir):
+        """Tensor * scalar emits a single linalg.map (no broadcast op needed)."""
+        @ml_function
+        def scale(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
+            return a * 2.0
+
+        scale(np.ones(4, dtype=np.float32))
+        check_ir("""
+        // CHECK: linalg.map
+        // CHECK-NOT: linalg.broadcast
+        """)
+
+    def test_bias_add_emits_broadcast_then_map(self, check_ir):
+        """[M,N] + [N] emits linalg.broadcast to expand bias, then linalg.map for add."""
+        @ml_function
+        def bias_add(x: Tensor[f32, 2, 4], b: Tensor[f32, 4]) -> Tensor[f32, 2, 4]:
+            return x + b
+
+        bias_add(np.zeros((2, 4), dtype=np.float32), np.zeros(4, dtype=np.float32))
+        check_ir("""
+        // CHECK: linalg.broadcast
+        // CHECK: linalg.map
+        """)

@@ -6,14 +6,17 @@ All operations (add, sub, mul, div) automatically dispatch to:
 """
 
 from ..ast import BinaryOp, Value, ArrayBinaryOp, to_value
-from ..types import ArrayType, ScalarType  # ScalarType used in dispatch guard
+from ..ast.nodes.linalg import LinalgBinaryOp
+from ..types import ArrayType, ScalarType, TensorType
 from .. import ast_pb2
 
 
 def _dispatch_binary_op(op: int, left: Value, right: Value):
     left_type = left.infer_type()
     right_type = right.infer_type()
-    if isinstance(left_type, ArrayType) or isinstance(right_type, ArrayType):
+    if isinstance(left_type, TensorType) or isinstance(right_type, TensorType):
+        return LinalgBinaryOp(op, left, right)
+    elif isinstance(left_type, ArrayType) or isinstance(right_type, ArrayType):
         return ArrayBinaryOp(op, left, right)
     elif isinstance(left_type, ScalarType) and isinstance(right_type, ScalarType):
         return BinaryOp(op, left, right)
