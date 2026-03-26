@@ -300,8 +300,8 @@ class TestLinalgMatmulTilingPass:
         // CHECK: memref.subview {{.*}} [8, 8] [1, 1]
         """, after="linalg-tile-matmul")
 
-    def test_boundary_8x8_matmul_not_tiled(self, check_lowered_ir):
-        """8x8 matmul (any dim == 8 satisfies skip condition) is not tiled."""
+    def test_boundary_8x8_matmul_tiled(self, check_lowered_ir):
+        """8x8 matmul is tiled into a single 8x8 tile (one-iteration scf.for loops)."""
         @ml_function
         def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
             return matmul(A, B)
@@ -309,12 +309,12 @@ class TestLinalgMatmulTilingPass:
         mm_fn(np.ones((8, 8), dtype=np.float32),
               np.ones((8, 8), dtype=np.float32))
         check_lowered_ir("""
-        // CHECK-NOT: scf.for
+        // CHECK: scf.for
         // CHECK: linalg.matmul
         """, after="linalg-tile-matmul")
 
-    def test_small_matmul_not_tiled(self, check_lowered_ir):
-        """2x2 matmul is not tiled — linalg.matmul passes through untouched."""
+    def test_small_matmul_tiled(self, check_lowered_ir):
+        """2x2 matmul is tiled — produces scf.for loops with a partial tile."""
         @ml_function
         def mm_fn(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
             return matmul(A, B)
@@ -322,7 +322,7 @@ class TestLinalgMatmulTilingPass:
         mm_fn(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
               np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
         check_lowered_ir("""
-        // CHECK-NOT: scf.for
+        // CHECK: scf.for
         // CHECK: linalg.matmul
         """, after="linalg-tile-matmul")
 

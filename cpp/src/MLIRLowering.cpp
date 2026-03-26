@@ -151,10 +151,8 @@ struct VectorCleanupPass
 };
 
 // Tiles linalg.matmul into scf.for loops over cache-friendly tiles.
-// Only applied to matrices larger than the tile size — smaller matrices
-// vectorize directly without tiling. Placed after bufferization so tiling
-// operates on memref semantics; strided subviews are handled downstream
-// by convert-vector-to-scf.
+// Placed after bufferization so tiling operates on memref semantics;
+// strided subviews are handled downstream by convert-vector-to-scf.
 struct LinalgMatmulTilingPass
     : public mlir::PassWrapper<LinalgMatmulTilingPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
@@ -171,12 +169,6 @@ struct LinalgMatmulTilingPass
     func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
 
     for (mlir::linalg::MatmulOp op : matmuls) {
-      // Skip matrices that fit within one tile — vectorize them directly
-      auto linalgOp = llvm::cast<mlir::linalg::LinalgOp>(op.getOperation());
-      auto ranges = linalgOp.getStaticLoopRanges();
-      if (llvm::any_of(ranges, [](int64_t d) { return d <= 8; }))
-        continue;
-
       // Store tile sizes in a named variable — setTileSizes captures an
       // ArrayRef (non-owning), so the data must outlive the tileUsingSCF call.
       llvm::SmallVector<mlir::OpFoldResult> tileSizes =
