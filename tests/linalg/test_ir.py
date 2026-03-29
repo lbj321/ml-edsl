@@ -25,7 +25,7 @@ class TestLinalgDotIR:
         """)
 
     def test_dot_result_is_scalar(self, check_ir):
-        """Pre-lowering IR: memref inputs wrapped with to_tensor, dot extracts scalar"""
+        """Pre-lowering IR: tensor inputs used directly, dot extracts scalar"""
         @ml_function
         def dot_fn(a: Tensor[f32, 4], b: Tensor[f32, 4]) -> f32:
             return dot(a, b)
@@ -33,9 +33,8 @@ class TestLinalgDotIR:
         dot_fn(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32),
                np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32))
         check_ir("""
-        // CHECK: func.func @dot_fn(%arg0: memref<4xf32>, %arg1: memref<4xf32>)
-        // CHECK: bufferization.to_tensor %arg0
-        // CHECK: bufferization.to_tensor %arg1
+        // CHECK: func.func @dot_fn(%arg0: tensor<4xf32>, %arg1: tensor<4xf32>)
+        // CHECK-NOT: bufferization.to_tensor
         // CHECK: tensor.empty
         // CHECK: linalg.fill
         // CHECK: linalg.dot
@@ -92,22 +91,23 @@ class TestDirectOutputBuffer:
     Python-allocated out-param — no intermediate alloca+copy."""
 
     def test_map_writes_into_out_param(self, check_ir):
-        """linalg.map outs(...) is the hidden out-param, not an alloca."""
+        """linalg.map outs(...) is the hidden out-param tensor, not an alloca."""
         @ml_function
         def scale(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return tensor_map(a, lambda x: x * 2.0)
 
         scale(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
         check_ir("""
-        // CHECK: func.func @scale(%arg0: memref<4xf32>, %arg1: memref<4xf32>)
-        // CHECK: bufferization.to_tensor %arg1
+        // CHECK: func.func @scale(%arg0: tensor<4xf32>, %arg1: tensor<4xf32>
+        // CHECK-SAME: bufferization.writable = true
+        // CHECK-NOT: bufferization.to_tensor
         // CHECK: linalg.map
         // CHECK-NOT: memref.copy
         // CHECK-NOT: memref.alloca() : memref<4xf32>
         """)
 
     def test_matmul_writes_into_out_param(self, check_ir):
-        """linalg.matmul outs(...) is the hidden out-param, not an alloca."""
+        """linalg.matmul outs(...) is the hidden out-param tensor, not an alloca."""
         @ml_function
         def mm(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
             return matmul(A, B)
@@ -115,8 +115,9 @@ class TestDirectOutputBuffer:
         mm(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
            np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32))
         check_ir("""
-        // CHECK: func.func @mm(%arg0: memref<2x2xf32>, %arg1: memref<2x2xf32>, %arg2: memref<2x2xf32>)
-        // CHECK: bufferization.to_tensor %arg2
+        // CHECK: func.func @mm(%arg0: tensor<2x2xf32>, %arg1: tensor<2x2xf32>, %arg2: tensor<2x2xf32>
+        // CHECK-SAME: bufferization.writable = true
+        // CHECK-NOT: bufferization.to_tensor
         // CHECK: linalg.fill
         // CHECK: linalg.matmul
         // CHECK-NOT: memref.copy
@@ -124,18 +125,19 @@ class TestDirectOutputBuffer:
         """)
 
     def test_map_materializes_into_out_param(self, check_ir):
-        """linalg.map result is materialized into the out-param via materialize_in_destination."""
+        """linalg.map result is materialized into the writable tensor out-param."""
         @ml_function
         def scale(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return tensor_map(a, lambda x: x * 2.0)
 
         scale(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
         check_ir("""
-        // CHECK: bufferization.materialize_in_destination {{.*}} in restrict writable %arg1
+        // CHECK: bufferization.materialize_in_destination {{.*}} in %arg1
+        // CHECK-NOT: restrict writable
         """)
 
     def test_matmul_materializes_into_out_param(self, check_ir):
-        """linalg.matmul result is materialized into the out-param via materialize_in_destination."""
+        """linalg.matmul result is materialized into the writable tensor out-param."""
         @ml_function
         def mm(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
             return matmul(A, B)
@@ -143,7 +145,8 @@ class TestDirectOutputBuffer:
         mm(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
            np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32))
         check_ir("""
-        // CHECK: bufferization.materialize_in_destination {{.*}} in restrict writable %arg2
+        // CHECK: bufferization.materialize_in_destination {{.*}} in %arg2
+        // CHECK-NOT: restrict writable
         """)
 
 

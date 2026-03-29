@@ -256,8 +256,14 @@ void MLIRLowering::setupLoweringPipeline() {
 
 void MLIRLowering::addConversionPasses() {
 
-  // Bufferize tensor ops to memref ops.
-  passManager.addPass(mlir::bufferization::createOneShotBufferizePass());
+  // Bufferize tensor ops to memref ops, including function boundaries.
+  // identity-layout-map produces plain memref<NxT> (no strided layout) at
+  // function boundaries, matching the memref descriptors Python passes in.
+  mlir::bufferization::OneShotBufferizePassOptions bufOpts;
+  bufOpts.bufferizeFunctionBoundaries = true;
+  bufOpts.functionBoundaryTypeConversion =
+      mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
+  passManager.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
 
   // Insert deallocs for buffers created during bufferization
   passManager.addPass(

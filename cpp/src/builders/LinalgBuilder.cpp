@@ -119,13 +119,10 @@ mlir::Value LinalgBuilder::buildMatmul(const mlir_edsl::LinalgMatmul &node,
 
   // Use out-param as init tensor so linalg writes directly into Python's
   // buffer. Fall back to tensor.empty for sub-expression use (no out-param).
+  // out-param is already a tensor (writable=true set on function arg).
   mlir::Value dest;
   if (outParam)
-    dest = builder
-               .create<mlir::bufferization::ToTensorOp>(
-                   loc, outTensorType, outParam, /*restrict=*/true,
-                   /*writable=*/true)
-               .getResult();
+    dest = outParam;
   else
     dest = builder.create<mlir::tensor::EmptyOp>(loc, outTensorType,
                                                  mlir::ValueRange{});
@@ -158,14 +155,10 @@ mlir::Value LinalgBuilder::buildMap(const mlir_edsl::LinalgMap &node,
   const auto &bodyProto = node.body();
 
   // Use out-param as init tensor so linalg writes directly into Python's
-  // buffer.
+  // buffer. out-param is already a tensor (writable=true set on function arg).
   mlir::Value init;
   if (outParam)
-    init = builder
-               .create<mlir::bufferization::ToTensorOp>(
-                   loc, outTensorType, outParam, /*restrict=*/true,
-                   /*writable=*/true)
-               .getResult();
+    init = outParam;
   else
     init = builder.create<mlir::tensor::EmptyOp>(loc, outTensorType,
                                                  mlir::ValueRange{});
@@ -235,14 +228,11 @@ mlir::Value LinalgBuilder::buildBinaryOp(const mlir_edsl::LinalgBinaryOp &node,
   if (!outTensorType)
     throw std::runtime_error("LinalgBinaryOp: out_type must be a tensor type");
 
-  // Allocate output tensor
+  // Allocate output tensor. out-param is already a tensor (writable=true set
+  // on function arg); use it directly as linalg init.
   mlir::Value init;
   if (outParam)
-    init = builder
-               .create<mlir::bufferization::ToTensorOp>(
-                   loc, outTensorType, outParam, /*restrict=*/true,
-                   /*writable=*/true)
-               .getResult();
+    init = outParam;
   else
     init = builder.create<mlir::tensor::EmptyOp>(loc, outTensorType,
                                                  mlir::ValueRange{});
