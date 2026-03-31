@@ -377,6 +377,92 @@ class TestVectorCleanupPass:
         """, after="vector-cleanup")
 
 
+class TestLinalgMatmulToContractPass:
+    """IR tests for LinalgMatmulToContractPass (linalg-matmul-to-contract).
+
+    Bypasses the linalg vectorizer (which produces a 3D double-broadcast
+    contract) by lowering static 8x8 matmul tiles directly to vector.contract
+    with standard 2D indexing maps {(m,k),(k,n),(m,n)}.
+    """
+
+    def test_8x8_matmul_emits_vector_contract(self, check_lowered_ir):
+        """8x8 linalg.matmul is replaced by vector.contract after this pass."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((8, 8), dtype=np.float32),
+              np.ones((8, 8), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: vector.contract
+        // CHECK-NOT: linalg.matmul
+        """, after="linalg-matmul-to-contract")
+
+    def test_contract_has_standard_2d_matmul_maps(self, check_lowered_ir):
+        """vector.contract uses standard (m,k)x(k,n)->(m,n) indexing maps, not the
+        3D double-broadcast form (d0,d1,d2)x(d0,d1,d2) the linalg vectorizer emits."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((8, 8), dtype=np.float32),
+              np.ones((8, 8), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: affine_map<(d0, d1, d2) -> (d0, d2)>
+        // CHECK: affine_map<(d0, d1, d2) -> (d2, d1)>
+        // CHECK: affine_map<(d0, d1, d2) -> (d0, d1)>
+        """, after="linalg-matmul-to-contract")
+
+    def test_non_8x8_matmul_not_lowered(self, check_lowered_ir):
+        """Non-8x8 matmuls are left for the linalg vectorizer — only exact 8x8
+        tiles are handled by this pass."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((2, 2), dtype=np.float32),
+              np.ones((2, 2), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: linalg.matmul
+        // CHECK-NOT: vector.contract
+        """, after="linalg-matmul-to-contract")
+
+
+class TestVectorContractToOuterProductPass:
+    """IR tests for VectorContractToOuterProductPass (vector-contract-to-outerproduct).
+
+    Lowers vector.contract with standard 2D matmul maps to vector.fma via the
+    OuterProduct strategy (contract → outerproduct → fma in one pass).
+    """
+
+    def test_8x8_contract_lowered_to_fma(self, check_lowered_ir):
+        """vector.contract on an 8x8 matmul is fully lowered to vector.fma."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((8, 8), dtype=np.float32),
+              np.ones((8, 8), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: vector.fma
+        // CHECK-NOT: vector.contract
+        """, after="vector-contract-to-outerproduct")
+
+    def test_large_tiled_matmul_lowered_to_fma(self, check_lowered_ir):
+        """Each 8x8 tile of a tiled matmul is lowered to vector.fma inside scf.for."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((16, 16), dtype=np.float32),
+              np.ones((16, 16), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: scf.for
+        // CHECK: vector.fma
+        // CHECK-NOT: vector.contract
+        """, after="vector-contract-to-outerproduct")
+
+
 class TestLinalgBinaryOpIR:
     """IR structure tests for LinalgBinaryOp (same-shape, scalar, bias add)."""
 
