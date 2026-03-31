@@ -39,6 +39,7 @@
 #include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/Passes.h"
 #include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
 #include "mlir/IR/PatternMatch.h"
@@ -99,6 +100,95 @@ private:
   SnapshotList *snapshots;
 };
 
+// Lowers linalg.matmul tiles with static 8x8 shape directly to vector.contract
+// using standard 2D indexing maps {(m,k),(k,n),(m,n)}. This bypasses the
+// linalg vectorizer which always produces a 3D double-broadcast form
+// {(d0,d1,d2),(d0,d1,d2),(d0,d1)} that the OuterProduct lowering strategy
+// cannot decompose into vector.outerproduct → vector.fma.
+struct LinalgMatmulToContractPass
+    : public mlir::PassWrapper<LinalgMatmulToContractPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulToContractPass)
+  llvm::StringRef getArgument() const override {
+    return "linalg-matmul-to-contract";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Lower static 8x8 linalg.matmul tiles to vector.contract with "
+           "standard (m,k)x(k,n)->(m,n) indexing maps";
+  }
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+    mlir::MLIRContext *ctx = func->getContext();
+
+    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
+    func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
+
+    for (mlir::linalg::MatmulOp matmul : matmuls) {
+      mlir::Value A = matmul.getInputs()[0];
+      mlir::Value B = matmul.getInputs()[1];
+      mlir::Value C = matmul.getOutputs()[0];
+
+      auto aType = mlir::dyn_cast<mlir::MemRefType>(A.getType());
+      auto bType = mlir::dyn_cast<mlir::MemRefType>(B.getType());
+      auto cType = mlir::dyn_cast<mlir::MemRefType>(C.getType());
+      if (!aType || !bType || !cType)
+        continue;
+
+      // Only handle static 8x8 tiles — dynamic boundary tiles fall through
+      // to convert-linalg-to-loops for scalar lowering.
+      if (!aType.hasStaticShape() || aType.getShape() != llvm::ArrayRef<int64_t>{8, 8})
+        continue;
+      if (!bType.hasStaticShape() || bType.getShape() != llvm::ArrayRef<int64_t>{8, 8})
+        continue;
+      if (!cType.hasStaticShape() || cType.getShape() != llvm::ArrayRef<int64_t>{8, 8})
+        continue;
+
+      auto f32 = mlir::Float32Type::get(ctx);
+      auto vecType = mlir::VectorType::get({8, 8}, f32);
+      mlir::Location loc = matmul.getLoc();
+      rewriter.setInsertionPoint(matmul);
+
+      auto zero = rewriter.create<mlir::arith::ConstantIndexOp>(loc, 0);
+      auto pad = rewriter.create<mlir::arith::ConstantOp>(
+          loc, f32, rewriter.getF32FloatAttr(0.0f));
+
+      llvm::SmallVector<bool> inBounds = {true, true};
+      mlir::Value vA = rewriter.create<mlir::vector::TransferReadOp>(
+          loc, vecType, A, mlir::ValueRange{zero, zero}, pad, inBounds);
+      mlir::Value vB = rewriter.create<mlir::vector::TransferReadOp>(
+          loc, vecType, B, mlir::ValueRange{zero, zero}, pad, inBounds);
+      mlir::Value vC = rewriter.create<mlir::vector::TransferReadOp>(
+          loc, vecType, C, mlir::ValueRange{zero, zero}, pad, inBounds);
+
+      // Standard matmul indexing: (m,n,k) -> (m,k) for A, (k,n) for B, (m,n) for C
+      mlir::AffineExpr m, n, k;
+      mlir::bindDims(ctx, m, n, k);
+      auto indexingMaps = rewriter.getAffineMapArrayAttr({
+          mlir::AffineMap::get(3, 0, {m, k}, ctx),
+          mlir::AffineMap::get(3, 0, {k, n}, ctx),
+          mlir::AffineMap::get(3, 0, {m, n}, ctx),
+      });
+
+      auto par = mlir::vector::IteratorType::parallel;
+      auto red = mlir::vector::IteratorType::reduction;
+      auto iterTypes = rewriter.getArrayAttr({
+          mlir::vector::IteratorTypeAttr::get(ctx, par),
+          mlir::vector::IteratorTypeAttr::get(ctx, par),
+          mlir::vector::IteratorTypeAttr::get(ctx, red),
+      });
+
+      mlir::Value result = rewriter.create<mlir::vector::ContractionOp>(
+          loc, vA, vB, vC, indexingMaps, iterTypes);
+
+      rewriter.create<mlir::vector::TransferWriteOp>(
+          loc, result, C, mlir::ValueRange{zero, zero}, inBounds);
+
+      rewriter.eraseOp(matmul);
+    }
+  }
+};
+
 struct LinalgVectorizationPass
     : public mlir::PassWrapper<LinalgVectorizationPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
@@ -150,9 +240,37 @@ struct VectorCleanupPass
   }
 };
 
-// Tiles linalg.matmul into scf.for loops over cache-friendly tiles.
-// Placed after bufferization so tiling operates on memref semantics;
-// strided subviews are handled downstream by convert-vector-to-scf.
+// Lowers vector.contract to vector.outerproduct on rank-1 vector slices.
+// Must run before convert-vector-to-scf so that the 3D transfer_reads
+// produced by linalg-vectorize are not expanded into broadcast+transpose+alloca
+// loops — those only arise when a rank-3 contract is still present at that pass.
+struct VectorContractToOuterProductPass
+    : public mlir::PassWrapper<VectorContractToOuterProductPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VectorContractToOuterProductPass)
+  llvm::StringRef getArgument() const override {
+    return "vector-contract-to-outerproduct";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Lower vector.contract to vector.outerproduct (OuterProduct strategy)";
+  }
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::RewritePatternSet patterns(func->getContext());
+    mlir::vector::populateVectorContractLoweringPatterns(
+        patterns, mlir::vector::VectorContractLowering::OuterProduct);
+    if (mlir::failed(mlir::applyPatternsGreedily(func, std::move(patterns))))
+      signalPassFailure();
+  }
+};
+
+
+// Tiles linalg.matmul into 8x8x8 scf.for loops (M, N, K all tiled to 8).
+// K tiling is required for square vector<8x8x8> contracts, which the
+// OuterProduct lowering strategy decomposes into vector.outerproduct →
+// vector.fma (vfmadd231ps on AVX2). Without K tiling the contract is
+// vector<8x8xK> which degenerates to scalar dot products per output element.
+// Placed after bufferization so tiling operates on memref semantics.
 struct LinalgMatmulTilingPass
     : public mlir::PassWrapper<LinalgMatmulTilingPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
@@ -172,7 +290,7 @@ struct LinalgMatmulTilingPass
       // Store tile sizes in a named variable — setTileSizes captures an
       // ArrayRef (non-owning), so the data must outlive the tileUsingSCF call.
       llvm::SmallVector<mlir::OpFoldResult> tileSizes =
-          mlir::getAsIndexOpFoldResult(op->getContext(), {8, 8, 0});
+          mlir::getAsIndexOpFoldResult(op->getContext(), {8, 8, 8});
       mlir::scf::SCFTilingOptions opts;
       opts.setTileSizes(tileSizes);
       rewriter.setInsertionPoint(op);
@@ -277,7 +395,15 @@ void MLIRLowering::addConversionPasses() {
       std::make_unique<LinalgMatmulTilingPass>());
   passManager.addPass(mlir::createCanonicalizerPass());
 
-  // Phase 9.1: Vectorize linalg structured ops → vector dialect
+  // Lower static 8x8 linalg.matmul tiles to vector.contract with standard
+  // 2D indexing maps (m,k)x(k,n)->(m,n). Must run before LinalgVectorizationPass
+  // which skips matmul — linalg::vectorize always produces a 3D double-broadcast
+  // form that the OuterProduct lowering cannot decompose into vector.fma.
+  passManager.addNestedPass<mlir::func::FuncOp>(
+      std::make_unique<LinalgMatmulToContractPass>());
+
+  // Phase 9.1: Vectorize remaining linalg structured ops → vector dialect
+  // (linalg.matmul is already handled by LinalgMatmulToContractPass above)
   passManager.addNestedPass<mlir::func::FuncOp>(
       std::make_unique<LinalgVectorizationPass>());
   passManager.addPass(mlir::createCanonicalizerPass());
@@ -285,6 +411,13 @@ void MLIRLowering::addConversionPasses() {
   // Fuse mulf + multi_reduction → vector.contract for better LLVM codegen
   passManager.addNestedPass<mlir::func::FuncOp>(
       std::make_unique<VectorCleanupPass>());
+
+  // Lower vector.contract → vector.outerproduct on rank-1 slices.
+  // Must happen before convert-vector-to-scf: if a rank-3 contract is still
+  // present at that pass, it expands the 3D transfer_reads into
+  // broadcast+transpose+alloca loops, defeating vectorization entirely.
+  passManager.addNestedPass<mlir::func::FuncOp>(
+      std::make_unique<VectorContractToOuterProductPass>());
 
   // Fallback: lower any remaining (un-vectorized) linalg ops to scf.for loops
   passManager.addPass(mlir::createConvertLinalgToLoopsPass());
@@ -298,8 +431,11 @@ void MLIRLowering::addConversionPasses() {
   passManager.addNestedPass<mlir::func::FuncOp>(
       mlir::createConvertVectorToSCFPass());
 
-  // Lower all remaining vector ops → LLVM intrinsics
-  passManager.addPass(mlir::createConvertVectorToLLVMPass());
+  // Lower all remaining vector ops → LLVM intrinsics.
+  // x86Vector enables AVX/FMA intrinsic emission for vector.fma on x86.
+  mlir::ConvertVectorToLLVMPassOptions vecToLLVMOpts;
+  vecToLLVMOpts.x86Vector = true;
+  passManager.addPass(mlir::createConvertVectorToLLVMPass(vecToLLVMOpts));
 
   // Lower ub.poison (generated by VectorToSCF for out-of-bounds positions)
   passManager.addPass(mlir::createUBToLLVMConversionPass());

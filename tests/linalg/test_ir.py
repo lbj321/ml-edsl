@@ -263,7 +263,7 @@ class TestLinalgMatmulTilingPass:
     """
 
     def test_large_matmul_tiled_to_scf_for(self, check_lowered_ir):
-        """16x16 matmul is replaced by two nested scf.for loops over 8x8 tiles."""
+        """16x16 matmul is replaced by three nested scf.for loops (M, N, K tiled to 8)."""
         @ml_function
         def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
             return matmul(A, B)
@@ -290,7 +290,7 @@ class TestLinalgMatmulTilingPass:
         """, after="linalg-tile-matmul")
 
     def test_large_matmul_produces_subviews(self, check_lowered_ir):
-        """Tiled matmul slices inputs into 8x16, 16x8 and output into 8x8 subviews."""
+        """Tiled matmul slices all three operands into 8x8 subviews (M, N, K all tiled)."""
         @ml_function
         def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
             return matmul(A, B)
@@ -298,8 +298,8 @@ class TestLinalgMatmulTilingPass:
         mm_fn(np.ones((16, 16), dtype=np.float32),
               np.ones((16, 16), dtype=np.float32))
         check_lowered_ir("""
-        // CHECK: memref.subview {{.*}} [8, 16] [1, 1]
-        // CHECK: memref.subview {{.*}} [16, 8] [1, 1]
+        // CHECK: memref.subview {{.*}} [8, 8] [1, 1]
+        // CHECK: memref.subview {{.*}} [8, 8] [1, 1]
         // CHECK: memref.subview {{.*}} [8, 8] [1, 1]
         """, after="linalg-tile-matmul")
 
