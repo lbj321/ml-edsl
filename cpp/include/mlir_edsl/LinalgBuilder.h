@@ -35,6 +35,11 @@ public:
   mlir::Value buildBinaryOp(const mlir_edsl::LinalgBinaryOp &node,
                              mlir::Value outParam = {});
 
+  /// Known activation function as linalg.generic with arith ops.
+  /// RELU: arith.maximumf(x, 0). LEAKY_RELU: arith.select(x > 0, x, alpha*x).
+  mlir::Value buildActivation(const mlir_edsl::LinalgActivation &node,
+                              mlir::Value outParam = {});
+
 private:
   mlir::OpBuilder &builder;
   mlir::MLIRContext *context;

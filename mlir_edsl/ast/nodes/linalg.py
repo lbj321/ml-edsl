@@ -328,6 +328,41 @@ class LinalgMap(Value):
         return pb_node
 
 
+class LinalgActivation(Value):
+    """Known activation function emitted as linalg.generic with arith ops.
+
+    Uses arith.maximumf for relu and arith.select for leaky_relu, enabling
+    elementwise fusion and vectorization (no scf.if in the linalg body).
+    """
+
+    def __init__(self, input: Value, act_type: int, alpha: float = 0.0):
+        super().__init__()
+        self.input = input
+        self.act_type = act_type
+        self.alpha = alpha
+        input_type = input.infer_type()
+        if not isinstance(input_type, TensorType):
+            raise TypeError(
+                f"activation: input must be a tensor, got {input_type}"
+            )
+        self._out_type = input_type
+
+    def infer_type(self) -> Type:
+        """Returns the same tensor type as the input."""
+        return self._out_type
+
+    def get_children(self) -> list['Value']:
+        return [self.input]
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.linalg.activation.input.CopyFrom(self.input.to_proto(context))
+        pb_node.linalg.activation.act_type = self.act_type
+        pb_node.linalg.activation.alpha = self.alpha
+        pb_node.linalg.activation.out_type.CopyFrom(self._out_type.to_proto())
+        return pb_node
+
+
 class LinalgReduceElement(Value):
     """Placeholder for the input element argument in a linalg.reduce body.
 

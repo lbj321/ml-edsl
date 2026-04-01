@@ -177,6 +177,63 @@ mlir::Value LinalgBuilder::buildMap(const mlir_edsl::LinalgMap &node,
   return mapOp->getResult(0);
 }
 
+mlir::Value LinalgBuilder::buildActivation(const mlir_edsl::LinalgActivation &node,
+                                           mlir::Value outParam) {
+  auto loc = builder.getUnknownLoc();
+  mlir::Value input = parent->buildFromProtobufNode(node.input());
+  mlir::Type outMLIRType = parent->convertType(node.out_type());
+  auto outTensorType = mlir::dyn_cast<mlir::RankedTensorType>(outMLIRType);
+  if (!outTensorType)
+    throw std::runtime_error("buildActivation: out_type must be a tensor type");
+
+  int64_t rank = outTensorType.getRank();
+  mlir::Type elemType = outTensorType.getElementType();
+
+  mlir::Value init;
+  if (outParam)
+    init = outParam;
+  else
+    init = builder.create<mlir::tensor::EmptyOp>(loc, outTensorType,
+                                                 mlir::ValueRange{});
+
+  llvm::SmallVector<mlir::AffineMap> indexingMaps(
+      2, mlir::AffineMap::getMultiDimIdentityMap(rank, context));
+  llvm::SmallVector<mlir::utils::IteratorType> iterTypes(
+      rank, mlir::utils::IteratorType::parallel);
+
+  auto genericOp = builder.create<mlir::linalg::GenericOp>(
+      loc,
+      mlir::TypeRange{outTensorType},
+      /*inputs=*/mlir::ValueRange{input},
+      /*outputs=*/mlir::ValueRange{init},
+      indexingMaps, iterTypes,
+      [&](mlir::OpBuilder &b, mlir::Location innerLoc, mlir::ValueRange args) {
+        mlir::Value arg = args[0];
+        mlir::Value result;
+        if (node.act_type() == mlir_edsl::RELU) {
+          mlir::Value zero = buildZero(b, innerLoc, elemType);
+          result = b.create<mlir::arith::MaximumFOp>(innerLoc, arg, zero);
+        } else if (node.act_type() == mlir_edsl::LEAKY_RELU) {
+          // max(x,0) + alpha*min(x,0) — avoids i1/select, vectorizes cleanly
+          mlir::Value zero = buildZero(b, innerLoc, elemType);
+          mlir::Value alphaConst = b.create<mlir::arith::ConstantOp>(
+              innerLoc, mlir::FloatAttr::get(elemType, node.alpha()));
+          mlir::Value pos = b.create<mlir::arith::MaximumFOp>(innerLoc, arg, zero);
+          mlir::Value neg = b.create<mlir::arith::MinimumFOp>(innerLoc, arg, zero);
+          mlir::Value scaledNeg =
+              b.create<mlir::arith::MulFOp>(innerLoc, neg, alphaConst);
+          result = b.create<mlir::arith::AddFOp>(innerLoc, pos, scaledNeg);
+        } else {
+          throw std::runtime_error(
+              "buildActivation: unknown activation type " +
+              std::to_string(node.act_type()));
+        }
+        b.create<mlir::linalg::YieldOp>(innerLoc, result);
+      });
+
+  return genericOp->getResult(0);
+}
+
 mlir::Value LinalgBuilder::buildReduce(const mlir_edsl::LinalgReduce &node) {
   auto loc = builder.getUnknownLoc();
 
@@ -241,33 +298,39 @@ mlir::Value LinalgBuilder::buildBinaryOp(const mlir_edsl::LinalgBinaryOp &node,
       broadcastMode == mlir_edsl::TENSOR_BIAS_LEFT) {
     // ----------------------------------------------------------------
     // Bias broadcast: [M,N] op [N]  (or [N] op [M,N])
-    // Step 1: linalg.broadcast [N] → [M,N]
-    // Step 2: linalg.map(arith op) over the two [M,N] tensors
+    // Single linalg.generic with broadcast indexing map (d0,d1)->(d1) for bias.
+    // Avoids intermediate tensor.empty + linalg.broadcast, enabling fusion.
     // ----------------------------------------------------------------
     mlir::Value matrix = parent->buildFromProtobufNode(
         broadcastMode == mlir_edsl::TENSOR_BIAS_RIGHT ? node.lhs() : node.rhs());
     mlir::Value bias = parent->buildFromProtobufNode(
         broadcastMode == mlir_edsl::TENSOR_BIAS_RIGHT ? node.rhs() : node.lhs());
 
-    // Broadcast bias [N] → [M,N] along dimension 0
-    mlir::Value broadcastInit = builder.create<mlir::tensor::EmptyOp>(
-        loc, outTensorType, mlir::ValueRange{});
-    auto broadcastOp = builder.create<mlir::linalg::BroadcastOp>(
-        loc, bias, broadcastInit, builder.getDenseI64ArrayAttr({0}));
-    mlir::Value bias2D = broadcastOp->getResult(0);
+    mlir::AffineExpr d0 = builder.getAffineDimExpr(0);
+    mlir::AffineExpr d1 = builder.getAffineDimExpr(1);
+    llvm::SmallVector<mlir::AffineMap> indexingMaps = {
+        mlir::AffineMap::get(2, 0, {d0, d1}, context), // matrix: identity
+        mlir::AffineMap::get(2, 0, {d1}, context),     // bias: broadcast dim 0
+        mlir::AffineMap::get(2, 0, {d0, d1}, context), // output: identity
+    };
+    llvm::SmallVector<mlir::utils::IteratorType> iterTypes = {
+        mlir::utils::IteratorType::parallel,
+        mlir::utils::IteratorType::parallel,
+    };
 
-    // linalg.map with two inputs: matrix and bias2D
-    auto mapOp = builder.create<mlir::linalg::MapOp>(
+    auto genericOp = builder.create<mlir::linalg::GenericOp>(
         loc,
-        /*inputs=*/mlir::ValueRange{matrix, bias2D},
-        /*init=*/init,
-        [&](mlir::OpBuilder &, mlir::Location innerLoc,
+        mlir::TypeRange{outTensorType},
+        mlir::ValueRange{matrix, bias},
+        mlir::ValueRange{init},
+        indexingMaps, iterTypes,
+        [&](mlir::OpBuilder &b, mlir::Location innerLoc,
             mlir::ValueRange blockArgs) {
           mlir::Value result =
-              applyArithOp(builder, innerLoc, opType, blockArgs[0], blockArgs[1]);
-          builder.create<mlir::linalg::YieldOp>(innerLoc, result);
+              applyArithOp(b, innerLoc, opType, blockArgs[0], blockArgs[1]);
+          b.create<mlir::linalg::YieldOp>(innerLoc, result);
         });
-    return mapOp->getResult(0);
+    return genericOp->getResult(0);
   }
 
   // ----------------------------------------------------------------

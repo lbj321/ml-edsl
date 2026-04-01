@@ -1,6 +1,6 @@
 """Linalg operations: dot product, matrix multiply, element-wise map, and reductions"""
 
-from ..ast.nodes.linalg import LinalgDot, LinalgMatmul, LinalgMap, LinalgReduce
+from ..ast.nodes.linalg import LinalgDot, LinalgMatmul, LinalgMap, LinalgReduce, LinalgActivation
 from ..ast.base import Value
 
 
@@ -67,23 +67,22 @@ def tensor_map(arr: Value, fn) -> LinalgMap:
     return LinalgMap(arr, fn)
 
 
-def relu(arr: Value) -> LinalgMap:
+def relu(arr: Value) -> LinalgActivation:
     """ReLU: max(0, x) element-wise over a float tensor of any rank.
 
     Args:
         arr: tensor of f32 values (any shape)
 
     Returns:
-        LinalgMap AST node; evaluates to a tensor of the same shape with negatives clamped to 0
+        LinalgActivation AST node; evaluates to a tensor of the same shape with negatives clamped to 0
 
     Example:
         @ml_function
         def apply_relu(a: Tensor[f32, 2, 4]) -> Tensor[f32, 2, 4]:
             return relu(a)
     """
-    from ..ast.nodes.control_flow import IfOp
-    from ..ast.helpers import to_value
-    return LinalgMap(arr, lambda v: IfOp(v > to_value(0.0), v, to_value(0.0)))
+    from .. import ast_pb2
+    return LinalgActivation(arr, ast_pb2.RELU)
 
 
 def reduce(arr: Value, init: Value, fn) -> LinalgReduce:
@@ -176,7 +175,7 @@ def tensor_min(arr: Value) -> LinalgReduce:
     )
 
 
-def leaky_relu(arr: Value, alpha: float = 0.01) -> LinalgMap:
+def leaky_relu(arr: Value, alpha: float = 0.01) -> LinalgActivation:
     """Leaky ReLU: v if v > 0 else alpha * v, element-wise over a float tensor of any rank.
 
     Args:
@@ -184,14 +183,12 @@ def leaky_relu(arr: Value, alpha: float = 0.01) -> LinalgMap:
         alpha: negative slope coefficient (default 0.01)
 
     Returns:
-        LinalgMap AST node; evaluates to a tensor of the same shape with leaky relu applied
+        LinalgActivation AST node; evaluates to a tensor of the same shape with leaky relu applied
 
     Example:
         @ml_function
         def apply_leaky_relu(a: Tensor[f32, 2, 4]) -> Tensor[f32, 2, 4]:
             return leaky_relu(a, alpha=0.1)
     """
-    from ..ast.nodes.control_flow import IfOp
-    from ..ast.helpers import to_value
-    a = float(alpha)
-    return LinalgMap(arr, lambda v: IfOp(v > to_value(0.0), v, v * to_value(a)))
+    from .. import ast_pb2
+    return LinalgActivation(arr, ast_pb2.LEAKY_RELU, float(alpha))

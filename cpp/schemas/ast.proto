@@ -65,6 +65,12 @@ enum BinaryOpType {
   DIV = 3;
 }
 
+// Activation function types for linalg.generic-based activations
+enum ActivationType {
+  RELU = 0;
+  LEAKY_RELU = 1;
+}
+
 // Broadcast modes for array/tensor binary operations
 enum BroadcastMode {
   NONE = 0;                // Both operands are same shape
@@ -342,6 +348,7 @@ message LinalgNode {
     LinalgReduceElement     reduce_element  = 6;
     LinalgReduceAccumulator reduce_accum    = 7;
     LinalgBinaryOp          binary_op       = 8;
+    LinalgActivation        activation      = 9;
   }
 }
 
@@ -409,6 +416,16 @@ message LinalgReduceElement {
 // Placeholder for the accumulator in linalg.reduce body.
 message LinalgReduceAccumulator {
   int64 node_id = 1;
+}
+
+// Known activation function emitted as linalg.generic with arith ops.
+// RELU:       arith.maximumf(x, 0)
+// LEAKY_RELU: arith.select(x > 0, x, alpha * x)
+message LinalgActivation {
+  ASTNode        input    = 1;
+  ActivationType act_type = 2;
+  float          alpha    = 3;  // only meaningful for LEAKY_RELU
+  TypeSpec       out_type = 4;
 }
 
 // ============================================================================
