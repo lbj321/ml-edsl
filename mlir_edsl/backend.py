@@ -39,97 +39,118 @@ if _HAS_NUMPY:
         ScalarType.I1: np.bool_,
     }
 
+# ---------------------------------------------------------------------------
+# _mlir_ciface_ calling convention helpers
+#
+# MLIR's C interface (emitCWrappers=true) passes every memref argument as a
+# pointer to a StridedMemRefType struct rather than as 2*rank+3 flat fields.
+# Aggregate returns are also passed as a StridedMemRefType* prepended as the
+# first argument.
+# ---------------------------------------------------------------------------
+
+_STRIDED_MEMREF_CACHE: dict[int, type] = {}
+
+
+def _strided_memref_type(ndim: int) -> type:
+    """Return a ctypes.Structure class for StridedMemRefType<T, ndim>.
+
+    Layout matches MLIR's C interface:
+        basePtr   : c_void_p
+        data      : c_void_p  ← data pointer Python cares about
+        offset    : c_int64   ← always 0 for contiguous arrays
+        size[N]   : c_int64 × ndim
+        stride[N] : c_int64 × ndim
+    """
+    if ndim not in _STRIDED_MEMREF_CACHE:
+        fields = (
+            [("basePtr", ctypes.c_void_p), ("data", ctypes.c_void_p),
+             ("offset", ctypes.c_int64)]
+            + [(f"size{i}",   ctypes.c_int64) for i in range(ndim)]
+            + [(f"stride{i}", ctypes.c_int64) for i in range(ndim)]
+        )
+        _STRIDED_MEMREF_CACHE[ndim] = type(
+            f"StridedMemRef{ndim}D", (ctypes.Structure,), {"_fields_": fields}
+        )
+    return _STRIDED_MEMREF_CACHE[ndim]
+
 _global_backend = None
 
 
 
 def _make_output_descriptor(array_type) -> tuple:
-    """Allocate a zeroed output buffer and build its memref descriptor.
+    """Allocate a zeroed output buffer and build its StridedMemRefType struct.
 
-    Returns (c_types, c_vals, buf) matching the standard MLIR memref descriptor
-    layout. buf is Python-owned and must be kept alive through the ctypes call.
-    Returns np.ndarray as buf when numpy is available, otherwise ctypes array.
+    Returns (c_void_p arg, struct, buf).
+    buf is Python-owned and must be kept alive through the ctypes call.
     """
-    _ELEM_CTYPES = {
-        ScalarType.I32: ctypes.c_int32,
-        ScalarType.F32: ctypes.c_float,
-        ScalarType.I1: ctypes.c_bool,
-    }
     shape = array_type.shape
-    ndim = len(shape)
+    ndim  = len(shape)
+
+    assert not any(d == -1 for d in shape), (
+        f"Internal error: DYN return type reached output descriptor for {array_type}. "
+        "Abstract evaluation should have resolved concrete shapes before compilation."
+    )
 
     # Row-major strides: shape (2,3,4) → strides (12, 4, 1)
     strides = [1] * ndim
     for i in range(ndim - 2, -1, -1):
         strides[i] = strides[i + 1] * shape[i + 1]
 
-    if _HAS_NUMPY:
-        dtype = SCALAR_TYPE_TO_NUMPY_DTYPE[array_type.element_type.kind]
-        buf = np.empty(shape, dtype=dtype)
-        ptr = buf.ctypes.data_as(ctypes.c_void_p)
-    elif array_type.element_type.kind in _ELEM_CTYPES:
-        elem_ctype = _ELEM_CTYPES[array_type.element_type.kind]
-        total = array_type.total_elements
-        buf = (elem_ctype * total)()  # zeroed, Python-owned
-        ptr = ctypes.cast(buf, ctypes.c_void_p)
-    else:
-        raise TypeError(
-            f"Unsupported element type {array_type.element_type} for output descriptor"
-        )
+    dtype = SCALAR_TYPE_TO_NUMPY_DTYPE[array_type.element_type.kind]
+    buf   = np.empty(shape, dtype=dtype)
+    ptr   = buf.ctypes.data_as(ctypes.c_void_p)
 
-    c_types = (
-        [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
-        + [ctypes.c_int64] * ndim
-        + [ctypes.c_int64] * ndim
-    )
-    assert not any(d == -1 for d in shape), (
-        f"Internal error: DYN return type reached output descriptor for {array_type}. "
-        "Abstract evaluation should have resolved concrete shapes before compilation."
-    )
-    c_vals = [ptr, ptr, 0] + list(shape) + strides
+    StructType = _strided_memref_type(ndim)
+    desc = StructType(basePtr=ptr.value, data=ptr.value, offset=0)
+    for i, s in enumerate(shape):   setattr(desc, f"size{i}",   s)
+    for i, s in enumerate(strides): setattr(desc, f"stride{i}", s)
 
-    return c_types, c_vals, buf
+    return ctypes.c_void_p(ctypes.addressof(desc)), desc, buf
 
 
 def _make_memref_descriptor(data, array_type) -> tuple:
-    """Build (c_types, c_vals, buffer) for the standard MLIR memref descriptor.
+    """Build a StridedMemRefType struct for a memref input argument.
 
-    MLIR lowers memref<NxT> to individual LLVM args:
-        alloc_ptr, aligned_ptr, offset, size0[, size1, ...], stride0[, stride1, ...]
-
-    Accepts np.ndarray (zero-copy).
-    The buffer must be kept alive by the caller until after the ctypes call.
+    Returns (c_void_p arg, struct, buffer).
+    Accepts np.ndarray (zero-copy). buffer must be kept alive by the caller.
     """
-    shape = array_type.shape
-    ndim = len(shape)
-
-    if _HAS_NUMPY and isinstance(data, np.ndarray):
-        expected_dtype = SCALAR_TYPE_TO_NUMPY_DTYPE[array_type.element_type.kind]
-        if data.dtype != expected_dtype:
-            raise TypeError(
-                f"ndarray dtype {data.dtype} does not match expected "
-                f"{expected_dtype} for {array_type}"
-            )
-        if not data.flags['C_CONTIGUOUS']:
-            data = np.ascontiguousarray(data)
-        ptr = data.ctypes.data_as(ctypes.c_void_p)
-        strides = [s // data.itemsize for s in data.strides]
-        buf = data
-    else:
+    if not (_HAS_NUMPY and isinstance(data, np.ndarray)):
         raise TypeError(
             f"Expected np.ndarray for array parameter, got {type(data).__name__}"
         )
 
-    c_types = (
-        [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
-        + [ctypes.c_int64] * ndim
-        + [ctypes.c_int64] * ndim
-    )
-    # Use data.shape for size fields — array_type.shape contains -1 for DYN
-    # dimensions, but MLIR needs the actual runtime sizes in the descriptor.
-    c_vals = [ptr, ptr, 0] + list(data.shape) + strides
+    expected_dtype = SCALAR_TYPE_TO_NUMPY_DTYPE[array_type.element_type.kind]
+    if data.dtype != expected_dtype:
+        raise TypeError(
+            f"ndarray dtype {data.dtype} does not match expected "
+            f"{expected_dtype} for {array_type}"
+        )
+    if not data.flags['C_CONTIGUOUS']:
+        data = np.ascontiguousarray(data)
 
-    return c_types, c_vals, buf
+    ndim    = len(array_type.shape)
+    ptr     = data.ctypes.data_as(ctypes.c_void_p)
+    strides = [s // data.itemsize for s in data.strides]
+
+    StructType = _strided_memref_type(ndim)
+    desc = StructType(basePtr=ptr.value, data=ptr.value, offset=0)
+    # Use data.shape for size fields — array_type.shape may contain -1 for DYN dims.
+    for i, s in enumerate(data.shape): setattr(desc, f"size{i}",   s)
+    for i, s in enumerate(strides):    setattr(desc, f"stride{i}", s)
+
+    return ctypes.c_void_p(ctypes.addressof(desc)), desc, data
+
+
+def _make_result_dummy(array_type) -> tuple:
+    """Zero-initialised StridedMemRefType struct for the _mlir_ciface_ phantom return.
+
+    Returns (c_void_p arg, struct). Python ignores the struct's contents after the call
+    since the actual result was written directly into the out-param buffer.
+    """
+    ndim = len(array_type.shape)
+    StructType = _strided_memref_type(ndim)
+    desc = StructType()   # all fields zero
+    return ctypes.c_void_p(ctypes.addressof(desc)), desc
 
 
 class CppMLIRBackend:
@@ -190,41 +211,65 @@ class CppMLIRBackend:
 
     # ==================== JIT EXECUTION ====================
     def execute_function(self, name: str, *args) -> Union[int, float, bool, list]:
-        """Execute compiled function via JIT with ctypes."""
+        """Execute compiled function via JIT using the _mlir_ciface_ convention.
+
+        All memref arguments are passed as StridedMemRefType* pointers.
+        Aggregate (tensor/array) returns use a phantom result pointer prepended
+        as the first argument; Python reads the result from the out-param buffer.
+        Pure-scalar functions are called directly with the plain function name.
+        """
         param_types, return_type = self._signatures[name]
-
-        flat_c_types = []
-        flat_args = []
-        live_buffers = []  # Keep ctypes arrays alive through the call
-
-        for pt, val in zip(param_types, args):
-            if isinstance(pt, ScalarType):
-                flat_c_types.append(TYPE_TO_CTYPES[pt.kind])
-                flat_args.append(val)
-            elif isinstance(pt, (ArrayType, TensorType)):
-                c_types, c_vals, buf = _make_memref_descriptor(val, pt)
-                flat_c_types.extend(c_types)
-                flat_args.extend(c_vals)
-                live_buffers.append(buf)
-            else:
-                raise RuntimeError(f"Unsupported parameter type {pt} for execution")
-
+        live_buffers = []
         ptr = self.compiler.get_function_pointer(name)
 
         if isinstance(return_type, (ArrayType, TensorType)):
-            # Aggregate return: append Python-allocated output descriptor.
-            out_c_types, out_c_vals, out_buf = _make_output_descriptor(return_type)
-            flat_c_types.extend(out_c_types)
-            flat_args.extend(out_c_vals)
-            live_buffers.append(out_buf)
-            ctypes.CFUNCTYPE(None, *flat_c_types)(ptr)(*flat_args)
-            if _HAS_NUMPY and isinstance(out_buf, np.ndarray):
-                return out_buf
-            else:
-                return _unflatten(list(out_buf), return_type.shape)
+            # _mlir_ciface_ signature:
+            #   void fn(StridedMemRef* result, StridedMemRef* inputs..., StridedMemRef* out_param)
+            # result is a phantom — Python ignores it; out_param receives the data.
+            res_arg, res_desc          = _make_result_dummy(return_type)
+            out_arg, out_desc, out_buf = _make_output_descriptor(return_type)
+
+            call_c_types = [ctypes.c_void_p]   # result ptr (prepended first)
+            call_args    = [res_arg]
+
+            for pt, val in zip(param_types, args):
+                if isinstance(pt, ScalarType):
+                    call_c_types.append(TYPE_TO_CTYPES[pt.kind])
+                    call_args.append(val)
+                elif isinstance(pt, (ArrayType, TensorType)):
+                    desc_arg, desc_struct, _ = _make_memref_descriptor(val, pt)
+                    call_c_types.append(ctypes.c_void_p)
+                    call_args.append(desc_arg)
+                    live_buffers.append(desc_struct)
+                else:
+                    raise RuntimeError(f"Unsupported parameter type {pt} for execution")
+
+            call_c_types.append(ctypes.c_void_p)   # out-param ptr (appended last)
+            call_args.append(out_arg)
+            live_buffers.extend([res_desc, out_desc, out_buf])
+
+            ctypes.CFUNCTYPE(None, *call_c_types)(ptr)(*call_args)
+            return out_buf
+
         elif isinstance(return_type, ScalarType):
-            c_ret = self._type_to_ctype(return_type, "return type")
-            return ctypes.CFUNCTYPE(c_ret, *flat_c_types)(ptr)(*flat_args)
+            # Scalar return: plain function or _mlir_ciface_ wrapper (both return scalar directly).
+            # Memref inputs still use struct pointers via _mlir_ciface_.
+            call_c_types = []
+            call_args    = []
+            for pt, val in zip(param_types, args):
+                if isinstance(pt, ScalarType):
+                    call_c_types.append(TYPE_TO_CTYPES[pt.kind])
+                    call_args.append(val)
+                elif isinstance(pt, (ArrayType, TensorType)):
+                    desc_arg, desc_struct, _ = _make_memref_descriptor(val, pt)
+                    call_c_types.append(ctypes.c_void_p)
+                    call_args.append(desc_arg)
+                    live_buffers.append(desc_struct)
+                else:
+                    raise RuntimeError(f"Unsupported parameter type {pt} for execution")
+            c_ret = TYPE_TO_CTYPES[return_type.kind]
+            return ctypes.CFUNCTYPE(c_ret, *call_c_types)(ptr)(*call_args)
+
         else:
             raise RuntimeError(
                 f"execute_function: unhandled return type {return_type}"
