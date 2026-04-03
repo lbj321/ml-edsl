@@ -70,16 +70,9 @@ void MLIRExecutor::compileModule(std::unique_ptr<llvm::Module> module,
     throw std::runtime_error("Failed to add module to JIT");
   }
 
-  // Lookup and cache function pointers for requested names.
-  // Prefer the _mlir_ciface_ wrapper (generated when emitCWrappers=true for
-  // functions with memref args/returns). Fall back to the plain name for
-  // pure-scalar functions that have no memref arguments and thus no wrapper.
+  // Lookup and cache function pointers for requested names
   for (const auto& name : functionNames) {
-    auto symbolOrError = jit->lookup("_mlir_ciface_" + name);
-    if (!symbolOrError) {
-      llvm::consumeError(symbolOrError.takeError());
-      symbolOrError = jit->lookup(name);
-    }
+    auto symbolOrError = jit->lookup(name);
     if (!symbolOrError) {
       std::string errMsg;
       llvm::raw_string_ostream os(errMsg);

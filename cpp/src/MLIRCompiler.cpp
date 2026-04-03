@@ -83,28 +83,11 @@ void MLIRCompiler::createFunction(
     paramTypes.push_back(returnType);
   }
 
-  // Tensor-returning functions return the tensor so that
-  // bufferization.materialize_in_destination stays live through pre-bufferization
-  // passes (e.g. linalg-fuse-elementwise-ops). Memref-returning functions keep
-  // void return + out-param to avoid changing their calling convention.
-  bool tensorReturn = mlir::isa<mlir::RankedTensorType>(returnType);
   auto funcType = opBuilder->getFunctionType(
       paramTypes,
-      (aggregateReturn && !tensorReturn) ? mlir::TypeRange{} : mlir::TypeRange{returnType});
+      aggregateReturn ? mlir::TypeRange{} : mlir::TypeRange{returnType});
   currentFunction = opBuilder->create<mlir::func::FuncOp>(
       opBuilder->getUnknownLoc(), name, funcType);
-
-  // Mark functions that have memref/tensor args or an aggregate return for
-  // _mlir_ciface_ wrapper generation by ConvertFuncToLLVM. The wrapper turns
-  // each memref argument into a StridedMemRefType* pointer and prepends a
-  // result pointer for aggregate returns, giving a well-defined C ABI.
-  bool hasMemrefOrTensorParam = llvm::any_of(paramTypes, [](mlir::Type t) {
-    return mlir::isa<mlir::MemRefType, mlir::RankedTensorType>(t);
-  });
-  if (aggregateReturn || hasMemrefOrTensorParam) {
-    currentFunction->setAttr("llvm.emit_c_interface",
-                             mlir::UnitAttr::get(opBuilder->getContext()));
-  }
 
   functionTable[name] = currentFunction;
 
@@ -147,25 +130,18 @@ void MLIRCompiler::finalizeFunction(const std::string &name,
       bool tensorDest = mlir::isa<mlir::RankedTensorType>(destType);
       mlir::Type resultType = tensorDest ? destType : mlir::Type{};
       // restrict and writable are only valid for memref destinations.
-      auto mat = opBuilder->create<mlir::bufferization::MaterializeInDestinationOp>(
+      opBuilder->create<mlir::bufferization::MaterializeInDestinationOp>(
           loc, resultType, result, currentOutParam,
           /*restrict=*/!tensorDest, /*writable=*/!tensorDest);
-      // Return the materialize result so it stays live through pre-bufferization
-      // passes (e.g. linalg-fuse-elementwise-ops uses applyPatternsAndFoldGreedily
-      // which DCEs ops whose results are unused).
-      if (tensorDest)
-        opBuilder->create<mlir::func::ReturnOp>(loc, mat.getResult());
-      else
-        opBuilder->create<mlir::func::ReturnOp>(loc);
     } else if (mlir::isa<mlir::MemRefType>(result.getType())) {
       // MemRef result: copy only when result is not already the out-param.
       if (result != currentOutParam)
         opBuilder->create<mlir::memref::CopyOp>(loc, result, currentOutParam);
-      opBuilder->create<mlir::func::ReturnOp>(loc);
     } else {
       throw std::runtime_error(
           "finalizeFunction: out-param set for non-aggregate type");
     }
+    opBuilder->create<mlir::func::ReturnOp>(loc);
   } else if (mlir::isa<mlir::IntegerType, mlir::FloatType>(result.getType())) {
     // Scalar return — normal path.
     opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(), result);
