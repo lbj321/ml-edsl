@@ -75,17 +75,18 @@ void MLIRCompiler::createFunction(
 
   // Aggregate return: append a hidden out-param and use void return.
   // Python allocates the output buffer and passes it as a memref descriptor.
-  // Tensor out-params are kept as tensor (bufferization handles the ABI).
-  const bool aggregateReturn = mlir::isa<mlir::MemRefType>(returnType) ||
-                               mlir::isa<mlir::RankedTensorType>(returnType);
+  // Tensor returns stay as explicit tensor return values — buffer-results-to-out-params
+  // converts them to out-params after bufferization, appending at the same position.
+  const bool memrefReturn = mlir::isa<mlir::MemRefType>(returnType);
+  const bool tensorReturn = mlir::isa<mlir::RankedTensorType>(returnType);
 
-  if (aggregateReturn) {
+  if (memrefReturn) {
     paramTypes.push_back(returnType);
   }
 
   auto funcType = opBuilder->getFunctionType(
       paramTypes,
-      aggregateReturn ? mlir::TypeRange{} : mlir::TypeRange{returnType});
+      memrefReturn ? mlir::TypeRange{} : mlir::TypeRange{returnType});
   currentFunction = opBuilder->create<mlir::func::FuncOp>(
       opBuilder->getUnknownLoc(), name, funcType);
 
@@ -100,16 +101,11 @@ void MLIRCompiler::createFunction(
     parameterMap[params[i].first] = entryBlock->getArgument(i);
   }
 
-  // Store the out-param block arg for use in finalizeFunction.
-  // For tensor out-params, mark writable so the bufferizer can write in-place.
-  if (aggregateReturn) {
-    auto outArgIdx = params.size();
-    currentOutParam = entryBlock->getArgument(outArgIdx);
-    if (mlir::isa<mlir::RankedTensorType>(returnType)) {
-      currentFunction.setArgAttr(outArgIdx, "bufferization.writable",
-                                 opBuilder->getBoolAttr(true));
-    }
+  // Store the out-param block arg for use in finalizeFunction (memref path only).
+  if (memrefReturn) {
+    currentOutParam = entryBlock->getArgument(params.size());
   }
+  (void)tensorReturn;
 }
 
 void MLIRCompiler::finalizeFunction(const std::string &name,
@@ -121,19 +117,8 @@ void MLIRCompiler::finalizeFunction(const std::string &name,
   // Aggregate return: write result into the caller-allocated out-param.
   if (currentOutParam) {
     auto loc = opBuilder->getUnknownLoc();
-    if (mlir::isa<mlir::RankedTensorType>(result.getType())) {
-      // Tensor result: materialize into the out-param.
-      // When dest is a tensor, a result type is required (even if unused).
-      // The bufferizer eliminates this as a no-op when result already aliases
-      // the out-param's buffer.
-      mlir::Type destType = currentOutParam.getType();
-      bool tensorDest = mlir::isa<mlir::RankedTensorType>(destType);
-      mlir::Type resultType = tensorDest ? destType : mlir::Type{};
-      // restrict and writable are only valid for memref destinations.
-      opBuilder->create<mlir::bufferization::MaterializeInDestinationOp>(
-          loc, resultType, result, currentOutParam,
-          /*restrict=*/!tensorDest, /*writable=*/!tensorDest);
-    } else if (mlir::isa<mlir::MemRefType>(result.getType())) {
+    // currentOutParam is only set for memref returns.
+    if (mlir::isa<mlir::MemRefType>(result.getType())) {
       // MemRef result: copy only when result is not already the out-param.
       if (result != currentOutParam)
         opBuilder->create<mlir::memref::CopyOp>(loc, result, currentOutParam);
@@ -142,6 +127,10 @@ void MLIRCompiler::finalizeFunction(const std::string &name,
           "finalizeFunction: out-param set for non-aggregate type");
     }
     opBuilder->create<mlir::func::ReturnOp>(loc);
+  } else if (mlir::isa<mlir::RankedTensorType>(result.getType())) {
+    // Tensor result: return directly. buffer-results-to-out-params converts
+    // this to an out-param after bufferization, preserving the Python ABI.
+    opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(), result);
   } else if (mlir::isa<mlir::IntegerType, mlir::FloatType>(result.getType())) {
     // Scalar return — normal path.
     opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(), result);

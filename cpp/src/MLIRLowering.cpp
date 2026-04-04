@@ -100,6 +100,88 @@ private:
   SnapshotList *snapshots;
 };
 
+// Converts tensor-returning functions to void + writable-out-param convention
+// before bufferization. This lets one-shot-bufferize write the result directly
+// into the caller's buffer (no memref.copy), while the tensor return kept the
+// op chain live through linalg-fuse-elementwise-ops' greedy DCE.
+//
+// Transform per function with a tensor return type:
+//   1. Append a new {bufferization.writable} tensor arg as the out-param.
+//   2. Replace each `return %val` with:
+//        bufferization.materialize_in_destination %val in %out_param
+//        return
+//   3. Update the function type to void return.
+struct TensorReturnToOutParamPass
+    : public mlir::PassWrapper<TensorReturnToOutParamPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TensorReturnToOutParamPass)
+  llvm::StringRef getArgument() const override {
+    return "tensor-return-to-out-param";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Convert tensor-returning functions to void + writable out-param";
+  }
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::FunctionType funcType = func.getFunctionType();
+
+    // Only handle single tensor return.
+    if (funcType.getNumResults() != 1)
+      return;
+    auto tensorType =
+        mlir::dyn_cast<mlir::RankedTensorType>(funcType.getResult(0));
+    if (!tensorType)
+      return;
+
+    mlir::IRRewriter rewriter(func->getContext());
+
+    // Append the out-param to the function's entry block and type.
+    mlir::Block &entryBlock = func.getBody().front();
+    mlir::BlockArgument outParam =
+        entryBlock.addArgument(tensorType, func.getLoc());
+    auto outArgIdx = funcType.getNumInputs(); // index of the new arg
+
+    // Update function type: same inputs + new out-param, void return.
+    llvm::SmallVector<mlir::Type> newInputs(funcType.getInputs());
+    newInputs.push_back(tensorType);
+    func.setType(rewriter.getFunctionType(newInputs, {}));
+
+    // Mark the new arg writable so the bufferizer writes in-place.
+    func.setArgAttr(outArgIdx, "bufferization.writable",
+                    rewriter.getBoolAttr(true));
+
+    // Replace each return with materialize_in_destination + void return.
+    func.walk([&](mlir::func::ReturnOp ret) {
+      rewriter.setInsertionPoint(ret);
+      mlir::Value val = ret.getOperands()[0];
+
+      // Trace backwards through linalg outs chain to find the root
+      // tensor.empty() and replace it with outParam. This makes the entire
+      // chain write directly into the caller's buffer so that after
+      // bufferization, materialize_in_destination becomes
+      // memref.copy %arg, %arg — which canonicalize folds away.
+      mlir::Value cursor = val;
+      while (auto linalgOp =
+                 cursor.getDefiningOp<mlir::linalg::LinalgOp>()) {
+        unsigned idx =
+            mlir::cast<mlir::OpResult>(cursor).getResultNumber();
+        mlir::Value outsVal = linalgOp.getDpsInits()[idx];
+        if (auto emptyOp =
+                outsVal.getDefiningOp<mlir::tensor::EmptyOp>()) {
+          rewriter.replaceAllUsesWith(outsVal, outParam);
+          rewriter.eraseOp(emptyOp);
+          break;
+        }
+        cursor = outsVal;
+      }
+
+      rewriter.create<mlir::bufferization::MaterializeInDestinationOp>(
+          ret.getLoc(), tensorType, val, outParam);
+      rewriter.replaceOpWithNewOp<mlir::func::ReturnOp>(ret);
+    });
+  }
+};
+
 // Lowers linalg.matmul tiles with static 8x8 shape directly to vector.contract
 // using standard 2D indexing maps {(m,k),(k,n),(m,n)}. This bypasses the
 // linalg vectorizer which always produces a 3D double-broadcast form
@@ -373,6 +455,16 @@ void MLIRLowering::setupLoweringPipeline() {
 }
 
 void MLIRLowering::addConversionPasses() {
+
+  // Fuse elementwise linalg ops (e.g. matmul + bias generic) before bufferization.
+  // Tensor-returning functions keep the op chain live through DCE in this pass.
+  passManager.addPass(mlir::createLinalgElementwiseOpFusionPass());
+
+  // Convert tensor-returning functions to void + writable-out-param before
+  // bufferization, so one-shot-bufferize can write results in-place into the
+  // caller's buffer without a memref.copy.
+  passManager.addNestedPass<mlir::func::FuncOp>(
+      std::make_unique<TensorReturnToOutParamPass>());
 
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
