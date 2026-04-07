@@ -131,11 +131,12 @@ mlir::Value LinalgBuilder::buildMatmul(const mlir_edsl::LinalgMatmul &node,
           .create<mlir::linalg::FillOp>(loc, mlir::ValueRange{zero},
                                         mlir::ValueRange{dest})
           .result();
-  return builder
-      .create<mlir::linalg::MatmulOp>(loc, mlir::TypeRange{outTensorType},
-                                      mlir::ValueRange{lhs, rhs},
-                                      mlir::ValueRange{init})
-      .getResult(0);
+  auto matmulOp =
+      builder.create<mlir::linalg::MatmulOp>(loc, mlir::TypeRange{outTensorType},
+                                             mlir::ValueRange{lhs, rhs},
+                                             mlir::ValueRange{init});
+  matmulOp->setAttr("__fuse_matmul__", builder.getUnitAttr());
+  return matmulOp.getResult(0);
 }
 
 mlir::Value LinalgBuilder::buildMap(const mlir_edsl::LinalgMap &node,
@@ -231,6 +232,8 @@ mlir::Value LinalgBuilder::buildActivation(const mlir_edsl::LinalgActivation &no
         b.create<mlir::linalg::YieldOp>(innerLoc, result);
       });
 
+  if (node.act_type() == mlir_edsl::RELU)
+    genericOp->setAttr("__fuse_relu__", builder.getUnitAttr());
   return genericOp->getResult(0);
 }
 
@@ -330,6 +333,7 @@ mlir::Value LinalgBuilder::buildBinaryOp(const mlir_edsl::LinalgBinaryOp &node,
               applyArithOp(b, innerLoc, opType, blockArgs[0], blockArgs[1]);
           b.create<mlir::linalg::YieldOp>(innerLoc, result);
         });
+    genericOp->setAttr("__fuse_bias__", builder.getUnitAttr());
     return genericOp->getResult(0);
   }
 

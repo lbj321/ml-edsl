@@ -265,6 +265,109 @@ struct VectorContractToOuterProductPass
 };
 
 
+// Outer-tile + fuse: tiles the relu root (32×32) using scf.forall and fuses
+// the bias-add and matmul producers into the forall body. This keeps the
+// 32×32 matmul tile, its bias, and relu all in-register before the inner
+// 8×8×8 tiling pass vectorizes the matmul further.
+//
+// Only fires when the def-use chain relu(__fuse_relu__) ← bias(__fuse_bias__)
+// ← matmul(__fuse_matmul__) is intact. Gracefully skips otherwise so tests
+// that do not use the dense-layer pattern are unaffected.
+struct LinalgFuseDenseLayerPass
+    : public mlir::PassWrapper<LinalgFuseDenseLayerPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgFuseDenseLayerPass)
+  llvm::StringRef getArgument() const override {
+    return "linalg-fuse-dense-layer";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Outer-tile relu(matmul+bias) into scf.for loops and fuse producers";
+  }
+
+  static constexpr int64_t kOuterTileM = 32;
+  static constexpr int64_t kOuterTileN = 32;
+
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    // Collect relu roots — walk first, then process (avoid mutation during walk)
+    llvm::SmallVector<mlir::linalg::GenericOp> reluRoots;
+    func.walk([&](mlir::linalg::GenericOp op) {
+      if (op->hasAttr("__fuse_relu__"))
+        reluRoots.push_back(op);
+    });
+
+    for (mlir::linalg::GenericOp reluOp : reluRoots) {
+      // --- Validate def-use chain ---
+      // relu must have exactly one input; that input must come from a bias op.
+      if (reluOp.getInputs().size() != 1)
+        continue;
+      mlir::Value biasResult = reluOp.getInputs()[0];
+      auto biasOp =
+          mlir::dyn_cast_or_null<mlir::linalg::GenericOp>(biasResult.getDefiningOp());
+      if (!biasOp || !biasOp->hasAttr("__fuse_bias__"))
+        continue;
+      // bias first input must come from a matmul op.
+      if (biasOp.getInputs().empty())
+        continue;
+      mlir::Value matmulResult = biasOp.getInputs()[0];
+      auto matmulOp =
+          mlir::dyn_cast_or_null<mlir::linalg::MatmulOp>(matmulResult.getDefiningOp());
+      if (!matmulOp || !matmulOp->hasAttr("__fuse_matmul__"))
+        continue;
+
+      // --- Tile the relu root into scf.forall ---
+      llvm::SmallVector<mlir::OpFoldResult> tileSizes =
+          mlir::getAsIndexOpFoldResult(func->getContext(), {kOuterTileM, kOuterTileN});
+      mlir::scf::SCFTilingOptions opts;
+      opts.setTileSizes(tileSizes);
+      // ForOp avoids the scf.forall shared_outs inlineBlockBefore assertion
+      // that fires with multi-dimensional forall in this MLIR version.
+      opts.setLoopType(mlir::scf::SCFTilingOptions::LoopType::ForOp);
+
+      rewriter.setInsertionPoint(reluOp);
+      auto tiledRelu = mlir::scf::tileUsingSCF(
+          rewriter, mlir::cast<mlir::TilingInterface>(reluOp.getOperation()), opts);
+      if (mlir::failed(tiledRelu)) {
+        reluOp->emitWarning("linalg-fuse-dense-layer: tiling relu failed, skipping");
+        continue;
+      }
+
+      // tileUsingSCF with ForOp + 2D tile sizes produces nested scf.for loops.
+      // Walk from the outermost loop to find extract_slices for fusion.
+
+      // --- Fuse bias into the loop nest ---
+      mlir::tensor::ExtractSliceOp biasSlice;
+      tiledRelu->loops.front()->walk([&](mlir::tensor::ExtractSliceOp sliceOp) {
+        if (sliceOp.getSource() == biasResult)
+          biasSlice = sliceOp;
+      });
+      if (biasSlice)
+        (void)mlir::scf::tileAndFuseProducerOfSlice(rewriter, biasSlice,
+                                                    tiledRelu->loops);
+
+      // --- Fuse matmul into the loop nest ---
+      mlir::tensor::ExtractSliceOp matmulSlice;
+      tiledRelu->loops.front()->walk([&](mlir::tensor::ExtractSliceOp sliceOp) {
+        if (sliceOp.getSource() == matmulResult)
+          matmulSlice = sliceOp;
+      });
+      if (matmulSlice)
+        (void)mlir::scf::tileAndFuseProducerOfSlice(rewriter, matmulSlice,
+                                                    tiledRelu->loops);
+
+      // Replace original relu and strip fusion attrs from the loop nest.
+      rewriter.replaceOp(reluOp, tiledRelu->mergeResult.replacements);
+      tiledRelu->loops.front()->walk([](mlir::Operation *op) {
+        op->removeAttr("__fuse_relu__");
+        op->removeAttr("__fuse_bias__");
+        op->removeAttr("__fuse_matmul__");
+      });
+    }
+  }
+};
+
 // Tiles linalg.matmul into 8x8x8 scf.for loops (M, N, K all tiled to 8).
 // K tiling is required for square vector<8x8x8> contracts, which the
 // OuterProduct lowering strategy decomposes into vector.outerproduct →
@@ -373,6 +476,14 @@ void MLIRLowering::setupLoweringPipeline() {
 }
 
 void MLIRLowering::addConversionPasses() {
+
+  // Pre-bufferization: outer-tile relu(matmul+bias) into scf.forall and fuse
+  // producers. Only fires when __fuse_relu__ chain is present (dense layers).
+  // Pre-bufferization: outer-tile relu(matmul+bias) into scf.for loops and
+  // fuse producers. Uses ForOp directly (no forall-to-for conversion needed).
+  passManager.addNestedPass<mlir::func::FuncOp>(
+      std::make_unique<LinalgFuseDenseLayerPass>());
+  passManager.addPass(mlir::createCanonicalizerPass());
 
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
