@@ -150,16 +150,19 @@ struct TensorReturnToOutParamPass
     func.setArgAttr(outArgIdx, "bufferization.writable",
                     rewriter.getBoolAttr(true));
 
-    // Replace each return with materialize_in_destination + void return.
+    // Replace each return with void return (+ optional materialize_in_destination fallback).
     func.walk([&](mlir::func::ReturnOp ret) {
       rewriter.setInsertionPoint(ret);
       mlir::Value val = ret.getOperands()[0];
 
       // Trace backwards through linalg outs chain to find the root
       // tensor.empty() and replace it with outParam. This makes the entire
-      // chain write directly into the caller's buffer so that after
-      // bufferization, materialize_in_destination becomes
-      // memref.copy %arg, %arg — which canonicalize folds away.
+      // chain write directly into the caller's buffer. If the trace succeeds,
+      // the result already aliases outParam and bufferization writes in-place
+      // with no copy needed — so we skip materialize_in_destination entirely.
+      // Only emit it as a fallback when the trace fails (e.g. the chain
+      // doesn't terminate in a tensor.empty we can replace).
+      bool replacedEmpty = false;
       mlir::Value cursor = val;
       while (auto linalgOp =
                  cursor.getDefiningOp<mlir::linalg::LinalgOp>()) {
@@ -170,13 +173,20 @@ struct TensorReturnToOutParamPass
                 outsVal.getDefiningOp<mlir::tensor::EmptyOp>()) {
           rewriter.replaceAllUsesWith(outsVal, outParam);
           rewriter.eraseOp(emptyOp);
+          replacedEmpty = true;
           break;
         }
         cursor = outsVal;
       }
 
-      rewriter.create<mlir::bufferization::MaterializeInDestinationOp>(
-          ret.getLoc(), tensorType, val, outParam);
+      if (!replacedEmpty) {
+        // Fallback for return patterns that don't terminate in a linalg op
+        // with a tensor.empty outs (e.g. tensor.insert, scf.if results).
+        // materialize_in_destination tells the bufferizer where the result
+        // must land; may produce a memref.copy if aliasing can't be proven.
+        rewriter.create<mlir::bufferization::MaterializeInDestinationOp>(
+            ret.getLoc(), mlir::TypeRange{tensorType}, val, outParam);
+      }
       rewriter.replaceOpWithNewOp<mlir::func::ReturnOp>(ret);
     });
   }
