@@ -173,6 +173,26 @@ class TestDirectOutputBuffer:
         // CHECK-NOT: memref.copy
         """, after="one-shot-bufferize")
 
+    def test_bias_relu_fused_and_no_copy(self, check_lowered_ir):
+        """bias+relu generics are fused into one linalg.generic that writes directly into out-param."""
+        @ml_function
+        def dense_relu(W: Tensor[f32, 2, 4], x: Tensor[f32, 4, 3], b: Tensor[f32, 3]) -> Tensor[f32, 2, 3]:
+            return relu(matmul(W, x) + b)
+
+        W = np.zeros((2, 4), dtype=np.float32)
+        x = np.zeros((4, 3), dtype=np.float32)
+        b = np.zeros(3, dtype=np.float32)
+        dense_relu(W, x, b)
+
+        check_lowered_ir("""
+        // CHECK: func.func @dense_relu
+        // CHECK: linalg.matmul
+        // CHECK: linalg.generic
+        // CHECK-NOT: linalg.generic
+        // CHECK-NOT: memref.copy
+        // CHECK: return
+        """, after="one-shot-bufferize")
+
 
 class TestLinalgReduceIR:
     """IR structure tests for linalg.reduce (via tensor_sum)"""
