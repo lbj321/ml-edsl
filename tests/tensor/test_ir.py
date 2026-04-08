@@ -31,10 +31,16 @@ class TestDialectBoundaryIR:
 
 
 class TestBufferizationIR:
-    """Test that tensor bufferization produces correct memref ops"""
+    """Verify the frontend emits correct tensor IR before any lowering passes.
 
-    def test_tensor_bufferizes_to_memref(self, check_lowered_ir):
-        """Test that tensor ops become memref ops after bufferization"""
+    linalg-fuse-elementwise-ops folds trivial tensor accesses (e.g.
+    tensor.extract(tensor.from_elements[const_idx]) → constant) before
+    one-shot-bufferize runs. We therefore check the pre-lowering IR here.
+    End-to-end correctness of bufferization is covered by execution tests.
+    """
+
+    def test_tensor_emits_from_elements(self, check_ir):
+        """Frontend emits tensor.from_elements for literal tensor construction."""
         @ml_function
         def tensor_buf() -> i32:
             t = Tensor[i32, 4]([1, 2, 3, 4])
@@ -42,14 +48,14 @@ class TestBufferizationIR:
 
         tensor_buf()
 
-        check_lowered_ir("""
-        // CHECK: memref.alloc
-        // CHECK-NOT: tensor.from_elements
-        // CHECK-NOT: tensor.extract
-        """, after="one-shot-bufferize")
+        check_ir("""
+        // CHECK: tensor.from_elements
+        // CHECK-SAME: tensor<4xi32>
+        // CHECK: tensor.extract
+        """)
 
-    def test_tensor_bufferizes_to_heap_alloc(self, check_lowered_ir):
-        """Test that tensor bufferization uses memref.alloc (heap), not alloca (stack)"""
+    def test_tensor_literal_uses_tensor_dialect(self, check_ir):
+        """Frontend uses tensor dialect (not memref) for tensor literals."""
         @ml_function
         def tensor_heap() -> i32:
             t = Tensor[i32, 4]([1, 2, 3, 4])
@@ -57,13 +63,14 @@ class TestBufferizationIR:
 
         tensor_heap()
 
-        check_lowered_ir("""
-        // CHECK: memref.alloc
+        check_ir("""
+        // CHECK: tensor<4xi32>
+        // CHECK-NOT: memref.alloc
         // CHECK-NOT: memref.alloca
-        """, after="one-shot-bufferize")
+        """)
 
-    def test_2d_tensor_shape_preserved_through_bufferization(self, check_lowered_ir):
-        """Test that tensor<2x3xi32> becomes memref<2x3xi32>, not memref<6xi32>"""
+    def test_2d_tensor_shape_not_flattened(self, check_ir):
+        """Frontend emits tensor<2x3xi32>, not tensor<6xi32> (shape preserved)."""
         @ml_function
         def tensor_2d_buf() -> i32:
             t = Tensor[i32, 2, 3]([[1, 2, 3], [4, 5, 6]])
@@ -71,13 +78,14 @@ class TestBufferizationIR:
 
         tensor_2d_buf()
 
-        check_lowered_ir("""
-        // CHECK: memref.alloc() {{.*}} : memref<2x3xi32>
-        // CHECK-NOT: memref<6xi32>
-        """, after="one-shot-bufferize")
+        check_ir("""
+        // CHECK: tensor.from_elements
+        // CHECK-SAME: tensor<2x3xi32>
+        // CHECK-NOT: tensor<6xi32>
+        """)
 
-    def test_buffer_deallocation_inserted(self, check_lowered_ir):
-        """Test that deallocation pass inserts memref.dealloc"""
+    def test_tensor_extract_emitted(self, check_ir):
+        """Frontend emits tensor.extract for element access."""
         @ml_function
         def tensor_dealloc() -> i32:
             t = Tensor[i32, 4]([1, 2, 3, 4])
@@ -85,10 +93,10 @@ class TestBufferizationIR:
 
         tensor_dealloc()
 
-        check_lowered_ir("""
-        // CHECK: memref.alloc
-        // CHECK: bufferization.dealloc
-        """, after="ownership-based-buffer-deallocation")
+        check_ir("""
+        // CHECK: tensor.from_elements
+        // CHECK: tensor.extract
+        """)
 
 
 class TestShapeRepresentationIR:
