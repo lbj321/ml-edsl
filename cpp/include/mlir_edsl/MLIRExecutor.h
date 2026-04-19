@@ -10,6 +10,10 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 
+#ifdef MLIR_EDSL_CUDA_ENABLED
+#include <cuda.h>
+#endif
+
 namespace mlir_edsl {
 
 class MLIRExecutor {
@@ -46,5 +50,43 @@ class MLIRExecutor {
     // Store compiled function pointers
     std::unordered_map<std::string, void*> functionPointers;
 };
+
+
+#ifdef MLIR_EDSL_CUDA_ENABLED
+
+class MLIRGPUExecutor {
+public:
+  MLIRGPUExecutor();
+  ~MLIRGPUExecutor();
+
+  // Load a PTX image and register the named kernel
+  void loadKernel(const std::string &funcName, const std::string &ptxImage,
+                  const std::string &kernelName);
+
+  // Launch a previously loaded kernel.
+  // kernelArgs: array of void* each pointing to an argument value
+  void launchKernel(const std::string &funcName, void **kernelArgs,
+                    uint32_t gridX, uint32_t gridY, uint32_t gridZ,
+                    uint32_t blockX, uint32_t blockY, uint32_t blockZ);
+
+  CUdeviceptr allocDevice(size_t bytes);
+  void freeDevice(CUdeviceptr ptr);
+  void copyH2D(CUdeviceptr dst, const void *src, size_t bytes);
+  void copyD2H(void *dst, CUdeviceptr src, size_t bytes);
+  void synchronize();
+  void clear();
+
+private:
+  CUdevice device_ = 0;
+  CUcontext context_ = nullptr;
+  CUmodule cuModule_ = nullptr;
+  std::unordered_map<std::string, CUfunction> kernels_;
+  bool initialized_ = false;
+
+  void initialize();
+  static void checkCU(CUresult result, const char *msg);
+};
+
+#endif // MLIR_EDSL_CUDA_ENABLED
 
 }  // namespace mlir_edsl
