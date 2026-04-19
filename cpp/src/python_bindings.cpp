@@ -56,5 +56,43 @@ PYBIND11_MODULE(_mlir_backend, m) {
               opt = mlir_edsl::MLIRCompiler::OptLevel::O2;
             self.setOptimizationLevel(opt);
           },
-          "Set optimization level (0=O0, 2=O2, 3=O3)");
+          "Set optimization level (0=O0, 2=O2, 3=O3)")
+      .def(
+          "set_target",
+          [](mlir_edsl::MLIRCompiler &self, const std::string &target) {
+            if (target == "gpu")
+              self.setTarget(mlir_edsl::MLIRCompiler::Target::GPU);
+            else
+              self.setTarget(mlir_edsl::MLIRCompiler::Target::CPU);
+          },
+          py::arg("target"), "Set compilation target ('cpu' or 'gpu')")
+      .def(
+          "execute_gpu_function",
+          [](mlir_edsl::MLIRCompiler &self, const std::string &name,
+             py::list inputs, py::list output_shape, size_t element_size)
+              -> py::bytes {
+            // inputs: list of (data_ptr_int, shape_list) tuples
+            std::vector<std::pair<const void *, std::vector<int64_t>>> cpp_inputs;
+            for (auto item : inputs) {
+              auto tup = item.cast<py::tuple>();
+              auto ptr = reinterpret_cast<const void *>(tup[0].cast<uintptr_t>());
+              auto shape_list = tup[1].cast<std::vector<int64_t>>();
+              cpp_inputs.push_back({ptr, shape_list});
+            }
+
+            std::vector<int64_t> out_shape = output_shape.cast<std::vector<int64_t>>();
+            size_t out_elems = 1;
+            for (auto d : out_shape) out_elems *= (size_t)d;
+            std::string out_buf(out_elems * element_size, '\0');
+
+            {
+              py::gil_scoped_release release;
+              self.executeGPUFunction(name, cpp_inputs,
+                                      out_buf.data(), out_shape, element_size);
+            }
+            return py::bytes(out_buf);
+          },
+          py::arg("name"), py::arg("inputs"), py::arg("output_shape"),
+          py::arg("element_size"),
+          "Execute GPU-compiled function; returns raw output bytes");
 }

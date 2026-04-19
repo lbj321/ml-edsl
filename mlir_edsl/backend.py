@@ -272,6 +272,40 @@ class CppMLIRBackend:
             raise ValueError(f"Invalid optimization level {level}. Must be 0, 2, or 3.")
         self.compiler.set_optimization_level(level)
 
+    def set_target(self, target: str) -> None:
+        """Set compilation target: 'cpu' or 'gpu'."""
+        if target not in ("cpu", "gpu"):
+            raise ValueError(f"Invalid target '{target}'. Must be 'cpu' or 'gpu'.")
+        self.compiler.set_target(target)
+
+    def execute_gpu_function(self, name: str, *args) -> 'np.ndarray':
+        """Execute a GPU-compiled function with automatic H2D/D2H transfers."""
+        if not _HAS_NUMPY:
+            raise RuntimeError("NumPy required for GPU execution")
+
+        param_types, return_type = self._signatures[name]
+
+        # Build (data_ptr, shape) pairs for each input
+        inputs = []
+        live_buffers = []
+        for pt, val in zip(param_types, args):
+            if isinstance(pt, (ArrayType, TensorType)):
+                arr = val if val.flags['C_CONTIGUOUS'] else np.ascontiguousarray(val)
+                live_buffers.append(arr)
+                inputs.append((arr.ctypes.data, list(arr.shape)))
+            else:
+                raise RuntimeError(f"GPU execution only supports array/tensor params, got {pt}")
+
+        out_shape = list(return_type.shape)
+        dtype = SCALAR_TYPE_TO_NUMPY_DTYPE[return_type.element_type.kind]
+        element_size = np.dtype(dtype).itemsize
+
+        raw = self.compiler.execute_gpu_function(
+            name, inputs, out_shape, element_size
+        )
+        result = np.frombuffer(raw, dtype=dtype).reshape(out_shape).copy()
+        return result
+
 
 def get_backend():
     """Get the appropriate backend (C++ if available)"""

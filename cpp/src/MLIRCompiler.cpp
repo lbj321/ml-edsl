@@ -4,6 +4,10 @@
 #include "mlir_edsl/MLIRExecutor.h"
 #include "mlir_edsl/MLIRLowering.h"
 
+#ifdef MLIR_EDSL_CUDA_ENABLED
+#include <cuda.h>
+#endif
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -43,6 +47,10 @@ MLIRCompiler::MLIRCompiler()
   // Initialize executor
   executor = std::make_unique<MLIRExecutor>();
   executor->setOptimizationLevel(MLIRExecutor::OptLevel::O2);
+
+#ifdef MLIR_EDSL_CUDA_ENABLED
+  gpuExecutor_ = std::make_unique<MLIRGPUExecutor>();
+#endif
 }
 
 MLIRCompiler::~MLIRCompiler() = default;
@@ -214,16 +222,39 @@ void MLIRCompiler::ensureFinalized() {
     return;
   }
 
-  // Lower MLIR to LLVM module
   const bool saveIR = std::getenv("SAVE_IR") != nullptr;
   const bool doCapture = saveIR || captureSnapshots;
   MLIRLowering lowering(mlirContext.get(), /*captureSnapshots=*/doCapture);
 
+#ifdef MLIR_EDSL_CUDA_ENABLED
+  if (target_ == Target::GPU) {
+    GPULoweredModule gpuLowered;
+    try {
+      gpuLowered = lowering.lowerToGPUModule(*module);
+    } catch (...) {
+      failureIR_ = lowering.takeFailureIR();
+      if (doCapture)
+        loweringSnapshots = lowering.takeSnapshots();
+      throw;
+    }
+    if (doCapture)
+      loweringSnapshots = lowering.takeSnapshots();
+
+    for (const auto &name : compiledFunctions) {
+      gpuModules_[name] = gpuLowered;
+      gpuExecutor_->loadKernel(name, gpuLowered.ptxImage,
+                               gpuLowered.kernelFuncName);
+    }
+    state = State::Finalized;
+    return;
+  }
+#endif
+
+  // CPU path
   LoweredModule lowered;
   try {
     lowered = lowering.lowerToLLVMModule(*module);
   } catch (...) {
-    // Extract failure state before lowering is destroyed on stack unwind
     failureIR_ = lowering.takeFailureIR();
     if (doCapture)
       loweringSnapshots = lowering.takeSnapshots();
@@ -233,7 +264,6 @@ void MLIRCompiler::ensureFinalized() {
   if (doCapture)
     loweringSnapshots = lowering.takeSnapshots();
 
-  // JIT compile with function names to look up
   std::vector<std::string> names(compiledFunctions.begin(),
                                  compiledFunctions.end());
   executor->compileModule(std::move(lowered.module), std::move(lowered.context),
@@ -309,6 +339,105 @@ void MLIRCompiler::injectTestFailure() {
       opBuilder->getUnknownLoc(), 0, 32);
   opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(),
                                           zero.getResult());
+}
+
+// ==================== GPU EXECUTION ====================
+
+void MLIRCompiler::executeGPUFunction(
+    const std::string &name,
+    const std::vector<std::pair<const void *, std::vector<int64_t>>> &inputs,
+    void *output,
+    const std::vector<int64_t> &outputShape,
+    size_t elementSize) {
+#ifdef MLIR_EDSL_CUDA_ENABLED
+  ensureFinalized();
+
+  // Compute total element counts
+  auto elemCount = [](const std::vector<int64_t> &shape) {
+    int64_t n = 1;
+    for (auto d : shape) n *= d;
+    return n;
+  };
+
+  // Allocate device memory and copy inputs H2D
+  std::vector<CUdeviceptr> dInputs;
+  dInputs.reserve(inputs.size());
+  for (const auto &[hostPtr, shape] : inputs) {
+    size_t bytes = (size_t)elemCount(shape) * elementSize;
+    CUdeviceptr d = gpuExecutor_->allocDevice(bytes);
+    gpuExecutor_->copyH2D(d, hostPtr, bytes);
+    dInputs.push_back(d);
+  }
+
+  // Allocate output device buffer
+  size_t outBytes = (size_t)elemCount(outputShape) * elementSize;
+  CUdeviceptr dOutput = gpuExecutor_->allocDevice(outBytes);
+
+  // Build kernelParams: one entry per memref descriptor field per argument.
+  // Layout per rank-2 memref: alloc_ptr, aligned_ptr, offset, size0, size1,
+  // stride0, stride1.  Pointers stored as uint64_t; scalars as int64_t.
+  // Both vectors must outlive the cuLaunchKernel call.
+  std::vector<uint64_t> ptrStorage;  // device ptr values (one per arg)
+  std::vector<int64_t>  intStorage;  // offset + sizes + strides per arg
+
+  auto allArgs = inputs;
+  allArgs.push_back({output, outputShape}); // append output last
+
+  // Pre-size to avoid reallocation (pointers into these vectors go into params)
+  ptrStorage.reserve(allArgs.size() * 2); // alloc + aligned per arg
+  intStorage.reserve(allArgs.size() * (1 + 2 + 2)); // offset+sizes+strides (2D)
+
+  std::vector<void *> params;
+
+  for (size_t i = 0; i < allArgs.size(); ++i) {
+    const auto &shape = allArgs[i].second;
+    CUdeviceptr dPtr = (i < dInputs.size()) ? dInputs[i] : dOutput;
+    uint64_t ptrVal = (uint64_t)dPtr;
+
+    ptrStorage.push_back(ptrVal); // alloc_ptr
+    ptrStorage.push_back(ptrVal); // aligned_ptr
+    params.push_back(&ptrStorage[ptrStorage.size() - 2]);
+    params.push_back(&ptrStorage[ptrStorage.size() - 1]);
+
+    intStorage.push_back(0); // offset
+    params.push_back(&intStorage.back());
+
+    // sizes
+    for (auto s : shape) {
+      intStorage.push_back(s);
+      params.push_back(&intStorage.back());
+    }
+
+    // strides (row-major: stride[i] = product of dims[i+1..])
+    for (size_t d = 0; d < shape.size(); ++d) {
+      int64_t stride = 1;
+      for (size_t k = d + 1; k < shape.size(); ++k)
+        stride *= shape[k];
+      intStorage.push_back(stride);
+      params.push_back(&intStorage.back());
+    }
+  }
+
+  // Grid = outer dims, block = inner dim (untiled: 1 thread per element)
+  uint32_t gridX = (outputShape.size() >= 1) ? (uint32_t)outputShape[0] : 1;
+  uint32_t gridY = (outputShape.size() >= 2) ? (uint32_t)outputShape[1] : 1;
+  uint32_t blockX = 1, blockY = 1, blockZ = 1;
+
+  gpuExecutor_->launchKernel(name, params.data(), gridX, gridY, 1,
+                              blockX, blockY, blockZ);
+
+  // Copy result D2H and free device allocations
+  gpuExecutor_->copyD2H(output, dOutput, outBytes);
+
+  for (auto d : dInputs)
+    gpuExecutor_->freeDevice(d);
+  gpuExecutor_->freeDevice(dOutput);
+#else
+  (void)name; (void)inputs; (void)output;
+  (void)outputShape; (void)elementSize;
+  throw std::runtime_error(
+      "GPU support not compiled in (rebuild with -DMLIR_EDSL_CUDA=ON)");
+#endif
 }
 
 // ==================== CONFIGURATION ====================

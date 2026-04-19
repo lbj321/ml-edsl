@@ -17,8 +17,9 @@ class MLFunction:
 
     _next_id = 0
 
-    def __init__(self, func: Callable):
+    def __init__(self, func: Callable, target: str = "cpu"):
         self.func = func
+        self._target = target
         self._func_id = MLFunction._next_id
         MLFunction._next_id += 1
 
@@ -56,7 +57,8 @@ class MLFunction:
             return self._execute_dynamic(args, kwargs)
 
         if self._compiled is None:
-            self._compiled = compile_function(self.signature, self._cached_ast)
+            self._compiled = compile_function(self.signature, self._cached_ast,
+                                              target=self._target)
         return self._compiled.execute(args, kwargs)
 
     def _execute_dynamic(self, args: tuple, kwargs: dict) -> Union[int, float, bool]:
@@ -111,15 +113,20 @@ class MLFunction:
         return get_backend().execute_function(variant.name, *ordered)
 
 
-def ml_function(func: Callable) -> MLFunction:
-    """Decorator to mark functions for MLIR compilation
+def ml_function(func: Callable = None, *, target: str = "cpu"):
+    """Decorator to mark functions for MLIR compilation.
 
     Usage:
         @ml_function
-        def my_add():
-            return add(5, 3)
+        def my_add(): ...
 
-        # JIT execution
-        result = my_add()  # Returns native result
+        @ml_function(target="gpu")
+        def my_matmul(A: Tensor[f32, 32, 32], B: Tensor[f32, 32, 32]): ...
     """
-    return MLFunction(func)
+    if func is not None:
+        # Called as @ml_function (no parentheses)
+        return MLFunction(func, target="cpu")
+    # Called as @ml_function(target=...) — return decorator
+    def decorator(f: Callable) -> MLFunction:
+        return MLFunction(f, target=target)
+    return decorator
