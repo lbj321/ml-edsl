@@ -155,33 +155,35 @@ void MLIRGPUExecutor::initialize() {
 MLIRGPUExecutor::MLIRGPUExecutor() = default;
 
 MLIRGPUExecutor::~MLIRGPUExecutor() {
-  if (cuModule_)
-    cuModuleUnload(cuModule_);
+  for (auto &[name, mod] : cuModules_)
+    cuModuleUnload(mod);
   if (context_)
     cuCtxDestroy(context_);
 }
 
-void MLIRGPUExecutor::loadKernel(const std::string &funcName,
+void MLIRGPUExecutor::loadKernel(const std::string &moduleName,
                                   const std::string &ptxImage,
-                                  const std::string &kernelName) {
+                                  const std::string &funcName) {
   initialize();
-  if (!cuModule_)
-    checkCU(cuModuleLoadData(&cuModule_, ptxImage.c_str()), "cuModuleLoadData");
-
+  if (cuModules_.find(moduleName) == cuModules_.end()) {
+    CUmodule cuMod;
+    checkCU(cuModuleLoadData(&cuMod, ptxImage.c_str()), "cuModuleLoadData");
+    cuModules_[moduleName] = cuMod;
+  }
   CUfunction func;
-  checkCU(cuModuleGetFunction(&func, cuModule_, kernelName.c_str()),
+  checkCU(cuModuleGetFunction(&func, cuModules_[moduleName], funcName.c_str()),
           "cuModuleGetFunction");
-  kernels_[funcName] = func;
+  kernels_[moduleName] = func;
 }
 
-void MLIRGPUExecutor::launchKernel(const std::string &funcName,
+void MLIRGPUExecutor::launchKernel(const std::string &moduleName,
                                     void **kernelArgs,
                                     uint32_t gridX, uint32_t gridY,
                                     uint32_t gridZ, uint32_t blockX,
                                     uint32_t blockY, uint32_t blockZ) {
-  auto it = kernels_.find(funcName);
+  auto it = kernels_.find(moduleName);
   if (it == kernels_.end())
-    throw std::runtime_error("GPU kernel not loaded: " + funcName);
+    throw std::runtime_error("GPU kernel not loaded: " + moduleName);
 
   checkCU(cuLaunchKernel(it->second, gridX, gridY, gridZ, blockX, blockY,
                          blockZ, 0, nullptr, kernelArgs, nullptr),
@@ -214,10 +216,9 @@ void MLIRGPUExecutor::synchronize() {
 
 void MLIRGPUExecutor::clear() {
   kernels_.clear();
-  if (cuModule_) {
-    cuModuleUnload(cuModule_);
-    cuModule_ = nullptr;
-  }
+  for (auto &[name, mod] : cuModules_)
+    cuModuleUnload(mod);
+  cuModules_.clear();
 }
 
 #endif // MLIR_EDSL_CUDA_ENABLED

@@ -58,6 +58,7 @@ set(MLIR_MEMORY_LIBS
 set(MLIR_VECTOR_LIBS
     MLIRVectorDialect
     MLIRVectorTransforms
+    MLIRVectorToLLVM
     MLIRVectorToLLVMPass
     MLIRVectorToSCF
     MLIRUBToLLVM
@@ -70,11 +71,19 @@ if(MLIR_EDSL_CUDA)
     find_package(CUDAToolkit REQUIRED)
 
     set(MLIR_GPU_LIBS
+        MLIRComplexToLLVM
+        MLIRControlFlowToLLVM
+        MLIRIndexToLLVM
         MLIRGPUDialect
+        MLIRGPUToGPURuntimeTransforms
         MLIRGPUTransforms
         MLIRGPUToNVVMTransforms
+        MLIRMathToLLVM
         MLIRNVVMDialect
+        MLIRNVVMToLLVM
+        MLIRGPUToLLVMIRTranslation
         MLIRNVVMToLLVMIRTranslation
+        MLIRSCFToGPU
     )
 
     llvm_map_components_to_libnames(LLVM_NVPTX_LIBS

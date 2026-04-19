@@ -242,8 +242,8 @@ void MLIRCompiler::ensureFinalized() {
 
     for (const auto &name : compiledFunctions) {
       gpuModules_[name] = gpuLowered;
-      gpuExecutor_->loadKernel(name, gpuLowered.ptxImage,
-                               gpuLowered.kernelFuncName);
+      for (const auto &k : gpuLowered.kernels)
+        gpuExecutor_->loadKernel(k.moduleName, k.ptxImage, k.funcName);
     }
     state = State::Finalized;
     return;
@@ -352,7 +352,6 @@ void MLIRCompiler::executeGPUFunction(
 #ifdef MLIR_EDSL_CUDA_ENABLED
   ensureFinalized();
 
-  // Compute total element counts
   auto elemCount = [](const std::vector<int64_t> &shape) {
     int64_t n = 1;
     for (auto d : shape) n *= d;
@@ -363,74 +362,87 @@ void MLIRCompiler::executeGPUFunction(
   std::vector<CUdeviceptr> dInputs;
   dInputs.reserve(inputs.size());
   for (const auto &[hostPtr, shape] : inputs) {
-    size_t bytes = (size_t)elemCount(shape) * elementSize;
-    CUdeviceptr d = gpuExecutor_->allocDevice(bytes);
-    gpuExecutor_->copyH2D(d, hostPtr, bytes);
+    CUdeviceptr d = gpuExecutor_->allocDevice((size_t)elemCount(shape) * elementSize);
+    gpuExecutor_->copyH2D(d, hostPtr, (size_t)elemCount(shape) * elementSize);
     dInputs.push_back(d);
   }
-
-  // Allocate output device buffer
   size_t outBytes = (size_t)elemCount(outputShape) * elementSize;
   CUdeviceptr dOutput = gpuExecutor_->allocDevice(outBytes);
 
-  // Build kernelParams: one entry per memref descriptor field per argument.
-  // Layout per rank-2 memref: alloc_ptr, aligned_ptr, offset, size0, size1,
-  // stride0, stride1.  Pointers stored as uint64_t; scalars as int64_t.
-  // Both vectors must outlive the cuLaunchKernel call.
-  std::vector<uint64_t> ptrStorage;  // device ptr values (one per arg)
-  std::vector<int64_t>  intStorage;  // offset + sizes + strides per arg
-
-  auto allArgs = inputs;
-  allArgs.push_back({output, outputShape}); // append output last
-
-  // Pre-size to avoid reallocation (pointers into these vectors go into params)
-  ptrStorage.reserve(allArgs.size() * 2); // alloc + aligned per arg
-  intStorage.reserve(allArgs.size() * (1 + 2 + 2)); // offset+sizes+strides (2D)
-
-  std::vector<void *> params;
-
-  for (size_t i = 0; i < allArgs.size(); ++i) {
-    const auto &shape = allArgs[i].second;
-    CUdeviceptr dPtr = (i < dInputs.size()) ? dInputs[i] : dOutput;
+  // Helper: push a flattened memref descriptor onto params.
+  // Both storage vectors must outlive launchKernel; we pass them by ref so
+  // that push_back never invalidates pointers into an already-appended block
+  // (we pre-reserve below).
+  auto pushMemRef = [](CUdeviceptr dPtr,
+                       const std::vector<int64_t> &shape,
+                       std::vector<void *> &params,
+                       std::vector<uint64_t> &ptrStore,
+                       std::vector<int64_t> &intStore) {
     uint64_t ptrVal = (uint64_t)dPtr;
+    ptrStore.push_back(ptrVal);
+    params.push_back(&ptrStore.back());
+    ptrStore.push_back(ptrVal);
+    params.push_back(&ptrStore.back());
 
-    ptrStorage.push_back(ptrVal); // alloc_ptr
-    ptrStorage.push_back(ptrVal); // aligned_ptr
-    params.push_back(&ptrStorage[ptrStorage.size() - 2]);
-    params.push_back(&ptrStorage[ptrStorage.size() - 1]);
+    intStore.push_back(0); // offset
+    params.push_back(&intStore.back());
 
-    intStorage.push_back(0); // offset
-    params.push_back(&intStorage.back());
-
-    // sizes
     for (auto s : shape) {
-      intStorage.push_back(s);
-      params.push_back(&intStorage.back());
+      intStore.push_back(s);
+      params.push_back(&intStore.back());
     }
-
-    // strides (row-major: stride[i] = product of dims[i+1..])
     for (size_t d = 0; d < shape.size(); ++d) {
       int64_t stride = 1;
-      for (size_t k = d + 1; k < shape.size(); ++k)
-        stride *= shape[k];
-      intStorage.push_back(stride);
-      params.push_back(&intStorage.back());
+      for (size_t k = d + 1; k < shape.size(); ++k) stride *= shape[k];
+      intStore.push_back(stride);
+      params.push_back(&intStore.back());
     }
+  };
+
+  const GPULoweredModule &lowered = gpuModules_.at(name);
+
+  // Launch each kernel in order (e.g. fill then matmul).
+  for (const auto &kernel : lowered.kernels) {
+    // Reserve enough storage so push_back never reallocates mid-build.
+    // Worst case: 2 ptr fields + (1+rank+rank) int fields per MemRef arg,
+    // plus 1 field per scalar. Over-allocate generously.
+    std::vector<void *>    params;
+    std::vector<uint64_t>  ptrStore;
+    std::vector<int64_t>   intStore;
+    std::vector<float>     f32Store;
+    size_t nArgs = kernel.args.size();
+    ptrStore.reserve(nArgs * 2);
+    intStore.reserve(nArgs * 8);
+    f32Store.reserve(nArgs);
+
+    for (const auto &arg : kernel.args) {
+      switch (arg.kind) {
+      case GPUKernelArg::Kind::I64:
+        intStore.push_back(arg.i64Val);
+        params.push_back(&intStore.back());
+        break;
+      case GPUKernelArg::Kind::F32:
+        f32Store.push_back(arg.f32Val);
+        params.push_back(&f32Store.back());
+        break;
+      case GPUKernelArg::Kind::InputMemRef:
+        pushMemRef(dInputs[arg.paramIdx], arg.shape,
+                   params, ptrStore, intStore);
+        break;
+      case GPUKernelArg::Kind::OutputMemRef:
+        pushMemRef(dOutput, arg.shape, params, ptrStore, intStore);
+        break;
+      }
+    }
+
+    gpuExecutor_->launchKernel(kernel.moduleName, params.data(),
+                                kernel.gridX, kernel.gridY, kernel.gridZ,
+                                kernel.blockX, kernel.blockY, kernel.blockZ);
   }
 
-  // Grid = outer dims, block = inner dim (untiled: 1 thread per element)
-  uint32_t gridX = (outputShape.size() >= 1) ? (uint32_t)outputShape[0] : 1;
-  uint32_t gridY = (outputShape.size() >= 2) ? (uint32_t)outputShape[1] : 1;
-  uint32_t blockX = 1, blockY = 1, blockZ = 1;
-
-  gpuExecutor_->launchKernel(name, params.data(), gridX, gridY, 1,
-                              blockX, blockY, blockZ);
-
-  // Copy result D2H and free device allocations
   gpuExecutor_->copyD2H(output, dOutput, outBytes);
 
-  for (auto d : dInputs)
-    gpuExecutor_->freeDevice(d);
+  for (auto d : dInputs) gpuExecutor_->freeDevice(d);
   gpuExecutor_->freeDevice(dOutput);
 #else
   (void)name; (void)inputs; (void)output;
