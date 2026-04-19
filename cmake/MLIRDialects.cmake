@@ -63,6 +63,29 @@ set(MLIR_VECTOR_LIBS
     MLIRUBToLLVM
 )
 
+# GPU/CUDA dialect libraries (optional)
+option(MLIR_EDSL_CUDA "Enable CUDA GPU execution backend" OFF)
+
+if(MLIR_EDSL_CUDA)
+    find_package(CUDAToolkit REQUIRED)
+
+    set(MLIR_GPU_LIBS
+        MLIRGPUDialect
+        MLIRGPUTransforms
+        MLIRGPUToNVVMTransforms
+        MLIRNVVMDialect
+        MLIRNVVMToLLVMIRTranslation
+    )
+
+    llvm_map_components_to_libnames(LLVM_NVPTX_LIBS
+        NVPTXCodeGen NVPTXDesc NVPTXInfo
+    )
+
+    list(APPEND LLVM_LIBS ${LLVM_NVPTX_LIBS})
+
+    add_compile_definitions(MLIR_EDSL_CUDA_ENABLED)
+endif()
+
 # Combine all current libraries
 set(MLIR_CURRENT_LIBS
     ${MLIR_CORE_LIBS}
@@ -75,6 +98,10 @@ set(MLIR_CURRENT_LIBS
     MLIRAffineToStandard
     MLIRReconcileUnrealizedCasts
 )
+
+if(MLIR_EDSL_CUDA)
+    list(APPEND MLIR_CURRENT_LIBS ${MLIR_GPU_LIBS})
+endif()
 
 # Function to add MLIR libraries to target
 function(target_link_mlir_libraries target)
