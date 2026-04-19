@@ -137,6 +137,10 @@ mlir::Value MLIRBuilder::buildFromLinalgNode(const mlir_edsl::LinalgNode &node,
       return handleLinalgMapElement(node.map_element());
     case mlir_edsl::LinalgNode::kReduce:
       return linalgBuilder->buildReduce(node.reduce());
+    case mlir_edsl::LinalgNode::kBinaryOp:
+      return linalgBuilder->buildBinaryOp(node.binary_op(), outParam);
+    case mlir_edsl::LinalgNode::kActivation:
+      return linalgBuilder->buildActivation(node.activation(), outParam);
     case mlir_edsl::LinalgNode::kReduceElement:
       return handleLinalgPlaceholder(node.reduce_element().node_id(),
                                      "LinalgReduceElement");

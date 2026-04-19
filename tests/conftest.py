@@ -28,7 +28,8 @@ def _read_file(path):
 
 
 def _generate_ir_html(test_name, func_name, func_source, ast_dump, mlir,
-                      snapshots, unopt_llvm, opt_llvm):
+                      snapshots, unopt_llvm, opt_llvm,
+                      failed: bool = False, failure_ir: str = ""):
     """Generate HTML with vertical pipeline layout showing all compilation stages."""
     from html import escape
     import datetime
@@ -38,12 +39,18 @@ def _generate_ir_html(test_name, func_name, func_source, ast_dump, mlir,
     if snapshots:
         prev_ir = mlir
         for i, (pass_name, ir) in enumerate(snapshots):
+            is_failure = pass_name.startswith("[FAILED]")
             changed = (ir != prev_ir)
             badge = "" if changed else ' <span class="badge-unchanged">(unchanged)</span>'
-            # Auto-expand passes that changed IR and involve bufferization
-            is_open = changed and "bufferize" in pass_name.lower()
+            # Auto-expand passes that changed IR and involve bufferization, or failures
+            is_open = is_failure or (changed and "bufferize" in pass_name.lower())
             open_attr = " open" if is_open else ""
-            css_class = "pass-changed" if changed else "pass-unchanged"
+            if is_failure:
+                css_class = "pass-failed"
+            elif changed:
+                css_class = "pass-changed"
+            else:
+                css_class = "pass-unchanged"
             escaped_name = escape(pass_name)
             escaped_ir = escape(ir)
             pipeline_html += (
@@ -59,11 +66,32 @@ def _generate_ir_html(test_name, func_name, func_source, ast_dump, mlir,
             "No lowering snapshots captured (set SAVE_IR=1)</p>"
         )
 
+    # Build failure banner and failure IR section
+    title_prefix = "[FAILED] " if failed else ""
+    title_color = "#f44747" if failed else "#4ec9b0"
+    failure_banner_html = ""
+    if failed:
+        failure_banner_html = """
+    <div style="background-color: #5a1d1d; border: 2px solid #f44747; border-radius: 5px; padding: 15px; margin-bottom: 20px;">
+        <span style="color: #f44747; font-size: 20px; font-weight: bold;">&#x2717; TEST FAILED</span>
+        <span style="color: #d4d4d4; margin-left: 10px;">Lowering pipeline failed — see Failure-Point IR below</span>
+    </div>"""
+
+    failure_ir_section_html = ""
+    if failure_ir:
+        failure_ir_section_html = f"""
+    <!-- Failure-Point IR -->
+    <h2 class="section-header" style="color: #f44747;">Failure-Point IR</h2>
+    <details open>
+        <summary style="color: #f44747;">Partially-Lowered IR at Failure</summary>
+        <pre class="mlir">{escape(failure_ir)}</pre>
+    </details>"""
+
     return f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>IR Output: {escape(test_name)}</title>
+    <title>{escape(title_prefix)}IR Output: {escape(test_name)}</title>
     <style>
         body {{
             font-family: 'Consolas', 'Monaco', monospace;
@@ -73,8 +101,8 @@ def _generate_ir_html(test_name, func_name, func_source, ast_dump, mlir,
             font-size: 16px;
         }}
         h1 {{
-            color: #4ec9b0;
-            border-bottom: 2px solid #4ec9b0;
+            color: {title_color};
+            border-bottom: 2px solid {title_color};
             padding-bottom: 10px;
             font-size: 28px;
         }}
@@ -146,18 +174,24 @@ def _generate_ir_html(test_name, func_name, func_source, ast_dump, mlir,
         .pass-changed summary {{
             color: #4ec9b0;
         }}
+        .pass-failed summary {{
+            color: #f44747;
+        }}
+        .pass-failed {{
+            border-color: #f44747;
+        }}
         .pipeline-section {{
             margin: 10px 0 10px 20px;
         }}
     </style>
 </head>
 <body>
-    <h1>Test: {escape(test_name)}</h1>
+    <h1>{escape(title_prefix)}Test: {escape(test_name)}</h1>
     <div class="metadata">
         Function: {escape(func_name)}<br>
         Generated: {escape(str(datetime.datetime.now()))}
     </div>
-
+{failure_banner_html}
     <!-- Python Source -->
     <h2 class="section-header">Python Source</h2>
     <details open>
@@ -172,6 +206,7 @@ def _generate_ir_html(test_name, func_name, func_source, ast_dump, mlir,
         <pre class="ast">{escape(ast_dump) if ast_dump else "(no AST dump captured)"}</pre>
     </details>
 
+{failure_ir_section_html}
     <!-- Input MLIR -->
     <h2 class="section-header">Input MLIR</h2>
     <details open>
@@ -204,7 +239,7 @@ def _generate_ir_html(test_name, func_name, func_source, ast_dump, mlir,
 </html>"""
 
 
-def _save_ir_for_test(backend, node):
+def _save_ir_for_test(backend, node, failed: bool = False, failure_ir: str = ""):
     """Save IR files and generate HTML report for a test.
 
     Uses the pytest node ID to create a hierarchical output structure:
@@ -215,15 +250,10 @@ def _save_ir_for_test(backend, node):
     ir_output_dir = os.path.join(project_root, "ir_output")
     ir_html_dir = os.path.join(project_root, "ir_html")
 
-    # ir_output/ is guaranteed to exist (created by session_setup fixture
-    # before any test runs). Just ensure ir_html/ exists for this test.
     os.makedirs(ir_output_dir, exist_ok=True)
 
     functions = backend.list_functions()
-    if not functions:
-        return
-
-    func_name = functions[0]
+    func_name = functions[0] if functions else "__unknown__"
 
     # Build hierarchical output path from node ID
     # e.g. "tests/memref/test_array_execution.py::TestClass::test_name"
@@ -255,7 +285,8 @@ def _save_ir_for_test(backend, node):
     html_path = os.path.join(html_dir, f"{test_name}.html")
     html_content = _generate_ir_html(
         test_name, func_name, func_source, ast_dump, mlir_ir,
-        snapshots, unopt_ir, opt_ir
+        snapshots, unopt_ir, opt_ir,
+        failed=failed, failure_ir=failure_ir
     )
     with open(html_path, "w") as f:
         f.write(html_content)
@@ -279,6 +310,17 @@ def _find_filecheck():
         return known
 
     return None
+
+
+# ==================== HOOKS ====================
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Attach the call-phase result to the item so clean_module can read it."""
+    outcome = yield
+    rep = outcome.get_result()
+    if rep.when == "call":
+        item.rep_call = rep
 
 
 # ==================== FIXTURES ====================
@@ -330,9 +372,13 @@ def clean_module(request):
 
     if b is not None:
         save_ir = os.getenv("SAVE_IR", "").lower() in ("1", "true", "yes")
-        if save_ir:
+        rep = getattr(request.node, 'rep_call', None)
+        test_failed = rep is not None and rep.failed
+        if save_ir or test_failed:
+            failure_ir = b.get_failure_ir() if test_failed else ""
             try:
-                _save_ir_for_test(b, request.node)
+                _save_ir_for_test(b, request.node, failed=test_failed,
+                                  failure_ir=failure_ir)
             except Exception as e:
                 print(f"\nWarning: Could not save IR: {e}")
 

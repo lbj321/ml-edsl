@@ -57,6 +57,12 @@ public:
   using SnapshotList = std::vector<std::pair<std::string, std::string>>;
   const SnapshotList &getLoweringSnapshots() const { return loweringSnapshots; }
 
+  // ==================== FAILURE IR ====================
+  std::string getFailureIR() const { return failureIR_; }
+
+  // ==================== TESTING UTILITIES ====================
+  void injectTestFailure();  // Testing only: inserts a type-mismatched function
+
   // ==================== CONFIGURATION ====================
   void setOptimizationLevel(OptLevel level);
   void enableSnapshotCapture() { captureSnapshots = true; }
@@ -87,6 +93,7 @@ private:
   // ==================== IR SNAPSHOTS ====================
   SnapshotList loweringSnapshots;
   bool captureSnapshots = false;
+  std::string failureIR_;
 
   // ==================== INTERNAL METHODS ====================
   void ensureFinalized();

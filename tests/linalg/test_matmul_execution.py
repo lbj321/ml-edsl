@@ -41,6 +41,43 @@ class TestMatmulExecution:
 
         np.testing.assert_allclose(result, [[19.0, 22.0], [43.0, 50.0]], rtol=1e-3)
 
+    def test_matmul_8x8(self, backend):
+        """8x8 matmul: ones @ ones == 8*ones"""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
+            return matmul(A, B)
+
+        A = np.ones((8, 8), dtype=np.float32)
+        B = np.ones((8, 8), dtype=np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, np.full((8, 8), 8.0), atol=1e-5)
+
+    def test_matmul_16x16(self, backend):
+        """16x16 matmul exercises the tiling path: ones @ ones == 16*ones"""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
+            return matmul(A, B)
+
+        A = np.ones((16, 16), dtype=np.float32)
+        B = np.ones((16, 16), dtype=np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, np.full((16, 16), 16.0), atol=1e-4)
+
+    def test_matmul_16x16_known_result(self, backend):
+        """16x16 matmul correctness: compare against numpy"""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.random((16, 16), dtype=np.float32)
+        B = rng.random((16, 16), dtype=np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-4)
+
     def test_matmul_zeros(self, backend):
         """A @ 0 == 0"""
         @ml_function

@@ -1,8 +1,10 @@
 """Test tensor return types (Phase 8.7)
 
 Functions returning Tensor[dtype, shape] compile to a void function with a
-hidden memref out-param, identical to the Array return calling convention.
-At the Python boundary the caller gets a numpy array back.
+hidden tensor out-param (marked bufferization.writable=true). After
+bufferization the tensor boundary becomes a plain memref, matching the
+memref descriptor Python passes. At the Python boundary the caller gets a
+numpy array back.
 """
 
 import numpy as np
@@ -140,8 +142,8 @@ class TestTensorReturnMixedParams:
 class TestTensorReturnIR:
     """IR structure tests for tensor return functions."""
 
-    def test_tensor_return_has_to_tensor_for_param(self, check_ir):
-        """Tensor param should appear as to_tensor in the function body"""
+    def test_tensor_return_has_tensor_param(self, check_ir):
+        """Tensor param should appear as tensor type in the function signature"""
         @ml_function
         def tr_ir_param(t: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return t
@@ -150,24 +152,24 @@ class TestTensorReturnIR:
 
         check_ir("""
         // CHECK: func.func @tr_ir_param
-        // CHECK-SAME: memref<4xf32>
-        // CHECK: bufferization.to_tensor
-        // CHECK-SAME: restrict writable
+        // CHECK-SAME: tensor<4xf32>
+        // CHECK-NOT: bufferization.to_tensor
         """)
 
-    def test_tensor_return_has_materialize_in_destination(self, check_ir):
-        """Tensor return should use materialize_in_destination restrict writable"""
+    def test_tensor_return_has_materialize_in_destination(self, check_lowered_ir):
+        """After TensorReturnToOutParamPass: non-linalg tensor return uses materialize_in_destination fallback."""
         @ml_function
         def tr_ir_mat() -> Tensor[f32, 4]:
             return Tensor[f32, 4]([1.0, 2.0, 3.0, 4.0])
 
         tr_ir_mat()
 
-        check_ir("""
+        check_lowered_ir("""
         // CHECK: func.func @tr_ir_mat
+        // CHECK-SAME: bufferization.writable = true
         // CHECK: bufferization.materialize_in_destination
-        // CHECK-SAME: restrict writable
-        """)
+        // CHECK-NOT: restrict writable
+        """, after="tensor-return-to-out-param")
 
 
 if __name__ == "__main__":

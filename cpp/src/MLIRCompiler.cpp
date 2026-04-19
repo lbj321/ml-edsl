@@ -65,36 +65,28 @@ void MLIRCompiler::createFunction(
     mlir::Type returnType) {
   resetFunctionState();
 
-  // Convert parameter types: tensor params are always pre-converted to memref
-  // in the function signature, keeping a pure-memref boundary for all
-  // functions. to_tensor is inserted at the top of the body so the function
-  // body still operates on tensors.
+  // Build parameter types directly — tensor params stay as tensor types.
+  // bufferize-function-boundaries will convert them to memref at the ABI
+  // boundary during lowering.
   std::vector<mlir::Type> paramTypes;
   for (const auto &[paramName, typeSpec] : params) {
-    mlir::Type t = builder->convertType(typeSpec);
-    if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(t))
-      t = mlir::MemRefType::get(tensorType.getShape(),
-                                tensorType.getElementType());
-    paramTypes.push_back(t);
+    paramTypes.push_back(builder->convertType(typeSpec));
   }
 
-  // Aggregate return: append a hidden memref out-param and use void return.
+  // Aggregate return: append a hidden out-param and use void return.
   // Python allocates the output buffer and passes it as a memref descriptor.
-  const bool aggregateReturn = mlir::isa<mlir::MemRefType>(returnType) ||
-                               mlir::isa<mlir::RankedTensorType>(returnType);
+  // Tensor returns stay as explicit tensor return values — buffer-results-to-out-params
+  // converts them to out-params after bufferization, appending at the same position.
+  const bool memrefReturn = mlir::isa<mlir::MemRefType>(returnType);
+  const bool tensorReturn = mlir::isa<mlir::RankedTensorType>(returnType);
 
-  mlir::Type outParamType = returnType;
-  if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(returnType)) {
-    outParamType = mlir::MemRefType::get(tensorType.getShape(),
-                                         tensorType.getElementType());
-  }
-  if (aggregateReturn) {
-    paramTypes.push_back(outParamType);
+  if (memrefReturn) {
+    paramTypes.push_back(returnType);
   }
 
   auto funcType = opBuilder->getFunctionType(
       paramTypes,
-      aggregateReturn ? mlir::TypeRange{} : mlir::TypeRange{returnType});
+      memrefReturn ? mlir::TypeRange{} : mlir::TypeRange{returnType});
   currentFunction = opBuilder->create<mlir::func::FuncOp>(
       opBuilder->getUnknownLoc(), name, funcType);
 
@@ -103,27 +95,17 @@ void MLIRCompiler::createFunction(
   auto *entryBlock = currentFunction.addEntryBlock();
   opBuilder->setInsertionPointToStart(entryBlock);
 
-  // Map parameter names to block arguments.
-  // Tensor params were converted to memref in the signature — insert to_tensor
-  // so the body still operates on tensors.
-  auto loc = opBuilder->getUnknownLoc();
+  // Map parameter names to block arguments directly — params are already the
+  // right types (tensor or memref), no casts needed.
   for (size_t i = 0; i < params.size(); i++) {
-    mlir::Value arg = entryBlock->getArgument(i);
-    mlir::Type originalType = builder->convertType(params[i].second);
-    if (auto tensorType =
-            mlir::dyn_cast<mlir::RankedTensorType>(originalType)) {
-      auto toTensor = opBuilder->create<mlir::bufferization::ToTensorOp>(
-          loc, tensorType, arg, /*restrict=*/true, /*writable=*/true);
-      parameterMap[params[i].first] = toTensor.getResult();
-    } else {
-      parameterMap[params[i].first] = arg;
-    }
+    parameterMap[params[i].first] = entryBlock->getArgument(i);
   }
 
-  // Store the out-param block arg (memref) for use in finalizeFunction.
-  if (aggregateReturn) {
+  // Store the out-param block arg for use in finalizeFunction (memref path only).
+  if (memrefReturn) {
     currentOutParam = entryBlock->getArgument(params.size());
   }
+  (void)tensorReturn;
 }
 
 void MLIRCompiler::finalizeFunction(const std::string &name,
@@ -135,14 +117,8 @@ void MLIRCompiler::finalizeFunction(const std::string &name,
   // Aggregate return: write result into the caller-allocated out-param.
   if (currentOutParam) {
     auto loc = opBuilder->getUnknownLoc();
-    if (mlir::isa<mlir::RankedTensorType>(result.getType())) {
-      // Tensor result: materialize into the Python-owned memref out-param.
-      // restrict+writable: the out-param is the sole alias and is writable,
-      // enabling empty-tensor-elimination to skip the memcpy when possible.
-      opBuilder->create<mlir::bufferization::MaterializeInDestinationOp>(
-          loc, /*result=*/mlir::Type{}, result, currentOutParam,
-          /*restrict=*/true, /*writable=*/true);
-    } else if (mlir::isa<mlir::MemRefType>(result.getType())) {
+    // currentOutParam is only set for memref returns.
+    if (mlir::isa<mlir::MemRefType>(result.getType())) {
       // MemRef result: copy only when result is not already the out-param.
       if (result != currentOutParam)
         opBuilder->create<mlir::memref::CopyOp>(loc, result, currentOutParam);
@@ -151,6 +127,10 @@ void MLIRCompiler::finalizeFunction(const std::string &name,
           "finalizeFunction: out-param set for non-aggregate type");
     }
     opBuilder->create<mlir::func::ReturnOp>(loc);
+  } else if (mlir::isa<mlir::RankedTensorType>(result.getType())) {
+    // Tensor result: return directly. buffer-results-to-out-params converts
+    // this to an out-param after bufferization, preserving the Python ABI.
+    opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(), result);
   } else if (mlir::isa<mlir::IntegerType, mlir::FloatType>(result.getType())) {
     // Scalar return — normal path.
     opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(), result);
@@ -238,10 +218,20 @@ void MLIRCompiler::ensureFinalized() {
   const bool saveIR = std::getenv("SAVE_IR") != nullptr;
   const bool doCapture = saveIR || captureSnapshots;
   MLIRLowering lowering(mlirContext.get(), /*captureSnapshots=*/doCapture);
-  auto lowered = lowering.lowerToLLVMModule(*module);
-  if (doCapture) {
-    loweringSnapshots = lowering.takeSnapshots();
+
+  LoweredModule lowered;
+  try {
+    lowered = lowering.lowerToLLVMModule(*module);
+  } catch (...) {
+    // Extract failure state before lowering is destroyed on stack unwind
+    failureIR_ = lowering.takeFailureIR();
+    if (doCapture)
+      loweringSnapshots = lowering.takeSnapshots();
+    throw;
   }
+
+  if (doCapture)
+    loweringSnapshots = lowering.takeSnapshots();
 
   // JIT compile with function names to look up
   std::vector<std::string> names(compiledFunctions.begin(),
@@ -276,8 +266,9 @@ void MLIRCompiler::clear() {
   // Clear executor
   executor->clear();
 
-  // Clear lowering snapshots
+  // Clear lowering snapshots and failure IR
   loweringSnapshots.clear();
+  failureIR_.clear();
 
   state = State::Building;
 }
@@ -297,6 +288,27 @@ std::string MLIRCompiler::getModuleIR() {
   llvm::raw_string_ostream os(result);
   module->print(os);
   return result;
+}
+
+// ==================== TESTING UTILITIES ====================
+
+void MLIRCompiler::injectTestFailure() {
+  auto f64Type = mlir::Float64Type::get(mlirContext.get());
+  auto funcType =
+      mlir::FunctionType::get(mlirContext.get(), {}, {f64Type});
+
+  mlir::OpBuilder::InsertionGuard guard(*opBuilder);
+  opBuilder->setInsertionPointToEnd(module->getBody());
+
+  auto func = opBuilder->create<mlir::func::FuncOp>(
+      opBuilder->getUnknownLoc(), "__test_failure_inject__", funcType);
+  auto *block = func.addEntryBlock();
+  opBuilder->setInsertionPointToStart(block);
+  // Return i32 where f64 is expected — type mismatch triggers verifier failure
+  auto zero = opBuilder->create<mlir::arith::ConstantIntOp>(
+      opBuilder->getUnknownLoc(), 0, 32);
+  opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(),
+                                          zero.getResult());
 }
 
 // ==================== CONFIGURATION ====================

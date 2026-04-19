@@ -49,6 +49,16 @@ class OperatorMixin:
         from ..ops import div
         return div(other, self)
 
+    def __matmul__(self, other):
+        """Overload @ operator: A @ B (matrix multiply)"""
+        from ..ops.linalg import matmul
+        return matmul(self, other)
+
+    def __rmatmul__(self, other):
+        """Reverse matmul: B @ A"""
+        from ..ops.linalg import matmul
+        return matmul(other, self)
+
     # Comparison operators
     def __lt__(self, other):
         """Overload < operator: x < y"""

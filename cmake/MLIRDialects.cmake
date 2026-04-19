@@ -14,6 +14,7 @@ set(MLIR_ARITH_LIBS
     MLIRArithDialect
     MLIRArithUtils
     MLIRArithToLLVM
+    MLIRArithValueBoundsOpInterfaceImpl
 )
 
 # Function dialect libraries  
@@ -43,6 +44,7 @@ set(MLIR_SCF_LIBS
 set(MLIR_MEMORY_LIBS
     MLIRMemRefDialect
     MLIRMemRefToLLVM
+    MLIRMemRefTransforms
     MLIRTensorDialect
     MLIRLinalgDialect
     MLIRLinalgTransforms
@@ -50,6 +52,15 @@ set(MLIR_MEMORY_LIBS
     MLIRBufferizationTransforms
     MLIRTensorTransforms
     MLIRArithTransforms
+)
+
+# Vector dialect and lowering (Phase 9 - vectorization)
+set(MLIR_VECTOR_LIBS
+    MLIRVectorDialect
+    MLIRVectorTransforms
+    MLIRVectorToLLVMPass
+    MLIRVectorToSCF
+    MLIRUBToLLVM
 )
 
 # Combine all current libraries
@@ -60,6 +71,8 @@ set(MLIR_CURRENT_LIBS
     ${MLIR_LLVM_LIBS}
     ${MLIR_SCF_LIBS}
     ${MLIR_MEMORY_LIBS}
+    ${MLIR_VECTOR_LIBS}
+    MLIRAffineToStandard
     MLIRReconcileUnrealizedCasts
 )
 

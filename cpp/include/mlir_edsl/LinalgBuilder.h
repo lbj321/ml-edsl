@@ -30,6 +30,16 @@ public:
   /// Reduction over a 1D tensor: linalg.reduce ins(%input) outs(%acc) → returns scalar.
   mlir::Value buildReduce(const mlir_edsl::LinalgReduce &node);
 
+  /// Element-wise binary op on tensors with optional broadcasting.
+  /// Handles NONE (same-shape), SCALAR_*, and TENSOR_BIAS_* broadcast modes.
+  mlir::Value buildBinaryOp(const mlir_edsl::LinalgBinaryOp &node,
+                             mlir::Value outParam = {});
+
+  /// Known activation function as linalg.generic with arith ops.
+  /// RELU: arith.maximumf(x, 0). LEAKY_RELU: arith.select(x > 0, x, alpha*x).
+  mlir::Value buildActivation(const mlir_edsl::LinalgActivation &node,
+                              mlir::Value outParam = {});
+
 private:
   mlir::OpBuilder &builder;
   mlir::MLIRContext *context;

@@ -38,6 +38,10 @@ PYBIND11_MODULE(_mlir_backend, m) {
       .def("enable_snapshot_capture",
            &mlir_edsl::MLIRCompiler::enableSnapshotCapture,
            "Enable IR snapshot capture for lowering passes")
+      .def("get_failure_ir", &mlir_edsl::MLIRCompiler::getFailureIR,
+           "IR at lowering failure point; empty if no failure since last clear()")
+      .def("inject_test_failure", &mlir_edsl::MLIRCompiler::injectTestFailure,
+           "Testing only: injects a type-mismatched function to trigger verifier failure")
       .def(
           "set_optimization_level",
           [](mlir_edsl::MLIRCompiler &self, int level) {

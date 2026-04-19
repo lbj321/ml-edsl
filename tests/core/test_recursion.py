@@ -11,7 +11,7 @@ Recursion uses the `call()` function with explicit function name references.
 
 import pytest
 from mlir_edsl import ml_function, add, sub, mul, eq, le, If, call
-from mlir_edsl import i32, i1
+from mlir_edsl import i32
 
 
 # ==================== BASIC RECURSION ====================
@@ -115,25 +115,6 @@ class TestRecursionSymbolResolution:
 
         result = nested_fib(6)
         assert result == 8  # Fibonacci(6) = 8
-
-
-# ==================== MUTUAL RECURSION ====================
-
-class TestMutualRecursion:
-    """Test mutually recursive functions calling each other"""
-
-    def test_mutual_recursion_even_odd(self):
-        """Test mutually recursive is_even/is_odd functions"""
-        pytest.skip("Mutual recursion requires multiple function definitions in single compilation")
-
-        # Future implementation pattern:
-        # @ml_function
-        # def is_even(n: int) -> bool:
-        #     return If(eq(n, 0), True, call("is_odd", [sub(n, 1)], i1))
-        #
-        # @ml_function
-        # def is_odd(n: int) -> bool:
-        #     return If(eq(n, 0), False, call("is_even", [sub(n, 1)], i1))
 
 
 # ==================== MLIR/LLVM OUTPUT VALIDATION ====================

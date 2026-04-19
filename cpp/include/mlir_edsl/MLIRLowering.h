@@ -37,11 +37,16 @@ public:
   // Move captured snapshots out (only populated when captureSnapshots=true)
   SnapshotList takeSnapshots() { return std::move(snapshots); }
 
+  // Failure-path IR — always populated on pipeline failure, regardless of captureSnapshots
+  std::string takeFailureIR() { return std::move(failureIR_); }
+  bool hadFailure() const { return !failureIR_.empty(); }
+
 private:
   std::unique_ptr<mlir::MLIRContext> context;
   mlir::PassManager passManager;
   bool snapshotsEnabled = false;
   SnapshotList snapshots;
+  std::string failureIR_;
 
   // Helper methods
   void registerRequiredDialects();

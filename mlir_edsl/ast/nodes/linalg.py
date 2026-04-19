@@ -1,4 +1,4 @@
-"""Linalg AST nodes: LinalgDot, LinalgMatmul, LinalgMapElement, LinalgMap, LinalgReduce"""
+"""Linalg AST nodes: LinalgDot, LinalgMatmul, LinalgBinaryOp, LinalgMapElement, LinalgMap, LinalgReduce"""
 
 from ..base import Value
 from ...types import Type, ScalarType, ArrayType, TensorType
@@ -138,6 +138,125 @@ class LinalgMatmul(Value):
         return pb_node
 
 
+class LinalgBinaryOp(Value):
+    """Element-wise binary op on tensors with optional broadcasting.
+
+    Dispatch rules (validated at AST construction time):
+    - Same-shape tensors          → NONE
+    - tensor op scalar            → SCALAR_RIGHT
+    - scalar op tensor            → SCALAR_LEFT
+    - Tensor[M,N] op Tensor[N]   → TENSOR_BIAS_RIGHT  (broadcast bias over rows)
+    - Tensor[N]   op Tensor[M,N] → TENSOR_BIAS_LEFT
+
+    Example:
+        result = matmul(X, W) + b   # Tensor[M,N] + Tensor[N] → TENSOR_BIAS_RIGHT
+        result = x * 2.0            # Tensor[...] * scalar    → SCALAR_RIGHT
+        result = a + b              # Tensor[M,N] + Tensor[M,N] → NONE
+    """
+
+    def __init__(self, op: int, lhs: Value, rhs: Value):
+        super().__init__()
+        self.op = op
+        self.lhs = lhs
+        self.rhs = rhs
+        self._validate()
+
+    def _validate(self):
+        """Infer broadcast mode and output type."""
+        lhs_type = self.lhs.infer_type()
+        rhs_type = self.rhs.infer_type()
+        lhs_is_tensor = isinstance(lhs_type, TensorType)
+        rhs_is_tensor = isinstance(rhs_type, TensorType)
+        lhs_is_scalar = isinstance(lhs_type, ScalarType)
+        rhs_is_scalar = isinstance(rhs_type, ScalarType)
+
+        if lhs_is_tensor and rhs_is_tensor:
+            if lhs_type.shape == rhs_type.shape:
+                # Same shape: element-wise
+                if lhs_type.element_type != rhs_type.element_type:
+                    raise TypeError(
+                        f"LinalgBinaryOp: element types must match, "
+                        f"got {lhs_type.element_type} and {rhs_type.element_type}"
+                    )
+                self._broadcast_mode = ast_pb2.NONE
+                self._out_type = lhs_type
+            elif lhs_type.ndim == 2 and rhs_type.ndim == 1:
+                # [M, N] op [N]: bias broadcast
+                M, N_lhs = lhs_type.shape
+                (N_rhs,) = rhs_type.shape
+                if N_lhs != -1 and N_rhs != -1 and N_lhs != N_rhs:
+                    raise TypeError(
+                        f"LinalgBinaryOp TENSOR_BIAS_RIGHT: trailing dims must match, "
+                        f"got {lhs_type.shape} and {rhs_type.shape}"
+                    )
+                if lhs_type.element_type != rhs_type.element_type:
+                    raise TypeError(
+                        f"LinalgBinaryOp: element types must match, "
+                        f"got {lhs_type.element_type} and {rhs_type.element_type}"
+                    )
+                self._broadcast_mode = ast_pb2.TENSOR_BIAS_RIGHT
+                self._out_type = lhs_type
+            elif lhs_type.ndim == 1 and rhs_type.ndim == 2:
+                # [N] op [M, N]: bias broadcast (flipped)
+                (N_lhs,) = lhs_type.shape
+                M, N_rhs = rhs_type.shape
+                if N_lhs != -1 and N_rhs != -1 and N_lhs != N_rhs:
+                    raise TypeError(
+                        f"LinalgBinaryOp TENSOR_BIAS_LEFT: trailing dims must match, "
+                        f"got {lhs_type.shape} and {rhs_type.shape}"
+                    )
+                if lhs_type.element_type != rhs_type.element_type:
+                    raise TypeError(
+                        f"LinalgBinaryOp: element types must match, "
+                        f"got {lhs_type.element_type} and {rhs_type.element_type}"
+                    )
+                self._broadcast_mode = ast_pb2.TENSOR_BIAS_LEFT
+                self._out_type = rhs_type
+            else:
+                raise TypeError(
+                    f"LinalgBinaryOp: unsupported tensor shapes "
+                    f"{lhs_type.shape} and {rhs_type.shape}. "
+                    f"Supported: same shape, or [M,N]+[N] bias broadcast."
+                )
+        elif lhs_is_tensor and rhs_is_scalar:
+            if lhs_type.element_type != rhs_type:
+                raise TypeError(
+                    f"LinalgBinaryOp: scalar type {rhs_type} must match "
+                    f"tensor element type {lhs_type.element_type}"
+                )
+            self._broadcast_mode = ast_pb2.SCALAR_RIGHT
+            self._out_type = lhs_type
+        elif lhs_is_scalar and rhs_is_tensor:
+            if rhs_type.element_type != lhs_type:
+                raise TypeError(
+                    f"LinalgBinaryOp: scalar type {lhs_type} must match "
+                    f"tensor element type {rhs_type.element_type}"
+                )
+            self._broadcast_mode = ast_pb2.SCALAR_LEFT
+            self._out_type = rhs_type
+        else:
+            raise TypeError(
+                f"LinalgBinaryOp requires at least one tensor operand, "
+                f"got {lhs_type} and {rhs_type}"
+            )
+
+    def infer_type(self) -> Type:
+        """Returns the output TensorType."""
+        return self._out_type
+
+    def get_children(self) -> list['Value']:
+        return [self.lhs, self.rhs]
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.linalg.binary_op.lhs.CopyFrom(self.lhs.to_proto(context))
+        pb_node.linalg.binary_op.rhs.CopyFrom(self.rhs.to_proto(context))
+        pb_node.linalg.binary_op.op_type = self.op
+        pb_node.linalg.binary_op.broadcast = self._broadcast_mode
+        pb_node.linalg.binary_op.out_type.CopyFrom(self._out_type.to_proto())
+        return pb_node
+
+
 class LinalgMapElement(Value):
     """Placeholder for the linalg.map body block argument.
 
@@ -178,9 +297,9 @@ class LinalgMap(Value):
         super().__init__()
         self.input = input
         input_type = input.infer_type()
-        if not isinstance(input_type, TensorType) or input_type.ndim != 1:
+        if not isinstance(input_type, TensorType):
             raise TypeError(
-                f"tensor_map: input must be a 1D tensor, got {input_type}"
+                f"tensor_map: input must be a tensor, got {input_type}"
             )
         self._out_type = input_type
         self._element_placeholder = LinalgMapElement(input_type.element_type)
@@ -206,6 +325,41 @@ class LinalgMap(Value):
         pb_node.linalg.map.body.CopyFrom(self.body.to_proto(context))
         pb_node.linalg.map.element_node_id = self._element_placeholder.node_id
         pb_node.linalg.map.out_type.CopyFrom(self._out_type.to_proto())
+        return pb_node
+
+
+class LinalgActivation(Value):
+    """Known activation function emitted as linalg.generic with arith ops.
+
+    Uses arith.maximumf for relu and arith.select for leaky_relu, enabling
+    elementwise fusion and vectorization (no scf.if in the linalg body).
+    """
+
+    def __init__(self, input: Value, act_type: int, alpha: float = 0.0):
+        super().__init__()
+        self.input = input
+        self.act_type = act_type
+        self.alpha = alpha
+        input_type = input.infer_type()
+        if not isinstance(input_type, TensorType):
+            raise TypeError(
+                f"activation: input must be a tensor, got {input_type}"
+            )
+        self._out_type = input_type
+
+    def infer_type(self) -> Type:
+        """Returns the same tensor type as the input."""
+        return self._out_type
+
+    def get_children(self) -> list['Value']:
+        return [self.input]
+
+    def _serialize_node(self, context: 'SerializationContext'):
+        pb_node = ast_pb2.ASTNode()
+        pb_node.linalg.activation.input.CopyFrom(self.input.to_proto(context))
+        pb_node.linalg.activation.act_type = self.act_type
+        pb_node.linalg.activation.alpha = self.alpha
+        pb_node.linalg.activation.out_type.CopyFrom(self._out_type.to_proto())
         return pb_node
 
 

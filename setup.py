@@ -11,7 +11,7 @@ setup(
     install_requires=[
         "pybind11>=2.10.0",
         "numpy>=1.20.0",
-        "protobuf>=4.21.0",  # Must match CMake-built protobuf version
+        "protobuf>=3.19.0,<4.0.0",  # ast_pb2.py generated code requires protobuf 3.x
     ],
     extras_require={
         "dev": [
