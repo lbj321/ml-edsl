@@ -671,8 +671,6 @@ void MLIRLowering::registerGPUDialects(mlir::MLIRContext *ctx) {
 // After this runs, gpu.launch_func ops are present and can be analyzed.
 void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &pm) {
   pm.addPass(mlir::createLinalgElementwiseOpFusionPass());
-  pm.addNestedPass<mlir::func::FuncOp>(
-      std::make_unique<TensorReturnToOutParamPass>());
 
   mlir::bufferization::OneShotBufferizePassOptions bufOpts;
   bufOpts.bufferizeFunctionBoundaries = true;

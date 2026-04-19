@@ -26,13 +26,6 @@ def _cuda_available() -> bool:
 
 pytestmark = [
     pytest.mark.skipif(not _cuda_available(), reason="CUDA not available"),
-    # TODO: GPU execution crashes with SIGABRT (core dump) inside executeGPUFunction.
-    # Crash origin is inside C++ — likely one of:
-    #   1. MLIR assertion in lowerToGPUModule (gpu-map-parallel-loops precondition)
-    #   2. cuModuleLoadData aborting on invalid PTX
-    #   3. cuLaunchKernel with wrong kernel argument count/layout
-    # Marked xfail(strict=False) so the suite runs without crashing while we debug.
-    pytest.mark.xfail(strict=False, reason="GPU execution crashes (under investigation)"),
 ]
 
 
