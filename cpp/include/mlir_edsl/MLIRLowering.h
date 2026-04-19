@@ -17,6 +17,11 @@ struct LoweredModule {
   std::unique_ptr<llvm::LLVMContext> context;
 };
 
+struct GPULoweredModule {
+  std::string ptxImage;       // PTX source; CUDA driver JIT-compiles at load time
+  std::string kernelFuncName; // mangled entry name inside PTX
+};
+
 class MLIRLowering {
 public:
   using SnapshotList = std::vector<std::pair<std::string, std::string>>;
@@ -30,6 +35,9 @@ public:
 
   // Lower MLIR module to LLVM IR string (convenience, calls lowerToLLVMModule)
   std::string lowerToLLVMIR(mlir::ModuleOp module);
+
+  // Lower MLIR module to PTX via GPU dialect pipeline (CUDA path)
+  GPULoweredModule lowerToGPUModule(mlir::ModuleOp module);
 
   // Get the pass manager for advanced usage
   mlir::PassManager &getPassManager() { return passManager; }
@@ -54,6 +62,11 @@ private:
   void setupLoweringPipeline();
   void addConversionPasses();
   bool runLoweringPipeline(mlir::ModuleOp module);
+
+  // GPU-path helpers
+  void registerGPUDialects(mlir::MLIRContext *ctx);
+  void addGPUConversionPasses(mlir::PassManager &pm);
+  bool runGPULoweringPipeline(mlir::ModuleOp module, mlir::PassManager &pm);
 };
 
 } // namespace mlir_edsl
