@@ -64,7 +64,7 @@ This project follows **user-driven implementation**. Claude should guide and adv
 - **Python Frontend**: `mlir_edsl/` - AST-based frontend with strict typing
 - **Execution**: `MLIRExecutor` - JIT compilation with optimization levels (O0/O2/O3)
 - **Testing**: `tests/` - Comprehensive pytest suite with conftest fixtures and FileCheck IR tests
-- **Build System**: CMake with LLVM/MLIR 18+ dependencies
+- **Build System**: CMake with LLVM/MLIR 21 dependencies
 
 ### Code Organization
 - `cpp/include/mlir_edsl/` - C++ headers
