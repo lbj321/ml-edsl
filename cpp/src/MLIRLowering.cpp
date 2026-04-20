@@ -492,6 +492,7 @@ void MLIRLowering::setupLoweringPipeline() {
     passManager.addInstrumentation(
         std::make_unique<IRSnapshotInstrumentation>(&snapshots));
   }
+  addConversionPasses();
 }
 
 void MLIRLowering::addConversionPasses() {
@@ -593,8 +594,6 @@ void MLIRLowering::addConversionPasses() {
 }
 
 bool MLIRLowering::runLoweringPipeline(mlir::ModuleOp module) {
-  passManager.clear();
-  addConversionPasses();
   if (std::getenv("TRACE_PASSES")) {
     passManager.getContext()->disableMultithreading();
     passManager.enableIRPrinting(
