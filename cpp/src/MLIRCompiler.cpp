@@ -432,6 +432,8 @@ void MLIRCompiler::executeGPUFunction(
       case GPUKernelArg::Kind::OutputMemRef:
         pushMemRef(dOutput, arg.shape, params, ptrStore, intStore);
         break;
+      default:
+        llvm::report_fatal_error("Unhandled GPUKernelArg::Kind");
       }
     }
 
