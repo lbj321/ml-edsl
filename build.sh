@@ -11,7 +11,7 @@ CLEAN=false
 VERBOSE=false
 JOBS=$(nproc 2>/dev/null || echo 4)
 COMPONENT=""
-CUDA=false
+CUDA=true
 
 # Help function
 show_help() {
@@ -26,7 +26,7 @@ Options:
     --verbose, -v              Enable verbose build output
     --jobs, -j N               Number of parallel build jobs (default: $JOBS)
     --component COMP           Build specific component (core, executor, bindings)
-    --cuda                     Enable CUDA GPU execution backend
+    --no-cuda                  Disable CUDA GPU execution backend
     --help, -h                 Show this help message
 
 Environment Variables:
@@ -64,8 +64,8 @@ while [[ $# -gt 0 ]]; do
             COMPONENT="$2"
             shift 2
             ;;
-        --cuda)
-            CUDA=true
+        --no-cuda)
+            CUDA=false
             shift
             ;;
         --help|-h)
