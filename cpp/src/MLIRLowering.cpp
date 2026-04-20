@@ -784,8 +784,7 @@ void MLIRLowering::analyzeKernelLaunches(mlir::ModuleOp module,
         ka.kind   = GPUKernelArg::Kind::F32;
         ka.f32Val = val;
       } else {
-        // Unrecognized type — skip (should not happen for well-formed linalg IR)
-        continue;
+        llvm::report_fatal_error("Unhandled kernel operand type in GPU lowering");
       }
       kernel.args.push_back(ka);
     }
