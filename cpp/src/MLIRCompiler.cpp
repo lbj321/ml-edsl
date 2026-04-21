@@ -296,6 +296,12 @@ void MLIRCompiler::clear() {
   // Clear executor
   executor->clear();
 
+#ifdef MLIR_EDSL_CUDA_ENABLED
+  gpuModules_.clear();
+  if (gpuExecutor_)
+    gpuExecutor_->clear();
+#endif
+
   // Clear lowering snapshots and failure IR
   loweringSnapshots.clear();
   failureIR_.clear();
