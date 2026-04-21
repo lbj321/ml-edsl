@@ -63,6 +63,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/SCF/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/SCF/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tensor/IR/ValueBoundsOpInterfaceImpl.h"
@@ -431,6 +432,54 @@ struct LinalgMatmulTilingPass
   }
 };
 
+// Tiles linalg.matmul for GPU using scf.forall so outer tile loops carry GPU
+// block mapping. After createForallToParallelLoopPass converts scf.forall →
+// scf.parallel, gpu-map-parallel-loops sees 4 nested parallel levels:
+//   (m_block, n_block) → blockIdx,  (m, n) → threadIdx (32x32 = 1024 threads).
+// When CPU multicore support is added, this pass and LinalgMatmulTilingPass
+// can merge using scf.forall with target-specific mapping attributes.
+#ifdef MLIR_EDSL_CUDA_ENABLED
+struct LinalgGPUMatmulTilingPass
+    : public mlir::PassWrapper<LinalgGPUMatmulTilingPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgGPUMatmulTilingPass)
+  llvm::StringRef getArgument() const override {
+    return "linalg-tile-matmul-gpu";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Tile linalg.matmul to 32x32 scf.forall blocks for GPU mapping";
+  }
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
+    func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
+
+    for (mlir::linalg::MatmulOp op : matmuls) {
+      // M=32, N=32 → 1024 threads/block (CUDA max). K=0 = untiled;
+      // each thread iterates the full K reduction independently.
+      llvm::SmallVector<mlir::OpFoldResult> sizes =
+          mlir::getAsIndexOpFoldResult(op->getContext(), {32, 32, 0});
+      mlir::scf::SCFTilingOptions opts;
+      opts.setTileSizes(sizes);
+      opts.setLoopType(mlir::scf::SCFTilingOptions::LoopType::ForallOp);
+      rewriter.setInsertionPoint(op);
+      auto result = mlir::scf::tileUsingSCF(
+          rewriter, llvm::cast<mlir::TilingInterface>(op.getOperation()), opts);
+      if (mlir::failed(result)) {
+        op->emitWarning("linalg-tile-matmul-gpu: tiling failed, skipping op");
+        continue;
+      }
+      if (op->getNumResults() == 0)
+        rewriter.eraseOp(op);
+      else
+        rewriter.replaceOp(op, result->mergeResult.replacements);
+    }
+  }
+};
+#endif // MLIR_EDSL_CUDA_ENABLED
+
 } // anonymous namespace
 
 namespace mlir_edsl {
@@ -681,6 +730,15 @@ void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &pm) {
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::bufferization::createBufferDeallocationSimplificationPass());
   pm.addPass(mlir::bufferization::createLowerDeallocationsPass());
+
+  // Tile matmul into 32x32 scf.forall blocks before parallel loop conversion.
+  // Outer tile loops (M/32, N/32) → blockIdx; inner 32x32 → threadIdx (1024 max).
+  pm.addNestedPass<mlir::func::FuncOp>(
+      std::make_unique<LinalgGPUMatmulTilingPass>());
+  pm.addPass(mlir::createCanonicalizerPass());
+  // Convert scf.forall (tile loops) → scf.parallel so gpu-map-parallel-loops
+  // can map them to blockIdx alongside the inner thread-level parallel loops.
+  pm.addPass(mlir::createForallToParallelLoopPass());
 
   pm.addPass(mlir::createConvertLinalgToParallelLoopsPass());
   // GpuMapParallelLoopsPass is OperationPass<func::FuncOp> — must be nested
