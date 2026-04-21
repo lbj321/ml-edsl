@@ -26,6 +26,11 @@ void MLIRExecutor::initialize() {
   llvm::InitializeNativeTargetAsmPrinter();
   llvm::InitializeNativeTargetAsmParser();
 
+  // OpenMP runtime symbols (__kmpc_fork_call etc.) are resolved lazily at
+  // JIT link time via the process symbol table — no explicit load needed.
+  // Loading libomp eagerly here causes OMP thread initialization before CUDA
+  // is ready, resulting in SIGABRT when GPU tests follow CPU multicore tests.
+
   auto jitOrError = llvm::orc::LLJITBuilder().create();
   if (!jitOrError) {
     throw std::runtime_error("Failed to create LLJIT");
