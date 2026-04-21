@@ -18,19 +18,24 @@ if _DUMP_AST:
 class CompiledFunction:
     """A compiled function ready for execution."""
 
-    def __init__(self, name: str, signature: FunctionSignature, backend):
+    def __init__(self, name: str, signature: FunctionSignature, backend,
+                 target: str = "cpu"):
         self.name = name
         self.signature = signature
         self._backend = backend
+        self._target = target
 
     def execute(self, args: tuple, kwargs: dict) -> Union[int, float, bool]:
         """Execute with runtime values."""
         self.signature.validate_runtime_args(args, kwargs)
         ordered_args = self.signature.order_args(args, kwargs)
+        if self._target == "gpu":
+            return self._backend.execute_gpu_function(self.name, *ordered_args)
         return self._backend.execute_function(self.name, *ordered_args)
 
 
-def compile_function(signature: FunctionSignature, result_ast: Value) -> CompiledFunction:
+def compile_function(signature: FunctionSignature, result_ast: Value,
+                     target: str = "cpu") -> CompiledFunction:
     """Compile a function AST to MLIR.
 
     Args:
@@ -59,6 +64,8 @@ def compile_function(signature: FunctionSignature, result_ast: Value) -> Compile
     if os.getenv("SAVE_IR"):
         backend._ast_dumps[signature.name] = result_ast.dump()
 
+    backend.set_target(target)
+
     # Compile to backend
     backend.compile_function_from_ast(
         signature.name,
@@ -67,7 +74,7 @@ def compile_function(signature: FunctionSignature, result_ast: Value) -> Compile
         result_ast
     )
 
-    return CompiledFunction(signature.name, signature, backend)
+    return CompiledFunction(signature.name, signature, backend, target=target)
 
 
 def _save_ast_dump(name: str, ast: Value) -> None:

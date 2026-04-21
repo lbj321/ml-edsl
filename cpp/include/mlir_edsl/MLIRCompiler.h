@@ -14,11 +14,13 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/Value.h"
+#include "mlir_edsl/MLIRLowering.h"
 
 namespace mlir_edsl {
 
 class MLIRBuilder;
 class MLIRExecutor;
+class MLIRGPUExecutor;
 class FunctionDef;
 class TypeSpec;
 
@@ -26,6 +28,7 @@ class MLIRCompiler {
 public:
   enum class State { Building, Finalized };
   enum class OptLevel { O0, O2, O3 };
+  enum class Target { CPU, GPU };
 
   MLIRCompiler();
   ~MLIRCompiler();
@@ -66,10 +69,22 @@ public:
   // ==================== CONFIGURATION ====================
   void setOptimizationLevel(OptLevel level);
   void enableSnapshotCapture() { captureSnapshots = true; }
+  void setTarget(Target t) { target_ = t; }
+  Target getTarget() const { return target_; }
+
+  // ==================== GPU EXECUTION ====================
+  // inputs: (host_ptr, shape) per argument. output: pre-allocated host buffer.
+  void executeGPUFunction(
+      const std::string &name,
+      const std::vector<std::pair<const void *, std::vector<int64_t>>> &inputs,
+      void *output,
+      const std::vector<int64_t> &outputShape,
+      size_t elementSize);
 
 private:
   State state;
   OptLevel optimizationLevel;
+  Target target_ = Target::CPU;
 
   // ==================== OWNED INFRASTRUCTURE ====================
   std::unique_ptr<mlir::MLIRContext> mlirContext;
@@ -89,6 +104,11 @@ private:
   // Destroyed before the data they reference (maps above, context above)
   std::unique_ptr<MLIRBuilder> builder;
   std::unique_ptr<MLIRExecutor> executor;
+
+#ifdef MLIR_EDSL_CUDA_ENABLED
+  std::unique_ptr<MLIRGPUExecutor> gpuExecutor_;
+  std::unordered_map<std::string, GPULoweredModule> gpuModules_;
+#endif
 
   // ==================== IR SNAPSHOTS ====================
   SnapshotList loweringSnapshots;

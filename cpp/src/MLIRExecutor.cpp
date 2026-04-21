@@ -131,4 +131,96 @@ void MLIRExecutor::optimizeModule(llvm::Module *module) {
   modulePM.run(*module, moduleAM);
 }
 
+
+#ifdef MLIR_EDSL_CUDA_ENABLED
+
+void MLIRGPUExecutor::checkCU(CUresult result, const char *msg) {
+  if (result != CUDA_SUCCESS) {
+    const char *errStr = nullptr;
+    cuGetErrorString(result, &errStr);
+    throw std::runtime_error(std::string(msg) + ": " +
+                             (errStr ? errStr : "unknown CUDA error"));
+  }
+}
+
+void MLIRGPUExecutor::initialize() {
+  if (initialized_)
+    return;
+  checkCU(cuInit(0), "cuInit");
+  checkCU(cuDeviceGet(&device_, 0), "cuDeviceGet");
+  checkCU(cuCtxCreate(&context_, 0, device_), "cuCtxCreate");
+  initialized_ = true;
+}
+
+MLIRGPUExecutor::MLIRGPUExecutor() = default;
+
+MLIRGPUExecutor::~MLIRGPUExecutor() {
+  for (auto &[name, mod] : cuModules_)
+    cuModuleUnload(mod);
+  if (context_)
+    cuCtxDestroy(context_);
+}
+
+void MLIRGPUExecutor::loadKernel(const std::string &moduleName,
+                                  const std::string &ptxImage,
+                                  const std::string &funcName) {
+  initialize();
+  if (cuModules_.find(moduleName) == cuModules_.end()) {
+    CUmodule cuMod;
+    checkCU(cuModuleLoadData(&cuMod, ptxImage.c_str()), "cuModuleLoadData");
+    cuModules_[moduleName] = cuMod;
+  }
+  CUfunction func;
+  checkCU(cuModuleGetFunction(&func, cuModules_[moduleName], funcName.c_str()),
+          "cuModuleGetFunction");
+  kernels_[moduleName] = func;
+}
+
+void MLIRGPUExecutor::launchKernel(const std::string &moduleName,
+                                    void **kernelArgs,
+                                    uint32_t gridX, uint32_t gridY,
+                                    uint32_t gridZ, uint32_t blockX,
+                                    uint32_t blockY, uint32_t blockZ) {
+  auto it = kernels_.find(moduleName);
+  if (it == kernels_.end())
+    throw std::runtime_error("GPU kernel not loaded: " + moduleName);
+
+  checkCU(cuLaunchKernel(it->second, gridX, gridY, gridZ, blockX, blockY,
+                         blockZ, 0, nullptr, kernelArgs, nullptr),
+          "cuLaunchKernel");
+  checkCU(cuCtxSynchronize(), "cuCtxSynchronize");
+}
+
+CUdeviceptr MLIRGPUExecutor::allocDevice(size_t bytes) {
+  initialize();
+  CUdeviceptr ptr;
+  checkCU(cuMemAlloc(&ptr, bytes), "cuMemAlloc");
+  return ptr;
+}
+
+void MLIRGPUExecutor::freeDevice(CUdeviceptr ptr) {
+  checkCU(cuMemFree(ptr), "cuMemFree");
+}
+
+void MLIRGPUExecutor::copyH2D(CUdeviceptr dst, const void *src, size_t bytes) {
+  checkCU(cuMemcpyHtoD(dst, src, bytes), "cuMemcpyHtoD");
+}
+
+void MLIRGPUExecutor::copyD2H(void *dst, CUdeviceptr src, size_t bytes) {
+  checkCU(cuMemcpyDtoH(dst, src, bytes), "cuMemcpyDtoH");
+}
+
+void MLIRGPUExecutor::synchronize() {
+  checkCU(cuCtxSynchronize(), "cuCtxSynchronize");
+}
+
+void MLIRGPUExecutor::clear() {
+  kernels_.clear();
+  for (auto &[name, mod] : cuModules_)
+    cuModuleUnload(mod);
+  cuModules_.clear();
+}
+
+#endif // MLIR_EDSL_CUDA_ENABLED
+
 } // namespace mlir_edsl

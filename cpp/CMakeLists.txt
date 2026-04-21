@@ -19,6 +19,10 @@ add_library(mlir_edsl_core STATIC
 if(NOT LLVM_ENABLE_RTTI)
     set_source_files_properties(src/MLIRLowering.cpp
         PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    if(MLIR_EDSL_CUDA)
+        set_source_files_properties(src/MLIRExecutor.cpp
+            PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    endif()
 endif()
 
 target_include_directories(mlir_edsl_core PUBLIC
@@ -56,6 +60,11 @@ target_link_mlir_libraries(mlir_edsl_executor)
 target_link_libraries(mlir_edsl_executor PUBLIC
     mlir_edsl_core
 )
+
+if(MLIR_EDSL_CUDA)
+    target_link_libraries(mlir_edsl_executor PUBLIC CUDA::cuda_driver)
+    target_include_directories(mlir_edsl_executor PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+endif()
 
 # Python bindings module
 add_library(_mlir_backend MODULE

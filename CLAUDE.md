@@ -54,6 +54,7 @@ This project follows **user-driven implementation**. Claude should guide and adv
 - **DRY principle** - Don't repeat yourself; extract common patterns
 - **Small, focused functions** - Aim for <50 lines where practical
 - **Consistent error handling** - Use exceptions in Python, LogicalResult in C++
+- **Explicit over implicit** - Always handle all cases in switch/if-elif chains; use a default error rather than silently falling through to an assumed case
 - **Comment the "why", not the "what"** - Code should be self-explanatory
 
 ## Architecture
@@ -63,7 +64,7 @@ This project follows **user-driven implementation**. Claude should guide and adv
 - **Python Frontend**: `mlir_edsl/` - AST-based frontend with strict typing
 - **Execution**: `MLIRExecutor` - JIT compilation with optimization levels (O0/O2/O3)
 - **Testing**: `tests/` - Comprehensive pytest suite with conftest fixtures and FileCheck IR tests
-- **Build System**: CMake with LLVM/MLIR 18+ dependencies
+- **Build System**: CMake with LLVM/MLIR 21 dependencies
 
 ### Code Organization
 - `cpp/include/mlir_edsl/` - C++ headers

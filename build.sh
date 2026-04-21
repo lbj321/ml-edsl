@@ -11,6 +11,7 @@ CLEAN=false
 VERBOSE=false
 JOBS=$(nproc 2>/dev/null || echo 4)
 COMPONENT=""
+CUDA=true
 
 # Help function
 show_help() {
@@ -25,6 +26,7 @@ Options:
     --verbose, -v              Enable verbose build output
     --jobs, -j N               Number of parallel build jobs (default: $JOBS)
     --component COMP           Build specific component (core, executor, bindings)
+    --no-cuda                  Disable CUDA GPU execution backend
     --help, -h                 Show this help message
 
 Environment Variables:
@@ -61,6 +63,10 @@ while [[ $# -gt 0 ]]; do
         --component)
             COMPONENT="$2"
             shift 2
+            ;;
+        --no-cuda)
+            CUDA=false
+            shift
             ;;
         --help|-h)
             show_help
@@ -123,6 +129,10 @@ CMAKE_ARGS=(
 
 if [ "$VERBOSE" = true ]; then
     CMAKE_ARGS+=(-DCMAKE_VERBOSE_MAKEFILE=ON)
+fi
+
+if [ "$CUDA" = true ]; then
+    CMAKE_ARGS+=(-DMLIR_EDSL_CUDA=ON)
 fi
 
 cmake "${CMAKE_ARGS[@]}" ..

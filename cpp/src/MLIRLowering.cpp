@@ -2,6 +2,36 @@
 
 #include <stdexcept>
 
+#ifdef MLIR_EDSL_CUDA_ENABLED
+#include "mlir/Conversion/ComplexToLLVM/ComplexToLLVM.h"
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
+#include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
+#include "mlir/Conversion/GPUCommon/GPUToLLVM.h"
+#include "mlir/Conversion/GPUToNVVM/GPUToNVVM.h"
+#include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
+#include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
+#include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
+#include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
+#include "mlir/Conversion/SCFToGPU/SCFToGPUPass.h"
+#include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/GPU/Transforms/Passes.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/Triple.h"
+#include <cstdlib>
+#include <fstream>
+#endif
+
 #include "mlir/IR/OwningOpRef.h"
 
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
@@ -33,6 +63,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/SCF/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/SCF/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tensor/IR/ValueBoundsOpInterfaceImpl.h"
@@ -401,6 +432,54 @@ struct LinalgMatmulTilingPass
   }
 };
 
+// Tiles linalg.matmul for GPU using scf.forall so outer tile loops carry GPU
+// block mapping. After createForallToParallelLoopPass converts scf.forall →
+// scf.parallel, gpu-map-parallel-loops sees 4 nested parallel levels:
+//   (m_block, n_block) → blockIdx,  (m, n) → threadIdx (32x32 = 1024 threads).
+// When CPU multicore support is added, this pass and LinalgMatmulTilingPass
+// can merge using scf.forall with target-specific mapping attributes.
+#ifdef MLIR_EDSL_CUDA_ENABLED
+struct LinalgGPUMatmulTilingPass
+    : public mlir::PassWrapper<LinalgGPUMatmulTilingPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgGPUMatmulTilingPass)
+  llvm::StringRef getArgument() const override {
+    return "linalg-tile-matmul-gpu";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Tile linalg.matmul to 32x32 scf.forall blocks for GPU mapping";
+  }
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
+    func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
+
+    for (mlir::linalg::MatmulOp op : matmuls) {
+      // M=32, N=32 → 1024 threads/block (CUDA max). K=0 = untiled;
+      // each thread iterates the full K reduction independently.
+      llvm::SmallVector<mlir::OpFoldResult> sizes =
+          mlir::getAsIndexOpFoldResult(op->getContext(), {32, 32, 0});
+      mlir::scf::SCFTilingOptions opts;
+      opts.setTileSizes(sizes);
+      opts.setLoopType(mlir::scf::SCFTilingOptions::LoopType::ForallOp);
+      rewriter.setInsertionPoint(op);
+      auto result = mlir::scf::tileUsingSCF(
+          rewriter, llvm::cast<mlir::TilingInterface>(op.getOperation()), opts);
+      if (mlir::failed(result)) {
+        op->emitWarning("linalg-tile-matmul-gpu: tiling failed, skipping op");
+        continue;
+      }
+      if (op->getNumResults() == 0)
+        rewriter.eraseOp(op);
+      else
+        rewriter.replaceOp(op, result->mergeResult.replacements);
+    }
+  }
+};
+#endif // MLIR_EDSL_CUDA_ENABLED
+
 } // anonymous namespace
 
 namespace mlir_edsl {
@@ -462,6 +541,7 @@ void MLIRLowering::setupLoweringPipeline() {
     passManager.addInstrumentation(
         std::make_unique<IRSnapshotInstrumentation>(&snapshots));
   }
+  addConversionPasses();
 }
 
 void MLIRLowering::addConversionPasses() {
@@ -563,8 +643,6 @@ void MLIRLowering::addConversionPasses() {
 }
 
 bool MLIRLowering::runLoweringPipeline(mlir::ModuleOp module) {
-  passManager.clear();
-  addConversionPasses();
   if (std::getenv("TRACE_PASSES")) {
     passManager.getContext()->disableMultithreading();
     passManager.enableIRPrinting(
@@ -609,5 +687,301 @@ std::string MLIRLowering::lowerToLLVMIR(mlir::ModuleOp module) {
   lowered.module->print(stream, nullptr);
   return result;
 }
+
+#ifdef MLIR_EDSL_CUDA_ENABLED
+
+void MLIRLowering::registerGPUDialects(mlir::MLIRContext *ctx) {
+  ctx->getOrLoadDialect<mlir::gpu::GPUDialect>();
+  ctx->getOrLoadDialect<mlir::NVVM::NVVMDialect>();
+  mlir::registerGPUDialectTranslation(*ctx);
+  mlir::registerNVVMDialectTranslation(*ctx);
+
+  // finalize-memref-to-llvm queries ConvertToLLVMPatternInterface on all loaded
+  // dialects. Vector dialect is loaded (via linalg setup) but its LLVM
+  // conversion extension isn't registered by default — register it here.
+  mlir::DialectRegistry reg;
+  mlir::arith::registerConvertArithToLLVMInterface(reg);
+  mlir::registerConvertComplexToLLVMInterface(reg);
+  mlir::cf::registerConvertControlFlowToLLVMInterface(reg);
+  mlir::registerConvertFuncToLLVMInterface(reg);
+  mlir::gpu::registerConvertGpuToLLVMInterface(reg);
+  mlir::index::registerConvertIndexToLLVMInterface(reg);
+  mlir::registerConvertMathToLLVMInterface(reg);
+  mlir::registerConvertMemRefToLLVMInterface(reg);
+  mlir::registerConvertNVVMToLLVMInterface(reg);
+  mlir::NVVM::registerConvertGpuToNVVMInterface(reg);
+  mlir::ub::registerConvertUBToLLVMInterface(reg);
+  mlir::vector::registerConvertVectorToLLVMInterface(reg);
+  ctx->appendDialectRegistry(reg);
+}
+
+// Phase 1: fuse + bufferize + linalg→parallel→gpu + kernel outlining.
+// After this runs, gpu.launch_func ops are present and can be analyzed.
+void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &pm) {
+  pm.addPass(mlir::createLinalgElementwiseOpFusionPass());
+
+  mlir::bufferization::OneShotBufferizePassOptions bufOpts;
+  bufOpts.bufferizeFunctionBoundaries = true;
+  bufOpts.functionBoundaryTypeConversion =
+      mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
+  pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
+
+  pm.addPass(mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::bufferization::createBufferDeallocationSimplificationPass());
+  pm.addPass(mlir::bufferization::createLowerDeallocationsPass());
+
+  // Tile matmul into 32x32 scf.forall blocks before parallel loop conversion.
+  // Outer tile loops (M/32, N/32) → blockIdx; inner 32x32 → threadIdx (1024 max).
+  pm.addNestedPass<mlir::func::FuncOp>(
+      std::make_unique<LinalgGPUMatmulTilingPass>());
+  pm.addPass(mlir::createCanonicalizerPass());
+  // Convert scf.forall (tile loops) → scf.parallel so gpu-map-parallel-loops
+  // can map them to blockIdx alongside the inner thread-level parallel loops.
+  pm.addPass(mlir::createForallToParallelLoopPass());
+
+  pm.addPass(mlir::createConvertLinalgToParallelLoopsPass());
+  // GpuMapParallelLoopsPass is OperationPass<func::FuncOp> — must be nested
+  pm.addNestedPass<mlir::func::FuncOp>(mlir::createGpuMapParallelLoopsPass());
+  pm.addPass(mlir::createConvertParallelLoopToGpuPass());
+  pm.addPass(mlir::createGpuKernelOutliningPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+}
+
+// Phase 2: NVVM lowering on the gpu.module, then host-level LLVM passes.
+// convert-gpu-to-nvvm must be nested inside gpu.module; finalize-memref-to-llvm
+// must run on the outer builtin.module (it recurses into gpu.module contents).
+void MLIRLowering::addGPUNVVMPasses(mlir::PassManager &pm) {
+  auto &gpuPm = pm.nest<mlir::gpu::GPUModuleOp>();
+  gpuPm.addPass(mlir::createConvertGpuOpsToNVVMOps());
+
+  pm.addPass(mlir::createSCFToControlFlowPass());
+  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
+  pm.addPass(mlir::createLowerAffinePass());
+  pm.addPass(mlir::createArithToLLVMConversionPass());
+  pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+  pm.addPass(mlir::createConvertControlFlowToLLVMPass());
+  pm.addPass(mlir::createReconcileUnrealizedCastsPass());
+}
+
+bool MLIRLowering::runGPULoweringPipeline(mlir::ModuleOp module,
+                                          mlir::PassManager &pm) {
+  pm.enableVerifier(true);
+  if (mlir::succeeded(pm.run(module)))
+    return true;
+  llvm::raw_string_ostream os(failureIR_);
+  module.print(os);
+  llvm::errs() << "\n[mlir_edsl] GPU lowering pipeline failed. IR at failure:\n"
+               << failureIR_ << "\n";
+  return false;
+}
+
+// Walk gpu.launch_func ops and classify each kernel argument so that
+// executeGPUFunction can pack cuLaunchKernel params without guessing the layout.
+void MLIRLowering::analyzeKernelLaunches(mlir::ModuleOp module,
+                                          GPULoweredModule &result) {
+  auto extractConstIndex = [](mlir::Value v) -> uint32_t {
+    mlir::Operation *defOp = v.getDefiningOp();
+    if (!defOp) return 1;
+    if (auto c = mlir::dyn_cast<mlir::arith::ConstantIndexOp>(defOp))
+      return (uint32_t)c.value();
+    if (auto c = mlir::dyn_cast<mlir::arith::ConstantIntOp>(defOp))
+      return (uint32_t)c.value();
+    return 1;
+  };
+
+  module.walk([&](mlir::gpu::LaunchFuncOp launchOp) {
+    GPUKernelLaunch kernel;
+    kernel.moduleName = launchOp.getKernelModuleName().getValue().str();
+    kernel.funcName   = launchOp.getKernelName().getValue().str();
+
+    auto grid  = launchOp.getGridSizeOperandValues();
+    auto block = launchOp.getBlockSizeOperandValues();
+    kernel.gridX  = extractConstIndex(grid.x);
+    kernel.gridY  = extractConstIndex(grid.y);
+    kernel.gridZ  = extractConstIndex(grid.z);
+    kernel.blockX = extractConstIndex(block.x);
+    kernel.blockY = extractConstIndex(block.y);
+    kernel.blockZ = extractConstIndex(block.z);
+
+    for (mlir::Value arg : launchOp.getKernelOperands()) {
+      mlir::Type ty = arg.getType();
+      GPUKernelArg ka;
+
+      if (auto memTy = mlir::dyn_cast<mlir::MemRefType>(ty)) {
+        auto shape = std::vector<int64_t>(memTy.getShape().begin(),
+                                          memTy.getShape().end());
+        if (mlir::isa<mlir::BlockArgument>(arg)) {
+          ka.kind     = GPUKernelArg::Kind::InputMemRef;
+          ka.paramIdx = mlir::cast<mlir::BlockArgument>(arg).getArgNumber();
+          ka.shape    = shape;
+        } else {
+          // Defined by memref.alloc — this is the function's output buffer.
+          ka.kind  = GPUKernelArg::Kind::OutputMemRef;
+          ka.shape = shape;
+        }
+      } else if (ty.isIndex() || ty.isInteger(64) || ty.isInteger(32)) {
+        int64_t val = 0;
+        mlir::Operation *defOp = arg.getDefiningOp();
+        if (defOp) {
+          if (auto c = mlir::dyn_cast<mlir::arith::ConstantIndexOp>(defOp))
+            val = c.value();
+          else if (auto c = mlir::dyn_cast<mlir::arith::ConstantIntOp>(defOp))
+            val = c.value();
+        }
+        ka.kind   = GPUKernelArg::Kind::I64;
+        ka.i64Val = val;
+      } else if (ty.isF32() || ty.isF64()) {
+        float val = 0.0f;
+        mlir::Operation *defOp = arg.getDefiningOp();
+        if (defOp) {
+          if (auto c = mlir::dyn_cast<mlir::arith::ConstantFloatOp>(defOp))
+            val = (float)c.value().convertToDouble();
+        }
+        ka.kind   = GPUKernelArg::Kind::F32;
+        ka.f32Val = val;
+      } else {
+        llvm::report_fatal_error("Unhandled kernel operand type in GPU lowering");
+      }
+      kernel.args.push_back(ka);
+    }
+    result.kernels.push_back(std::move(kernel));
+  });
+}
+
+// Translate one gpu.module to PTX and return the PTX string.
+static std::string gpuModuleToPTX(mlir::gpu::GPUModuleOp gpuModule) {
+  // translateModuleToLLVMIR requires llvm.func ops directly in a builtin.module.
+  // Wrapping the gpu.module produces an empty result because the GPU dialect
+  // translation interface handles gpu.module as an offloading container.
+  // Clone the gpu.module body ops (llvm.func etc.) directly into a plain module.
+  mlir::OwningOpRef<mlir::ModuleOp> wrapper =
+      mlir::ModuleOp::create(gpuModule.getLoc());
+  mlir::OpBuilder b(wrapper->getContext());
+  b.setInsertionPointToStart(wrapper->getBody());
+  for (mlir::Operation &op : gpuModule.getBody()->getOperations())
+    b.clone(op);
+
+  llvm::LLVMContext llvmCtx;
+  auto llvmModule = mlir::translateModuleToLLVMIR(*wrapper, llvmCtx);
+  if (!llvmModule)
+    throw std::runtime_error("Translation of gpu.module to LLVM IR failed");
+
+  if (std::getenv("SAVE_IR")) {
+    std::string irStr;
+    llvm::raw_string_ostream irOs(irStr);
+    llvmModule->print(irOs, nullptr);
+    std::ofstream f("ir_output/gpu_llvm.ll");
+    f << irStr;
+  }
+
+  llvm::Triple triple("nvptx64-nvidia-cuda");
+  llvmModule->setTargetTriple(triple);
+
+  llvm::InitializeAllTargets();
+  llvm::InitializeAllTargetMCs();
+  llvm::InitializeAllAsmPrinters();
+
+  std::string err;
+  const llvm::Target *target =
+      llvm::TargetRegistry::lookupTarget(triple.getTriple(), err);
+  if (!target)
+    throw std::runtime_error("NVPTX target not found: " + err);
+
+  llvm::TargetOptions opts;
+  auto tm = std::unique_ptr<llvm::TargetMachine>(
+      target->createTargetMachine(triple, "sm_75", "+ptx64",
+                                  opts, llvm::Reloc::PIC_));
+  if (!tm)
+    throw std::runtime_error("Failed to create NVPTX TargetMachine");
+
+  llvmModule->setDataLayout(tm->createDataLayout());
+
+  llvm::SmallVector<char, 0> ptxBuf;
+  llvm::raw_svector_ostream ptxStream(ptxBuf);
+  llvm::legacy::PassManager codegenPm;
+  if (tm->addPassesToEmitFile(codegenPm, ptxStream, nullptr,
+                              llvm::CodeGenFileType::AssemblyFile))
+    throw std::runtime_error("NVPTX target cannot emit PTX assembly");
+
+  codegenPm.run(*llvmModule);
+  return std::string(ptxBuf.begin(), ptxBuf.end());
+}
+
+GPULoweredModule MLIRLowering::lowerToGPUModule(mlir::ModuleOp module) {
+  mlir::OwningOpRef<mlir::ModuleOp> cloned = module.clone();
+  mlir::MLIRContext *ctx = cloned->getContext();
+  registerGPUDialects(ctx);
+
+  // Phase 1: outline kernels
+  {
+    mlir::PassManager pm1(ctx);
+    if (snapshotsEnabled)
+      pm1.addInstrumentation(
+          std::make_unique<IRSnapshotInstrumentation>(&snapshots));
+    addGPUPreOutliningPasses(pm1);
+    if (!runGPULoweringPipeline(*cloned, pm1))
+      throw std::runtime_error("GPU pre-outlining pipeline failed");
+  }
+
+  // Analyze gpu.launch_func ops to capture arg layout before NVVM lowering
+  // destroys the high-level type info.
+  GPULoweredModule result;
+  analyzeKernelLaunches(*cloned, result);
+  if (result.kernels.empty())
+    throw std::runtime_error("GPU outlining produced no kernels");
+
+  // Phase 2: lower gpu.module contents to NVVM/LLVM dialect
+  {
+    mlir::PassManager pm2(ctx);
+    if (snapshotsEnabled)
+      pm2.addInstrumentation(
+          std::make_unique<IRSnapshotInstrumentation>(&snapshots));
+    addGPUNVVMPasses(pm2);
+    if (!runGPULoweringPipeline(*cloned, pm2))
+      throw std::runtime_error("GPU NVVM lowering pipeline failed");
+  }
+
+  // Translate each gpu.module to PTX and attach to the matching kernel info.
+  cloned->walk([&](mlir::gpu::GPUModuleOp gpuModule) {
+    std::string modName = gpuModule.getName().str();
+    std::string ptx = gpuModuleToPTX(gpuModule);
+
+    for (auto &k : result.kernels) {
+      if (k.moduleName == modName) {
+        k.ptxImage = ptx;
+        break;
+      }
+    }
+  });
+
+  // Save PTX files when SAVE_IR=1 for post-crash diagnosis.
+  if (std::getenv("SAVE_IR")) {
+    llvm::sys::fs::create_directories("ir_output");
+    for (size_t i = 0; i < result.kernels.size(); ++i) {
+      std::string path = "ir_output/gpu_kernel_" + std::to_string(i) + ".ptx";
+      std::ofstream f(path);
+      f << result.kernels[i].ptxImage;
+    }
+  }
+
+  return result;
+}
+
+#else // MLIR_EDSL_CUDA_ENABLED
+
+void MLIRLowering::registerGPUDialects(mlir::MLIRContext *) {}
+void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &) {}
+void MLIRLowering::addGPUNVVMPasses(mlir::PassManager &) {}
+bool MLIRLowering::runGPULoweringPipeline(mlir::ModuleOp, mlir::PassManager &) {
+  return false;
+}
+void MLIRLowering::analyzeKernelLaunches(mlir::ModuleOp, GPULoweredModule &) {}
+GPULoweredModule MLIRLowering::lowerToGPUModule(mlir::ModuleOp) {
+  throw std::runtime_error(
+      "GPU support not compiled in (rebuild with -DMLIR_EDSL_CUDA=ON)");
+}
+
+#endif // MLIR_EDSL_CUDA_ENABLED
 
 } // namespace mlir_edsl

@@ -4,6 +4,10 @@
 #include "mlir_edsl/MLIRExecutor.h"
 #include "mlir_edsl/MLIRLowering.h"
 
+#ifdef MLIR_EDSL_CUDA_ENABLED
+#include <cuda.h>
+#endif
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -43,6 +47,10 @@ MLIRCompiler::MLIRCompiler()
   // Initialize executor
   executor = std::make_unique<MLIRExecutor>();
   executor->setOptimizationLevel(MLIRExecutor::OptLevel::O2);
+
+#ifdef MLIR_EDSL_CUDA_ENABLED
+  gpuExecutor_ = std::make_unique<MLIRGPUExecutor>();
+#endif
 }
 
 MLIRCompiler::~MLIRCompiler() = default;
@@ -214,16 +222,39 @@ void MLIRCompiler::ensureFinalized() {
     return;
   }
 
-  // Lower MLIR to LLVM module
   const bool saveIR = std::getenv("SAVE_IR") != nullptr;
   const bool doCapture = saveIR || captureSnapshots;
   MLIRLowering lowering(mlirContext.get(), /*captureSnapshots=*/doCapture);
 
+#ifdef MLIR_EDSL_CUDA_ENABLED
+  if (target_ == Target::GPU) {
+    GPULoweredModule gpuLowered;
+    try {
+      gpuLowered = lowering.lowerToGPUModule(*module);
+    } catch (...) {
+      failureIR_ = lowering.takeFailureIR();
+      if (doCapture)
+        loweringSnapshots = lowering.takeSnapshots();
+      throw;
+    }
+    if (doCapture)
+      loweringSnapshots = lowering.takeSnapshots();
+
+    for (const auto &name : compiledFunctions) {
+      gpuModules_[name] = gpuLowered;
+      for (const auto &k : gpuLowered.kernels)
+        gpuExecutor_->loadKernel(k.moduleName, k.ptxImage, k.funcName);
+    }
+    state = State::Finalized;
+    return;
+  }
+#endif
+
+  // CPU path
   LoweredModule lowered;
   try {
     lowered = lowering.lowerToLLVMModule(*module);
   } catch (...) {
-    // Extract failure state before lowering is destroyed on stack unwind
     failureIR_ = lowering.takeFailureIR();
     if (doCapture)
       loweringSnapshots = lowering.takeSnapshots();
@@ -233,7 +264,6 @@ void MLIRCompiler::ensureFinalized() {
   if (doCapture)
     loweringSnapshots = lowering.takeSnapshots();
 
-  // JIT compile with function names to look up
   std::vector<std::string> names(compiledFunctions.begin(),
                                  compiledFunctions.end());
   executor->compileModule(std::move(lowered.module), std::move(lowered.context),
@@ -265,6 +295,12 @@ void MLIRCompiler::clear() {
 
   // Clear executor
   executor->clear();
+
+#ifdef MLIR_EDSL_CUDA_ENABLED
+  gpuModules_.clear();
+  if (gpuExecutor_)
+    gpuExecutor_->clear();
+#endif
 
   // Clear lowering snapshots and failure IR
   loweringSnapshots.clear();
@@ -309,6 +345,119 @@ void MLIRCompiler::injectTestFailure() {
       opBuilder->getUnknownLoc(), 0, 32);
   opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(),
                                           zero.getResult());
+}
+
+// ==================== GPU EXECUTION ====================
+
+void MLIRCompiler::executeGPUFunction(
+    const std::string &name,
+    const std::vector<std::pair<const void *, std::vector<int64_t>>> &inputs,
+    void *output,
+    const std::vector<int64_t> &outputShape,
+    size_t elementSize) {
+#ifdef MLIR_EDSL_CUDA_ENABLED
+  ensureFinalized();
+
+  auto elemCount = [](const std::vector<int64_t> &shape) {
+    int64_t n = 1;
+    for (auto d : shape) n *= d;
+    return n;
+  };
+
+  // Allocate device memory and copy inputs H2D
+  std::vector<CUdeviceptr> dInputs;
+  dInputs.reserve(inputs.size());
+  for (const auto &[hostPtr, shape] : inputs) {
+    CUdeviceptr d = gpuExecutor_->allocDevice((size_t)elemCount(shape) * elementSize);
+    gpuExecutor_->copyH2D(d, hostPtr, (size_t)elemCount(shape) * elementSize);
+    dInputs.push_back(d);
+  }
+  size_t outBytes = (size_t)elemCount(outputShape) * elementSize;
+  CUdeviceptr dOutput = gpuExecutor_->allocDevice(outBytes);
+
+  // Helper: push a flattened memref descriptor onto params.
+  // Both storage vectors must outlive launchKernel; we pass them by ref so
+  // that push_back never invalidates pointers into an already-appended block
+  // (we pre-reserve below).
+  auto pushMemRef = [](CUdeviceptr dPtr,
+                       const std::vector<int64_t> &shape,
+                       std::vector<void *> &params,
+                       std::vector<uint64_t> &ptrStore,
+                       std::vector<int64_t> &intStore) {
+    uint64_t ptrVal = (uint64_t)dPtr;
+    ptrStore.push_back(ptrVal);
+    params.push_back(&ptrStore.back());
+    ptrStore.push_back(ptrVal);
+    params.push_back(&ptrStore.back());
+
+    intStore.push_back(0); // offset
+    params.push_back(&intStore.back());
+
+    for (auto s : shape) {
+      intStore.push_back(s);
+      params.push_back(&intStore.back());
+    }
+    for (size_t d = 0; d < shape.size(); ++d) {
+      int64_t stride = 1;
+      for (size_t k = d + 1; k < shape.size(); ++k) stride *= shape[k];
+      intStore.push_back(stride);
+      params.push_back(&intStore.back());
+    }
+  };
+
+  const GPULoweredModule &lowered = gpuModules_.at(name);
+
+  // Launch each kernel in order (e.g. fill then matmul).
+  for (const auto &kernel : lowered.kernels) {
+    // Reserve enough storage so push_back never reallocates mid-build.
+    // Worst case: 2 ptr fields + (1+rank+rank) int fields per MemRef arg,
+    // plus 1 field per scalar. Over-allocate generously.
+    std::vector<void *>    params;
+    std::vector<uint64_t>  ptrStore;
+    std::vector<int64_t>   intStore;
+    std::vector<float>     f32Store;
+    size_t nArgs = kernel.args.size();
+    ptrStore.reserve(nArgs * 2);
+    intStore.reserve(nArgs * 8);
+    f32Store.reserve(nArgs);
+
+    for (const auto &arg : kernel.args) {
+      switch (arg.kind) {
+      case GPUKernelArg::Kind::I64:
+        intStore.push_back(arg.i64Val);
+        params.push_back(&intStore.back());
+        break;
+      case GPUKernelArg::Kind::F32:
+        f32Store.push_back(arg.f32Val);
+        params.push_back(&f32Store.back());
+        break;
+      case GPUKernelArg::Kind::InputMemRef:
+        pushMemRef(dInputs[arg.paramIdx], arg.shape,
+                   params, ptrStore, intStore);
+        break;
+      case GPUKernelArg::Kind::OutputMemRef:
+        pushMemRef(dOutput, arg.shape, params, ptrStore, intStore);
+        break;
+      default:
+        llvm::report_fatal_error("Unhandled GPUKernelArg::Kind");
+      }
+    }
+
+    gpuExecutor_->launchKernel(kernel.moduleName, params.data(),
+                                kernel.gridX, kernel.gridY, kernel.gridZ,
+                                kernel.blockX, kernel.blockY, kernel.blockZ);
+  }
+
+  gpuExecutor_->copyD2H(output, dOutput, outBytes);
+
+  for (auto d : dInputs) gpuExecutor_->freeDevice(d);
+  gpuExecutor_->freeDevice(dOutput);
+#else
+  (void)name; (void)inputs; (void)output;
+  (void)outputShape; (void)elementSize;
+  throw std::runtime_error(
+      "GPU support not compiled in (rebuild with -DMLIR_EDSL_CUDA=ON)");
+#endif
 }
 
 // ==================== CONFIGURATION ====================
