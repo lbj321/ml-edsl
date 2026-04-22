@@ -4,6 +4,7 @@
 #include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/TargetSelect.h"
 
 #include <stdexcept>
@@ -25,6 +26,18 @@ void MLIRExecutor::initialize() {
   llvm::InitializeNativeTarget();
   llvm::InitializeNativeTargetAsmPrinter();
   llvm::InitializeNativeTargetAsmParser();
+
+  // Load async runtime so JIT can resolve mlirAsyncRuntime* symbols.
+  // The library is searched via LD_LIBRARY_PATH first; fall back to the
+  // absolute build path when running from the source tree.
+  {
+    std::string errMsg;
+    if (llvm::sys::DynamicLibrary::LoadLibraryPermanently("libmlir_async_runtime.so", &errMsg)) {
+      // Try the absolute path from the LLVM build directory
+      llvm::sys::DynamicLibrary::LoadLibraryPermanently(
+          MLIR_ASYNC_RUNTIME_LIB_PATH, &errMsg);
+    }
+  }
 
   auto jitOrError = llvm::orc::LLJITBuilder().create();
   if (!jitOrError) {

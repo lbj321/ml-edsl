@@ -69,6 +69,10 @@
 #include "mlir/Dialect/Tensor/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
+#include "mlir/Dialect/Async/IR/Async.h"
+#include "mlir/Dialect/Async/Passes.h"
+#include "mlir/Conversion/AsyncToLLVM/AsyncToLLVM.h"
+#include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/Passes.h"
@@ -432,6 +436,52 @@ struct LinalgMatmulTilingPass
   }
 };
 
+// Tiles the outer (M, N) dims of linalg.matmul to scf.forall for async CPU
+// parallelism. K is left untiled (0) so it stays serial inside each task.
+// After createForallToParallelLoopPass + createAsyncParallelForPass, each
+// forall iteration becomes an async task dispatched to the thread pool.
+// Tile size 16: gives (64/16)^2 = 16 tasks for a 64x64 matrix, which
+// amortizes dispatch overhead well on a 4-8 core machine.
+struct LinalgMatmulParallelTilingPass
+    : public mlir::PassWrapper<LinalgMatmulParallelTilingPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulParallelTilingPass)
+  llvm::StringRef getArgument() const override {
+    return "linalg-tile-matmul-parallel";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Tile linalg.matmul outer (M,N) dims to scf.forall for async CPU parallelism";
+  }
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
+    func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
+
+    for (mlir::linalg::MatmulOp op : matmuls) {
+      // Tile M=16, N=16, K=0 (untiled). Each scf.forall iteration owns a
+      // 16xKx16 slice — independent across (M,N) tiles, serial over K.
+      llvm::SmallVector<mlir::OpFoldResult> sizes =
+          mlir::getAsIndexOpFoldResult(op->getContext(), {16, 16, 0});
+      mlir::scf::SCFTilingOptions opts;
+      opts.setTileSizes(sizes);
+      opts.setLoopType(mlir::scf::SCFTilingOptions::LoopType::ForallOp);
+      rewriter.setInsertionPoint(op);
+      auto result = mlir::scf::tileUsingSCF(
+          rewriter, llvm::cast<mlir::TilingInterface>(op.getOperation()), opts);
+      if (mlir::failed(result)) {
+        op->emitWarning("linalg-tile-matmul-parallel: tiling failed, skipping op");
+        continue;
+      }
+      if (op->getNumResults() == 0)
+        rewriter.eraseOp(op);
+      else
+        rewriter.replaceOp(op, result->mergeResult.replacements);
+    }
+  }
+};
+
 // Tiles linalg.matmul for GPU using scf.forall so outer tile loops carry GPU
 // block mapping. After createForallToParallelLoopPass converts scf.forall →
 // scf.parallel, gpu-map-parallel-loops sees 4 nested parallel levels:
@@ -514,6 +564,7 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   context->getOrLoadDialect<mlir::vector::VectorDialect>();
   context->getOrLoadDialect<mlir::bufferization::BufferizationDialect>();
   context->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+  context->getOrLoadDialect<mlir::async::AsyncDialect>();
 
   // Register bufferizable op interfaces (tells one-shot-bufferize how to
   // convert each op)
@@ -573,6 +624,15 @@ void MLIRLowering::addConversionPasses() {
       mlir::bufferization::createBufferDeallocationSimplificationPass());
   passManager.addPass(mlir::bufferization::createLowerDeallocationsPass());
 
+  // Tile outer (M,N) dims to scf.forall for async CPU parallelism.
+  // Must run before LinalgMatmulTilingPass so the 8x8 inner tiling operates
+  // on the 16x16 tile body, not the full 64x64 matrix.
+  passManager.addNestedPass<mlir::func::FuncOp>(
+      std::make_unique<LinalgMatmulParallelTilingPass>());
+  // Convert scf.forall → scf.parallel so async-parallel-for can pick it up.
+  passManager.addPass(mlir::createForallToParallelLoopPass());
+  passManager.addPass(mlir::createCanonicalizerPass());
+
   passManager.addNestedPass<mlir::func::FuncOp>(
       std::make_unique<LinalgMatmulTilingPass>());
   passManager.addPass(mlir::createCanonicalizerPass());
@@ -604,6 +664,14 @@ void MLIRLowering::addConversionPasses() {
   // Fallback: lower any remaining (un-vectorized) linalg ops to scf.for loops
   passManager.addPass(mlir::createConvertLinalgToLoopsPass());
 
+  // Async CPU parallelism: convert scf.parallel (outer tile loops) to async
+  // tasks dispatched to the thread pool. Inner scf.for loops stay serial.
+  passManager.addPass(mlir::createAsyncParallelForPass());
+  passManager.addPass(mlir::createAsyncToAsyncRuntimePass());
+  passManager.addPass(mlir::createAsyncFuncToAsyncRuntimePass());
+  passManager.addPass(mlir::createAsyncRuntimeRefCountingPass());
+  passManager.addPass(mlir::createAsyncRuntimeRefCountingOptPass());
+
   // Lower vector.multi_reduction (produced by linalg.reduce vectorization)
   passManager.addNestedPass<mlir::func::FuncOp>(
       mlir::vector::createLowerVectorMultiReductionPass());
@@ -632,7 +700,12 @@ void MLIRLowering::addConversionPasses() {
   // Lower affine.apply (produced by expand-strided-metadata) to arith ops.
   passManager.addPass(mlir::createLowerAffinePass());
 
-  // Lower arith ops → LLVM (after affine is gone).
+  // Lower async.runtime.* + coroutines → LLVM calls into libmlir_async_runtime.so.
+  // Must run before arith-to-llvm: async-to-llvm generates arith ops (index
+  // arithmetic for coroutine frame offsets) that arith-to-llvm must then lower.
+  passManager.addPass(mlir::createConvertAsyncToLLVMPass());
+
+  // Lower arith ops → LLVM (after affine and async are gone).
   passManager.addPass(mlir::createArithToLLVMConversionPass());
 
   passManager.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());

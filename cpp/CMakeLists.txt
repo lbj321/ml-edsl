@@ -43,10 +43,26 @@ target_link_libraries(mlir_edsl_core PUBLIC
     pybind11::pybind11
 )
 
+# Locate the async runtime shared library so the JIT can load it at runtime.
+# Prefer the build-tree path; installed MLIR puts it in the lib directory.
+find_library(MLIR_ASYNC_RUNTIME_LIB
+    NAMES mlir_async_runtime
+    PATHS ${MLIR_LIBRARY_DIR} ${LLVM_LIBRARY_DIR}
+    NO_DEFAULT_PATH
+)
+if(NOT MLIR_ASYNC_RUNTIME_LIB)
+    message(WARNING "libmlir_async_runtime not found — async CPU parallelism will fall back to LD_LIBRARY_PATH lookup at runtime")
+    set(MLIR_ASYNC_RUNTIME_LIB "libmlir_async_runtime.so")
+endif()
+
 # JIT Executor and Compiler component
 add_library(mlir_edsl_executor STATIC
     src/MLIRExecutor.cpp
     src/MLIRCompiler.cpp
+)
+
+target_compile_definitions(mlir_edsl_executor PRIVATE
+    MLIR_ASYNC_RUNTIME_LIB_PATH="${MLIR_ASYNC_RUNTIME_LIB}"
 )
 
 target_include_directories(mlir_edsl_executor PUBLIC

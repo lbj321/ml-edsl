@@ -96,6 +96,12 @@ if(MLIR_EDSL_CUDA)
 endif()
 
 # Combine all current libraries
+set(MLIR_ASYNC_LIBS
+    MLIRAsyncDialect
+    MLIRAsyncTransforms
+    MLIRAsyncToLLVM
+)
+
 set(MLIR_CURRENT_LIBS
     ${MLIR_CORE_LIBS}
     ${MLIR_ARITH_LIBS}
@@ -104,6 +110,7 @@ set(MLIR_CURRENT_LIBS
     ${MLIR_SCF_LIBS}
     ${MLIR_MEMORY_LIBS}
     ${MLIR_VECTOR_LIBS}
+    ${MLIR_ASYNC_LIBS}
     MLIRAffineToStandard
     MLIRReconcileUnrealizedCasts
 )
