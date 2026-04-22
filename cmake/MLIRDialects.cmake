@@ -35,11 +35,8 @@ set(MLIR_LLVM_LIBS
 set(MLIR_SCF_LIBS
     MLIRSCFDialect
     MLIRSCFToControlFlow
-    MLIRSCFToOpenMP
     MLIRSCFTransforms
     MLIRControlFlowDialect
-    MLIROpenMPDialect
-    MLIROpenMPToLLVM
 )
 
 # Memory and tensor dialects (for Phase 7)
