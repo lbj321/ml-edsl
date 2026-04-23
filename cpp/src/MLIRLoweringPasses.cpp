@@ -275,20 +275,36 @@ struct VectorContractToOuterProductPass
   }
 };
 
-// Tiles linalg.matmul into 8x8x8 scf.for loops (M, N, K all tiled to 8).
-// K tiling is required for square vector<8x8x8> contracts, which the
-// OuterProduct lowering strategy decomposes into vector.outerproduct →
-// vector.fma (vfmadd231ps on AVX2). Without K tiling the contract is
-// vector<8x8xK> which degenerates to scalar dot products per output element.
-// Placed after bufferization so tiling operates on memref semantics.
+// Tiles linalg.matmul into scf loops with configurable tile sizes and loop type.
+//
+// Inner vectorization (createLinalgMatmulTilingPass):
+//   {8,8,8} ForOp — K tiling required for square vector<8x8x8> contracts that
+//   the OuterProduct strategy decomposes into vector.outerproduct → vector.fma.
+//
+// Outer parallelism (createLinalgMatmulParallelTilingPass / createLinalgGPUMatmulTilingPass):
+//   {64,64,0} or {32,32,0} ForallOp — K untiled to avoid reduction races.
 struct LinalgMatmulTilingPass
     : public mlir::PassWrapper<LinalgMatmulTilingPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulTilingPass)
-  llvm::StringRef getArgument() const override { return "linalg-tile-matmul"; }
-  llvm::StringRef getDescription() const override {
-    return "Tile linalg.matmul into scf.for loops over cache-friendly tiles";
+
+  using LoopType = mlir::scf::SCFTilingOptions::LoopType;
+
+  int64_t tileM, tileN, tileK;
+  LoopType loopType;
+
+  explicit LinalgMatmulTilingPass(int64_t m, int64_t n, int64_t k,
+                                  LoopType lt = LoopType::ForOp)
+      : tileM(m), tileN(n), tileK(k), loopType(lt) {}
+
+  llvm::StringRef getArgument() const override {
+    return loopType == LoopType::ForallOp ? "linalg-tile-matmul-forall"
+                                          : "linalg-tile-matmul";
   }
+  llvm::StringRef getDescription() const override {
+    return "Tile linalg.matmul into scf loops over configurable tiles";
+  }
+
   void runOnOperation() override {
     mlir::func::FuncOp func = getOperation();
     mlir::IRRewriter rewriter(func->getContext());
@@ -297,12 +313,12 @@ struct LinalgMatmulTilingPass
     func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
 
     for (mlir::linalg::MatmulOp op : matmuls) {
-      // Store tile sizes in a named variable — setTileSizes captures an
-      // ArrayRef (non-owning), so the data must outlive the tileUsingSCF call.
+      // Named variable required — setTileSizes captures a non-owning ArrayRef.
       llvm::SmallVector<mlir::OpFoldResult> tileSizes =
-          mlir::getAsIndexOpFoldResult(op->getContext(), {8, 8, 8});
+          mlir::getAsIndexOpFoldResult(op->getContext(), {tileM, tileN, tileK});
       mlir::scf::SCFTilingOptions opts;
       opts.setTileSizes(tileSizes);
+      opts.setLoopType(loopType);
       rewriter.setInsertionPoint(op);
       auto result = mlir::scf::tileUsingSCF(
           rewriter, llvm::cast<mlir::TilingInterface>(op.getOperation()), opts);
@@ -317,97 +333,6 @@ struct LinalgMatmulTilingPass
     }
   }
 };
-
-// TODO: LinalgMatmulParallelTilingPass and LinalgGPUMatmulTilingPass are
-// structurally identical — both tile linalg.matmul into scf.forall with K=0.
-// They differ only in tile size (64x64 CPU, 32x32 GPU) and description.
-// Collapse into one parameterised pass: LinalgMatmulForallTilingPass(M, N).
-
-// Tiles linalg.matmul to 64x64 outer scf.forall blocks for CPU multicore.
-// createForallToParallelLoopPass converts the forall to scf.parallel, then
-// createConvertSCFToOpenMPPass converts that to omp.parallel + omp.wsloop.
-// The inner LinalgMatmulTilingPass then tiles each 64x64 tile to 8x8 for
-// vectorization. K is untiled (K=0) to avoid reduction races between threads.
-struct LinalgMatmulParallelTilingPass
-    : public mlir::PassWrapper<LinalgMatmulParallelTilingPass,
-                               mlir::OperationPass<mlir::func::FuncOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulParallelTilingPass)
-  llvm::StringRef getArgument() const override {
-    return "linalg-tile-matmul-parallel";
-  }
-  llvm::StringRef getDescription() const override {
-    return "Tile linalg.matmul to 64x64 scf.forall outer tiles for CPU multicore";
-  }
-  void runOnOperation() override {
-    mlir::func::FuncOp func = getOperation();
-    mlir::IRRewriter rewriter(func->getContext());
-
-    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
-    func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
-
-    for (mlir::linalg::MatmulOp op : matmuls) {
-      llvm::SmallVector<mlir::OpFoldResult> sizes =
-          mlir::getAsIndexOpFoldResult(op->getContext(), {64, 64, 0});
-      mlir::scf::SCFTilingOptions opts;
-      opts.setTileSizes(sizes);
-      opts.setLoopType(mlir::scf::SCFTilingOptions::LoopType::ForallOp);
-      rewriter.setInsertionPoint(op);
-      auto result = mlir::scf::tileUsingSCF(
-          rewriter, llvm::cast<mlir::TilingInterface>(op.getOperation()), opts);
-      if (mlir::failed(result)) {
-        op->emitWarning("linalg-tile-matmul-parallel: tiling failed, skipping op");
-        continue;
-      }
-      if (op->getNumResults() == 0)
-        rewriter.eraseOp(op);
-      else
-        rewriter.replaceOp(op, result->mergeResult.replacements);
-    }
-  }
-};
-
-#ifdef MLIR_EDSL_CUDA_ENABLED
-// Tiles linalg.matmul to 32x32 outer scf.forall blocks for GPU mapping.
-// 32x32 = 1024 threads/block (CUDA max). K is untiled (K=0) so each thread
-// iterates the full reduction independently.
-struct LinalgGPUMatmulTilingPass
-    : public mlir::PassWrapper<LinalgGPUMatmulTilingPass,
-                               mlir::OperationPass<mlir::func::FuncOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgGPUMatmulTilingPass)
-  llvm::StringRef getArgument() const override {
-    return "linalg-tile-matmul-gpu";
-  }
-  llvm::StringRef getDescription() const override {
-    return "Tile linalg.matmul to 32x32 scf.forall blocks for GPU mapping";
-  }
-  void runOnOperation() override {
-    mlir::func::FuncOp func = getOperation();
-    mlir::IRRewriter rewriter(func->getContext());
-
-    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
-    func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
-
-    for (mlir::linalg::MatmulOp op : matmuls) {
-      llvm::SmallVector<mlir::OpFoldResult> sizes =
-          mlir::getAsIndexOpFoldResult(op->getContext(), {32, 32, 0});
-      mlir::scf::SCFTilingOptions opts;
-      opts.setTileSizes(sizes);
-      opts.setLoopType(mlir::scf::SCFTilingOptions::LoopType::ForallOp);
-      rewriter.setInsertionPoint(op);
-      auto result = mlir::scf::tileUsingSCF(
-          rewriter, llvm::cast<mlir::TilingInterface>(op.getOperation()), opts);
-      if (mlir::failed(result)) {
-        op->emitWarning("linalg-tile-matmul-gpu: tiling failed, skipping op");
-        continue;
-      }
-      if (op->getNumResults() == 0)
-        rewriter.eraseOp(op);
-      else
-        rewriter.replaceOp(op, result->mergeResult.replacements);
-    }
-  }
-};
-#endif // MLIR_EDSL_CUDA_ENABLED
 
 } // namespace
 
@@ -429,15 +354,17 @@ std::unique_ptr<mlir::Pass> createVectorContractToOuterProductPass() {
   return std::make_unique<VectorContractToOuterProductPass>();
 }
 std::unique_ptr<mlir::Pass> createLinalgMatmulTilingPass() {
-  return std::make_unique<LinalgMatmulTilingPass>();
+  return std::make_unique<LinalgMatmulTilingPass>(8, 8, 8);
 }
 std::unique_ptr<mlir::Pass> createLinalgMatmulParallelTilingPass() {
-  return std::make_unique<LinalgMatmulParallelTilingPass>();
+  using LoopType = mlir::scf::SCFTilingOptions::LoopType;
+  return std::make_unique<LinalgMatmulTilingPass>(64, 64, 0, LoopType::ForallOp);
 }
 
 #ifdef MLIR_EDSL_CUDA_ENABLED
 std::unique_ptr<mlir::Pass> createLinalgGPUMatmulTilingPass() {
-  return std::make_unique<LinalgGPUMatmulTilingPass>();
+  using LoopType = mlir::scf::SCFTilingOptions::LoopType;
+  return std::make_unique<LinalgMatmulTilingPass>(32, 32, 0, LoopType::ForallOp);
 }
 #endif
 
