@@ -467,10 +467,10 @@ def check_lowered_ir(backend):
         if not snapshots:
             pytest.fail("No lowering snapshots captured")
 
-        # Find the snapshot after the named pass
+        # Find the snapshot after the named pass (exact match)
         ir = None
         for pass_name, pass_ir in snapshots:
-            if after in pass_name:
+            if pass_name == after:
                 ir = pass_ir
                 break
 
