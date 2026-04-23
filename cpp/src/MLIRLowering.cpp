@@ -765,6 +765,7 @@ void MLIRLowering::registerGPUDialects(mlir::MLIRContext *ctx) {
   mlir::NVVM::registerConvertGpuToNVVMInterface(reg);
   mlir::ub::registerConvertUBToLLVMInterface(reg);
   mlir::vector::registerConvertVectorToLLVMInterface(reg);
+  mlir::registerConvertOpenMPToLLVMInterface(reg);
   ctx->appendDialectRegistry(reg);
 }
 
