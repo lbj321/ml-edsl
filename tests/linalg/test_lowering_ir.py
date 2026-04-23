@@ -129,45 +129,48 @@ class TestLinalgMatmulTilingPass:
     """
 
     def test_large_matmul_tiled_to_scf_for(self, check_lowered_ir):
-        """16x16 matmul is replaced by three nested scf.for loops (M, N, K tiled to 8)."""
+        """128x128 matmul (2x outer tiles) gives static inner 8x8 tiles → nested scf.for inside scf.parallel."""
         @ml_function
-        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
+        def mm_fn(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128]) -> Tensor[f32, 128, 128]:
             return matmul(A, B)
 
-        mm_fn(np.ones((16, 16), dtype=np.float32),
-              np.ones((16, 16), dtype=np.float32))
+        mm_fn(np.ones((128, 128), dtype=np.float32),
+              np.ones((128, 128), dtype=np.float32))
         check_lowered_ir("""
+        // CHECK: scf.parallel
         // CHECK: scf.for
         // CHECK: scf.for
         // CHECK: linalg.matmul
-        """, after="linalg-tile-matmul")
+        """, after="linalg-tile-matmul-inner")
 
     def test_large_matmul_tile_step_is_8(self, check_lowered_ir):
         """Tiling uses step size 8 for both M and N dimensions."""
         @ml_function
-        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
+        def mm_fn(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128]) -> Tensor[f32, 128, 128]:
             return matmul(A, B)
 
-        mm_fn(np.ones((16, 16), dtype=np.float32),
-              np.ones((16, 16), dtype=np.float32))
+        mm_fn(np.ones((128, 128), dtype=np.float32),
+              np.ones((128, 128), dtype=np.float32))
         check_lowered_ir("""
+        // CHECK: scf.parallel
         // CHECK: arith.constant 8 : index
         // CHECK: scf.for
-        """, after="linalg-tile-matmul")
+        """, after="linalg-tile-matmul-inner")
 
     def test_large_matmul_produces_subviews(self, check_lowered_ir):
         """Tiled matmul slices all three operands into 8x8 subviews (M, N, K all tiled)."""
         @ml_function
-        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
+        def mm_fn(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128]) -> Tensor[f32, 128, 128]:
             return matmul(A, B)
 
-        mm_fn(np.ones((16, 16), dtype=np.float32),
-              np.ones((16, 16), dtype=np.float32))
+        mm_fn(np.ones((128, 128), dtype=np.float32),
+              np.ones((128, 128), dtype=np.float32))
         check_lowered_ir("""
+        // CHECK: scf.parallel
         // CHECK: memref.subview {{.*}} [8, 8] [1, 1]
         // CHECK: memref.subview {{.*}} [8, 8] [1, 1]
         // CHECK: memref.subview {{.*}} [8, 8] [1, 1]
-        """, after="linalg-tile-matmul")
+        """, after="linalg-tile-matmul-inner")
 
     def test_boundary_8x8_matmul_tiled(self, check_lowered_ir):
         """8x8 matmul is tiled into a single 8x8 tile (one-iteration scf.for loops)."""
@@ -180,7 +183,7 @@ class TestLinalgMatmulTilingPass:
         check_lowered_ir("""
         // CHECK: scf.for
         // CHECK: linalg.matmul
-        """, after="linalg-tile-matmul")
+        """, after="linalg-tile-matmul-inner")
 
     def test_small_matmul_tiled(self, check_lowered_ir):
         """2x2 matmul is tiled — produces scf.for loops with a partial tile."""
@@ -193,7 +196,7 @@ class TestLinalgMatmulTilingPass:
         check_lowered_ir("""
         // CHECK: scf.for
         // CHECK: linalg.matmul
-        """, after="linalg-tile-matmul")
+        """, after="linalg-tile-matmul-inner")
 
 
 class TestVectorCleanupPass:

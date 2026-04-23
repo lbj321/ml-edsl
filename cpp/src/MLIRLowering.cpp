@@ -402,9 +402,9 @@ struct LinalgMatmulTilingPass
     : public mlir::PassWrapper<LinalgMatmulTilingPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulTilingPass)
-  llvm::StringRef getArgument() const override { return "linalg-tile-matmul"; }
+  llvm::StringRef getArgument() const override { return "linalg-tile-matmul-inner"; }
   llvm::StringRef getDescription() const override {
-    return "Tile linalg.matmul into scf.for loops over cache-friendly tiles";
+    return "Tile linalg.matmul into 8x8x8 scf.for loops for vectorization";
   }
   void runOnOperation() override {
     mlir::func::FuncOp func = getOperation();
@@ -440,8 +440,8 @@ struct LinalgMatmulTilingPass
 // parallelism. K is left untiled (0) so it stays serial inside each task.
 // After createForallToParallelLoopPass + createAsyncParallelForPass, each
 // forall iteration becomes an async task dispatched to the thread pool.
-// Tile size 16: gives (64/16)^2 = 16 tasks for a 64x64 matrix, which
-// amortizes dispatch overhead well on a 4-8 core machine.
+// Tile size 64: gives (256/64)^2 = 16 tasks for a 256x256 matrix.
+// Matrices ≤ 64x64 produce a single tile, which canonicalizes to serial.
 struct LinalgMatmulParallelTilingPass
     : public mlir::PassWrapper<LinalgMatmulParallelTilingPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
@@ -460,10 +460,13 @@ struct LinalgMatmulParallelTilingPass
     func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
 
     for (mlir::linalg::MatmulOp op : matmuls) {
-      // Tile M=16, N=16, K=0 (untiled). Each scf.forall iteration owns a
-      // 16xKx16 slice — independent across (M,N) tiles, serial over K.
+      // Tile M=64, N=64, K=0 (untiled). Each scf.forall iteration owns a
+      // 64xKx64 slice — independent across (M,N) tiles, serial over K.
+      // 64x64 f32 tiles (~48KB working set) fit in L2 and give 16 tasks on a
+      // 256x256 matrix. Smaller matrices produce ≤1 tile and get canonicalized
+      // to serial execution — no async dispatch overhead.
       llvm::SmallVector<mlir::OpFoldResult> sizes =
-          mlir::getAsIndexOpFoldResult(op->getContext(), {16, 16, 0});
+          mlir::getAsIndexOpFoldResult(op->getContext(), {64, 64, 0});
       mlir::scf::SCFTilingOptions opts;
       opts.setTileSizes(sizes);
       opts.setLoopType(mlir::scf::SCFTilingOptions::LoopType::ForallOp);
@@ -666,7 +669,12 @@ void MLIRLowering::addConversionPasses() {
 
   // Async CPU parallelism: convert scf.parallel (outer tile loops) to async
   // tasks dispatched to the thread pool. Inner scf.for loops stay serial.
-  passManager.addPass(mlir::createAsyncParallelForPass());
+  // minTaskSize=16: skip async dispatch when there are fewer than 16 parallel
+  // iterations (e.g. a single-tile 64x64 matrix), avoiding coroutine overhead
+  // on small matrices while still parallelizing 128x128 (4 tiles) and above.
+  mlir::AsyncParallelForPassOptions asyncOpts;
+  asyncOpts.minTaskSize = 16;
+  passManager.addPass(mlir::createAsyncParallelForPass(asyncOpts));
   passManager.addPass(mlir::createAsyncToAsyncRuntimePass());
   passManager.addPass(mlir::createAsyncFuncToAsyncRuntimePass());
   passManager.addPass(mlir::createAsyncRuntimeRefCountingPass());

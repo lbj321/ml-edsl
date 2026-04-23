@@ -1,11 +1,11 @@
 """Test CPU multicore execution via async dialect parallelism
 
 Validates that the async parallel-for pipeline:
-  linalg.matmul → scf.forall (16x16 tiles) → scf.parallel → async.execute
+  linalg.matmul → scf.forall (64x64 tiles) → scf.parallel → async.execute
   → libmlir_async_runtime.so thread pool
 
 produces correct numerical results across matrix sizes that exercise
-the parallel tiling path (multiples of the 16x16 outer tile size).
+the parallel tiling path (multiples of the 64x64 outer tile size).
 """
 
 import pytest
