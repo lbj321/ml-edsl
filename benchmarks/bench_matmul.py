@@ -5,9 +5,11 @@ Usage:
 
 Each size is compiled once, warmed up, then timed with enough repeats
 to get stable measurements even for small matrices.
+
 """
 
 import timeit
+
 import numpy as np
 
 from mlir_edsl import ml_function, Tensor, f32, matmul, relu
@@ -23,7 +25,13 @@ def repeats_for(N: int) -> int:
         return 10_000
     if N <= 32:
         return 1_000
-    return 200
+    if N <= 128:
+        return 200
+    if N <= 256:
+        return 50
+    if N <= 512:
+        return 10
+    return 5
 
 
 def make_edsl_matmul(N: int):
@@ -88,43 +96,58 @@ def print_section(title: str, rows: list):
 def main():
     rng = np.random.default_rng(42)
 
-    matmul_rows = []
-    bias_rows = []
-    relu_rows = []
+    # Phase 1: collect all NumPy timings before any EDSL execution.
+    # MLIRExecutor::initialize() loads libomp with RTLD_GLOBAL on the first
+    # EDSL call, which can interfere with OpenBLAS threading. Running NumPy
+    # first ensures it benchmarks without that interference.
+    inputs = {}
+    np_matmul_t = {}
+    np_bias_t   = {}
+    np_relu_t   = {}
 
     for N in SIZES:
         A = rng.random((N, N), dtype=np.float32)
         B = rng.random((N, N), dtype=np.float32)
         b = rng.random(N, dtype=np.float32)
+        inputs[N] = (A, B, b)
+        n = repeats_for(N)
+
+        for _ in range(WARMUP):
+            np.matmul(A, B)
+            np.add(A, b)
+            np.maximum(A, 0.0)
+
+        np_matmul_t[N] = timeit.timeit(lambda: np.matmul(A, B), number=n) / n
+        np_bias_t[N]   = timeit.timeit(lambda: np.add(A, b),    number=n) / n
+        np_relu_t[N]   = timeit.timeit(lambda: np.maximum(A, 0.0), number=n) / n
+
+    # Phase 2: EDSL benchmarks (triggers libomp RTLD_GLOBAL on first call).
+    matmul_rows = []
+    bias_rows   = []
+    relu_rows   = []
+
+    for N in SIZES:
+        A, B, b = inputs[N]
         n = repeats_for(N)
         label = f"{N:>4}x{N:<2}"
 
-        # Matmul
         edsl_fn = make_edsl_matmul(N)
         for _ in range(WARMUP):
             edsl_fn(A, B)
-            np.matmul(A, B)
         edsl_t = timeit.timeit(lambda: edsl_fn(A, B), number=n) / n
-        np_t   = timeit.timeit(lambda: np.matmul(A, B), number=n) / n
-        matmul_rows.append((label, edsl_t, np_t))
+        matmul_rows.append((label, edsl_t, np_matmul_t[N]))
 
-        # Bias add
         edsl_fn = make_edsl_bias_add(N)
         for _ in range(WARMUP):
             edsl_fn(A, b)
-            np.add(A, b)
         edsl_t = timeit.timeit(lambda: edsl_fn(A, b), number=n) / n
-        np_t   = timeit.timeit(lambda: np.add(A, b), number=n) / n
-        bias_rows.append((label, edsl_t, np_t))
+        bias_rows.append((label, edsl_t, np_bias_t[N]))
 
-        # ReLU
         edsl_fn = make_edsl_relu(N)
         for _ in range(WARMUP):
             edsl_fn(A)
-            np.maximum(A, 0.0)
         edsl_t = timeit.timeit(lambda: edsl_fn(A), number=n) / n
-        np_t   = timeit.timeit(lambda: np.maximum(A, 0.0), number=n) / n
-        relu_rows.append((label, edsl_t, np_t))
+        relu_rows.append((label, edsl_t, np_relu_t[N]))
 
     print_section("Matmul: X @ W", matmul_rows)
     print_section("Bias Add: X + b", bias_rows)
