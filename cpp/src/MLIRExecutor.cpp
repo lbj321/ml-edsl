@@ -4,6 +4,7 @@
 #include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/TargetSelect.h"
 
 #include <stdexcept>
@@ -26,8 +27,17 @@ void MLIRExecutor::initialize() {
   llvm::InitializeNativeTargetAsmPrinter();
   llvm::InitializeNativeTargetAsmParser();
 
-  // OpenMP runtime symbols (__kmpc_fork_call etc.) are resolved lazily at
-  // JIT link time via the process symbol table — no explicit load needed.
+  // Load libomp with RTLD_GLOBAL so __kmpc_* symbols are visible to the JIT.
+  // Linking _mlir_backend.so against libomp loads it RTLD_LOCAL (the default
+  // for shared library deps), which keeps its symbols out of the global symbol
+  // table. LLJIT resolves from the global table, so without this explicit load
+  // __kmpc_fork_call etc. are "not found" at JIT link time.
+#ifdef MLIR_EDSL_LIBOMP_PATH
+  {
+    std::string err;
+    llvm::sys::DynamicLibrary::LoadLibraryPermanently(MLIR_EDSL_LIBOMP_PATH, &err);
+  }
+#endif
 
   auto jitOrError = llvm::orc::LLJITBuilder().create();
   if (!jitOrError) {

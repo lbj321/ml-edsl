@@ -3,6 +3,24 @@
 # Find pybind11 early since core library now needs it
 find_package(pybind11 REQUIRED)
 
+# MLIR generates __kmpc_* calls (LLVM OMP ABI); libgomp uses GOMP_* and does
+# not provide them. MLIRExecutor::initialize() opens libomp with RTLD_GLOBAL
+# so the LLJIT symbol resolver can find __kmpc_* at JIT link time. Linking
+# here just makes the path available as a compile definition — it is not
+# sufficient on its own because shared library deps load with RTLD_LOCAL.
+find_library(LIBOMP_PATH NAMES omp
+    PATHS
+        ${LLVM_LIBRARY_DIR}
+        /usr/lib/x86_64-linux-gnu
+        /usr/local/lib
+        $ENV{CONDA_PREFIX}/lib
+        $ENV{HOME}/anaconda3/lib
+        $ENV{HOME}/miniconda3/lib
+)
+if(NOT LIBOMP_PATH)
+    message(WARNING "libomp not found — OMP parallel execution will abort at runtime")
+endif()
+
 # Core MLIR components library
 add_library(mlir_edsl_core STATIC
     src/MLIRBuilder.cpp
@@ -63,6 +81,12 @@ target_link_mlir_libraries(mlir_edsl_executor)
 target_link_libraries(mlir_edsl_executor PUBLIC
     mlir_edsl_core
 )
+
+if(LIBOMP_PATH)
+    target_link_libraries(mlir_edsl_executor PUBLIC ${LIBOMP_PATH})
+    target_compile_definitions(mlir_edsl_executor PRIVATE
+        MLIR_EDSL_LIBOMP_PATH="${LIBOMP_PATH}")
+endif()
 
 if(MLIR_EDSL_CUDA)
     target_link_libraries(mlir_edsl_executor PUBLIC CUDA::cuda_driver)

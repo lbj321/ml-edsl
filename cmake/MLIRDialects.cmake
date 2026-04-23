@@ -29,6 +29,7 @@ set(MLIR_LLVM_LIBS
     MLIRTargetLLVMIRExport
     MLIRLLVMToLLVMIRTranslation
     MLIRBuiltinToLLVMIRTranslation
+    MLIROpenMPToLLVMIRTranslation
 )
 
 # Control flow dialect (for Phase 6)
