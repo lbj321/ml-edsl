@@ -334,6 +334,59 @@ struct LinalgMatmulTilingPass
   }
 };
 
+// Tiles linalg.generic ops along the innermost loop dimension to `tileSize`.
+// All outer dims are left untiled (size 0). This keeps vectorization from
+// seeing the full tensor as a single vector (e.g. vector<512x512xf32>), which
+// causes LLVM O3 to hang on large shapes. After tiling, the vectorizer only
+// sees vector<tileSizexf32> strips that O3 can handle trivially.
+struct LinalgGenericTilingPass
+    : public mlir::PassWrapper<LinalgGenericTilingPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgGenericTilingPass)
+
+  int64_t tileSize;
+  explicit LinalgGenericTilingPass(int64_t tile) : tileSize(tile) {}
+
+  llvm::StringRef getArgument() const override { return "linalg-tile-generic"; }
+  llvm::StringRef getDescription() const override {
+    return "Tile linalg.generic ops along the innermost dimension";
+  }
+
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    llvm::SmallVector<mlir::linalg::GenericOp> generics;
+    func.walk([&](mlir::linalg::GenericOp op) { generics.push_back(op); });
+
+    for (mlir::linalg::GenericOp op : generics) {
+      unsigned rank = op.getNumLoops();
+      if (rank == 0)
+        continue;
+
+      // Tile only the innermost loop; leave all outer loops untiled.
+      llvm::SmallVector<int64_t> sizes(rank, 0);
+      sizes.back() = tileSize;
+
+      llvm::SmallVector<mlir::OpFoldResult> tileSizes =
+          mlir::getAsIndexOpFoldResult(op->getContext(), sizes);
+      mlir::scf::SCFTilingOptions opts;
+      opts.setTileSizes(tileSizes);
+      rewriter.setInsertionPoint(op);
+      auto result = mlir::scf::tileUsingSCF(
+          rewriter, llvm::cast<mlir::TilingInterface>(op.getOperation()), opts);
+      if (mlir::failed(result)) {
+        op->emitWarning("linalg-tile-generic: tiling failed, skipping op");
+        continue;
+      }
+      if (op->getNumResults() == 0)
+        rewriter.eraseOp(op);
+      else
+        rewriter.replaceOp(op, result->mergeResult.replacements);
+    }
+  }
+};
+
 } // namespace
 
 namespace mlir_edsl {
@@ -352,6 +405,9 @@ std::unique_ptr<mlir::Pass> createVectorCleanupPass() {
 }
 std::unique_ptr<mlir::Pass> createVectorContractToOuterProductPass() {
   return std::make_unique<VectorContractToOuterProductPass>();
+}
+std::unique_ptr<mlir::Pass> createLinalgGenericTilingPass() {
+  return std::make_unique<LinalgGenericTilingPass>(8);
 }
 std::unique_ptr<mlir::Pass> createLinalgMatmulTilingPass() {
   return std::make_unique<LinalgMatmulTilingPass>(8, 8, 8);

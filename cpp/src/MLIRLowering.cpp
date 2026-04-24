@@ -251,7 +251,16 @@ void MLIRLowering::addConversionPasses() {
   passManager.addNestedPass<mlir::func::FuncOp>(
       createLinalgMatmulToContractPass());
 
-  // Phase 9.1: Vectorize remaining linalg structured ops → vector dialect
+  // Tile linalg.generic ops (elementwise, bias, relu, etc.) to strips of 8
+  // along the innermost dimension before vectorization. Without this, the
+  // vectorizer sees the full tensor as a single vector<NxNxf32>, causing LLVM
+  // O3 to hang on large shapes (e.g. 512x512) due to combinatorial explosion
+  // in its analysis passes.
+  passManager.addNestedPass<mlir::func::FuncOp>(
+      createLinalgGenericTilingPass());
+  passManager.addPass(mlir::createCanonicalizerPass());
+
+  // Vectorize remaining linalg structured ops → vector dialect
   // (linalg.matmul is already handled by LinalgMatmulToContractPass above)
   passManager.addNestedPass<mlir::func::FuncOp>(
       createLinalgVectorizationPass());

@@ -15,7 +15,7 @@ import numpy as np
 from mlir_edsl import ml_function, Tensor, f32, matmul, relu
 from mlir_edsl.backend import get_backend
 
-SIZES = [2, 4, 8, 16, 32, 64, 128, 256]
+SIZES = [2, 4, 8, 16, 32, 64, 128, 256, 512]
 WARMUP = 5
 
 
