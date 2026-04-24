@@ -57,12 +57,14 @@ wheels/
 *.egg
 MANIFEST
 
-# LLVM/MLIR build artifacts  
+# LLVM/MLIR build artifacts
 *.bc
 *.ll
 *.s
-*.mlir
 *.tmp
+# Ignore generated .mlir dumps; keep authored source files under experiments/.
+ir_output/**/*.mlir
+!experiments/*.mlir
 
 # IDE and editor files
 .vscode/
