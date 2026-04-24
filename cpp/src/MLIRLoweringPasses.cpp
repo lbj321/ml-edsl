@@ -1,7 +1,6 @@
 #include "mlir_edsl/MLIRLoweringPasses.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/TilingInterfaceImpl.h"
@@ -19,95 +18,75 @@
 
 namespace {
 
-// Converts tensor-returning functions to void + writable-out-param convention
-// before bufferization. This lets one-shot-bufferize write the result directly
-// into the caller's buffer (no memref.copy), while the tensor return kept the
-// op chain live through linalg-fuse-elementwise-ops' greedy DCE.
+// Tiles the outermost elementwise linalg.generic (the bias+relu epilogue
+// produced by --linalg-fuse-elementwise-ops) and greedily fuses its linalg
+// producers (matmul, fill) upward into the generated scf.forall loops.
 //
-// Transform per function with a tensor return type:
-//   1. Append a new {bufferization.writable} tensor arg as the out-param.
-//   2. Replace each `return %val` with:
-//        bufferization.materialize_in_destination %val in %out_param
-//        return
-//   3. Update the function type to void return.
-struct TensorReturnToOutParamPass
-    : public mlir::PassWrapper<TensorReturnToOutParamPass,
+// Running in tensor land (before bufferization) enables epilogue fusion:
+// fill → matmul → bias+relu all execute on the same [tileM×tileN] tile,
+// keeping the matmul output in L2 cache instead of writing it to DRAM first.
+//
+// After this pass the body of the scf.forall contains:
+//   linalg.fill (tile) → linalg.matmul (tile, full K) → linalg.generic (tile)
+// The scf.forall is subsequently converted to omp.parallel by the existing
+// ForallToParallelLoop + ConvertSCFToOpenMP pass sequence.
+struct LinalgOuterTileAndFusePass
+    : public mlir::PassWrapper<LinalgOuterTileAndFusePass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TensorReturnToOutParamPass)
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgOuterTileAndFusePass)
+
+  int64_t tileM, tileN;
+  explicit LinalgOuterTileAndFusePass(int64_t m, int64_t n)
+      : tileM(m), tileN(n) {}
+
   llvm::StringRef getArgument() const override {
-    return "tensor-return-to-out-param";
+    return "linalg-outer-tile-and-fuse";
   }
   llvm::StringRef getDescription() const override {
-    return "Convert tensor-returning functions to void + writable out-param";
+    return "Tile bias+relu linalg.generic and fuse matmul+fill producers into "
+           "scf.forall loops (epilogue fusion, pre-bufferization)";
   }
+
   void runOnOperation() override {
     mlir::func::FuncOp func = getOperation();
-    mlir::FunctionType funcType = func.getFunctionType();
-
-    // Only handle single tensor return.
-    if (funcType.getNumResults() != 1)
-      return;
-    auto tensorType =
-        mlir::dyn_cast<mlir::RankedTensorType>(funcType.getResult(0));
-    if (!tensorType)
-      return;
-
     mlir::IRRewriter rewriter(func->getContext());
 
-    // Append the out-param to the function's entry block and type.
-    mlir::Block &entryBlock = func.getBody().front();
-    mlir::BlockArgument outParam =
-        entryBlock.addArgument(tensorType, func.getLoc());
-    auto outArgIdx = funcType.getNumInputs(); // index of the new arg
-
-    // Update function type: same inputs + new out-param, void return.
-    llvm::SmallVector<mlir::Type> newInputs(funcType.getInputs());
-    newInputs.push_back(tensorType);
-    func.setType(rewriter.getFunctionType(newInputs, {}));
-
-    // Mark the new arg writable so the bufferizer writes in-place.
-    func.setArgAttr(outArgIdx, "bufferization.writable",
-                    rewriter.getBoolAttr(true));
-
-    // Replace each return with void return (+ optional materialize_in_destination fallback).
-    func.walk([&](mlir::func::ReturnOp ret) {
-      rewriter.setInsertionPoint(ret);
-      mlir::Value val = ret.getOperands()[0];
-
-      // Trace backwards through linalg outs chain to find the root
-      // tensor.empty() and replace it with outParam. This makes the entire
-      // chain write directly into the caller's buffer. If the trace succeeds,
-      // the result already aliases outParam and bufferization writes in-place
-      // with no copy needed — so we skip materialize_in_destination entirely.
-      // Only emit it as a fallback when the trace fails (e.g. the chain
-      // doesn't terminate in a tensor.empty we can replace).
-      bool replacedEmpty = false;
-      mlir::Value cursor = val;
-      while (auto linalgOp =
-                 cursor.getDefiningOp<mlir::linalg::LinalgOp>()) {
-        unsigned idx =
-            mlir::cast<mlir::OpResult>(cursor).getResultNumber();
-        mlir::Value outsVal = linalgOp.getDpsInits()[idx];
-        if (auto emptyOp =
-                outsVal.getDefiningOp<mlir::tensor::EmptyOp>()) {
-          rewriter.replaceAllUsesWith(outsVal, outParam);
-          rewriter.eraseOp(emptyOp);
-          replacedEmpty = true;
-          break;
-        }
-        cursor = outsVal;
-      }
-
-      if (!replacedEmpty) {
-        // Fallback for return patterns that don't terminate in a linalg op
-        // with a tensor.empty outs (e.g. tensor.insert, scf.if results).
-        // materialize_in_destination tells the bufferizer where the result
-        // must land; may produce a memref.copy if aliasing can't be proven.
-        rewriter.create<mlir::bufferization::MaterializeInDestinationOp>(
-            ret.getLoc(), mlir::TypeRange{tensorType}, val, outParam);
-      }
-      rewriter.replaceOpWithNewOp<mlir::func::ReturnOp>(ret);
+    // Find the merged bias+relu generic: its first ins operand is a matmul
+    // result (guaranteed by --linalg-fuse-elementwise-ops running first).
+    mlir::linalg::GenericOp consumer;
+    func.walk([&](mlir::linalg::GenericOp op) {
+      if (!op.getInputs().empty() &&
+          op.getInputs()[0].getDefiningOp<mlir::linalg::MatmulOp>())
+        consumer = op;
     });
+    if (!consumer)
+      return;
+
+    llvm::SmallVector<mlir::OpFoldResult> tileSizes =
+        mlir::getAsIndexOpFoldResult(func->getContext(), {tileM, tileN});
+    mlir::scf::SCFTileAndFuseOptions opts;
+    opts.setTilingOptions(
+        mlir::scf::SCFTilingOptions()
+            .setTileSizes(tileSizes)
+            .setLoopType(mlir::scf::SCFTilingOptions::LoopType::ForallOp));
+
+    rewriter.setInsertionPoint(consumer);
+    auto fuseResult = mlir::scf::tileConsumerAndFuseProducersUsingSCF(
+        rewriter,
+        mlir::cast<mlir::TilingInterface>(consumer.getOperation()),
+        opts);
+    if (mlir::failed(fuseResult)) {
+      consumer->emitWarning(
+          "linalg-outer-tile-and-fuse: tiling failed, skipping");
+      return;
+    }
+
+    // Replace the consumer with the forall result; fused producers (matmul,
+    // fill) are now dead and will be cleaned up by the subsequent canonicalizer.
+    llvm::SmallVector<mlir::Value> repls;
+    for (mlir::Value res : consumer->getResults())
+      repls.push_back(fuseResult->replacements.lookup(res));
+    rewriter.replaceOp(consumer, repls);
   }
 };
 
@@ -391,8 +370,8 @@ struct LinalgGenericTilingPass
 
 namespace mlir_edsl {
 
-std::unique_ptr<mlir::Pass> createTensorReturnToOutParamPass() {
-  return std::make_unique<TensorReturnToOutParamPass>();
+std::unique_ptr<mlir::Pass> createLinalgOuterTileAndFusePass() {
+  return std::make_unique<LinalgOuterTileAndFusePass>(64, 64);
 }
 std::unique_ptr<mlir::Pass> createLinalgMatmulToContractPass() {
   return std::make_unique<LinalgMatmulToContractPass>();
@@ -411,10 +390,6 @@ std::unique_ptr<mlir::Pass> createLinalgGenericTilingPass() {
 }
 std::unique_ptr<mlir::Pass> createLinalgMatmulTilingPass() {
   return std::make_unique<LinalgMatmulTilingPass>(8, 8, 8);
-}
-std::unique_ptr<mlir::Pass> createLinalgMatmulParallelTilingPass() {
-  using LoopType = mlir::scf::SCFTilingOptions::LoopType;
-  return std::make_unique<LinalgMatmulTilingPass>(64, 64, 0, LoopType::ForallOp);
 }
 
 #ifdef MLIR_EDSL_CUDA_ENABLED

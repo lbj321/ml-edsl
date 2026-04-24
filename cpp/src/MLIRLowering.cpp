@@ -201,15 +201,16 @@ void MLIRLowering::setupLoweringPipeline() {
 
 void MLIRLowering::addConversionPasses() {
 
-  // Fuse elementwise linalg ops (e.g. matmul + bias generic) before bufferization.
-  // Tensor-returning functions keep the op chain live through DCE in this pass.
+  // Fuse elementwise linalg ops (bias_add + relu → one linalg.generic).
   passManager.addPass(mlir::createLinalgElementwiseOpFusionPass());
 
-  // Convert tensor-returning functions to void + writable-out-param before
-  // bufferization, so one-shot-bufferize can write results in-place into the
-  // caller's buffer without a memref.copy.
+  // Tile the merged bias+relu generic [64×64] with scf.forall and greedily
+  // fuse matmul + fill upward into the generated loops (epilogue fusion).
+  // Running pre-bufferization keeps the matmul output tile in L2 cache instead
+  // of writing it to DRAM before bias+relu read it.
   passManager.addNestedPass<mlir::func::FuncOp>(
-      createTensorReturnToOutParamPass());
+      createLinalgOuterTileAndFusePass());
+  passManager.addPass(mlir::createCanonicalizerPass());
 
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
@@ -220,7 +221,17 @@ void MLIRLowering::addConversionPasses() {
       mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
   passManager.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
 
-  // Insert deallocs for buffers created during bufferization
+  // Convert memref-returning functions to void + out-param immediately after
+  // bufferization, before the ownership-based deallocation pass runs.
+  // buffer-results-to-out-params is incompatible with
+  // ownership-based-buffer-deallocation when run after it: the dealloc pass
+  // marks the returned buffer as "escaping to caller" and omits its dealloc;
+  // the out-params pass then removes the return, leaving the buffer un-freed
+  // and confusing the lowered dealloc logic. Running it first lets the dealloc
+  // pass see a void function with a plain memref.copy and handle ownership correctly.
+  passManager.addPass(mlir::bufferization::createBufferResultsToOutParamsPass());
+
+  // Insert deallocs for buffers created during bufferization.
   passManager.addPass(
       mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
   passManager.addPass(mlir::createCanonicalizerPass());
@@ -228,14 +239,10 @@ void MLIRLowering::addConversionPasses() {
       mlir::bufferization::createBufferDeallocationSimplificationPass());
   passManager.addPass(mlir::bufferization::createLowerDeallocationsPass());
 
-  // Outer 64x64 parallel tiles → scf.forall → scf.parallel → omp.parallel.
-  // OMP conversion must happen HERE while the body only contains linalg ops;
-  // once inner tiling and vectorization run, the body has scf.for + alloca_scope
-  // and scf-to-control-flow would try to expand them to multi-block CF inside
-  // omp.loop_nest, violating its single-block region constraint.
-  passManager.addNestedPass<mlir::func::FuncOp>(
-      createLinalgMatmulParallelTilingPass());
-  passManager.addPass(mlir::createCanonicalizerPass());
+  // Convert scf.forall (outer 64×64 tile loops) → scf.parallel → omp.parallel.
+  // OMP conversion runs HERE while the forall body contains only linalg ops
+  // (fill + matmul + generic); inner tiling hasn't run yet so there are no
+  // inner scf.for loops that would violate omp.loop_nest's single-block constraint.
   passManager.addPass(mlir::createForallToParallelLoopPass());
   passManager.addPass(mlir::createConvertSCFToOpenMPPass());
 
