@@ -39,6 +39,7 @@ set(MLIR_SCF_LIBS
     MLIRSCFToOpenMP
     MLIRSCFTransforms
     MLIRControlFlowDialect
+    MLIRControlFlowTransforms
     MLIROpenMPDialect
     MLIROpenMPToLLVM
 )
