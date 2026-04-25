@@ -198,13 +198,74 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   mlir::registerOpenMPDialectTranslation(*context);
 }
 
-void MLIRLowering::setupLoweringPipeline() {
-  passManager.enableVerifier(true);
-  if (snapshotsEnabled) {
-    passManager.addInstrumentation(
+void MLIRLowering::attachInstrumentation(mlir::PassManager &pm) {
+  if (snapshotsEnabled)
+    pm.addInstrumentation(
         std::make_unique<IRSnapshotInstrumentation>(&snapshots));
+}
+
+bool MLIRLowering::runPipeline(mlir::PassManager &pm, mlir::ModuleOp module) {
+  pm.enableVerifier(true);
+  if (std::getenv("TRACE_PASSES")) {
+    pm.getContext()->disableMultithreading();
+    pm.enableIRPrinting(
+        /*shouldPrintBeforePass=*/[](mlir::Pass *,
+                                     mlir::Operation *) { return true; },
+        /*shouldPrintAfterPass=*/nullptr,
+        /*printModuleScope=*/true,
+        /*printAfterOnlyOnChange=*/false,
+        /*printAfterOnlyOnFailure=*/false, llvm::errs());
   }
+  if (mlir::succeeded(pm.run(module)))
+    return true;
+  llvm::raw_string_ostream os(failureIR_);
+  module.print(os);
+  llvm::errs() << "\n[mlir_edsl] Lowering pipeline failed. IR at failure:\n"
+               << failureIR_ << "\n";
+  return false;
+}
+
+void MLIRLowering::setupLoweringPipeline() {
+  attachInstrumentation(passManager);
   addConversionPasses();
+}
+
+void MLIRLowering::addBufferizationPasses(mlir::PassManager &pm,
+                                          bool withOutParams) {
+  mlir::bufferization::OneShotBufferizePassOptions bufOpts;
+  bufOpts.bufferizeFunctionBoundaries = true;
+  bufOpts.functionBoundaryTypeConversion =
+      mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
+  pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
+
+  // Convert memref-returning functions to void + out-param before the
+  // ownership-based deallocation pass runs. Running it first lets the dealloc
+  // pass see a void function with a plain memref.copy and handle ownership
+  // correctly. (CPU path only — GPU params are passed as cuLaunchKernel void**.)
+  if (withOutParams)
+    pm.addPass(mlir::bufferization::createBufferResultsToOutParamsPass());
+
+  pm.addPass(
+      mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(
+      mlir::bufferization::createBufferDeallocationSimplificationPass());
+  pm.addPass(mlir::bufferization::createLowerDeallocationsPass());
+}
+
+void MLIRLowering::addSharedFinalLLVMLoweringPasses(mlir::PassManager &pm) {
+  // Lower inner scf.for loops → CF (scf.parallel/forall already converted).
+  pm.addPass(mlir::createSCFToControlFlowPass());
+  // Expand memref.subview with dynamic offsets (produced by tiling) into
+  // explicit arith/affine pointer arithmetic — must run before lower-affine
+  // and finalize-memref-to-llvm.
+  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
+  // Lower affine.apply (produced by expand-strided-metadata) to arith ops.
+  pm.addPass(mlir::createLowerAffinePass());
+  // Lower arith ops → LLVM (after affine is gone).
+  pm.addPass(mlir::createArithToLLVMConversionPass());
+  pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+  pm.addPass(mlir::createConvertControlFlowToLLVMPass());
 }
 
 void MLIRLowering::addConversionPasses() {
@@ -223,29 +284,7 @@ void MLIRLowering::addConversionPasses() {
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
   // function boundaries, matching the memref descriptors Python passes in.
-  mlir::bufferization::OneShotBufferizePassOptions bufOpts;
-  bufOpts.bufferizeFunctionBoundaries = true;
-  bufOpts.functionBoundaryTypeConversion =
-      mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
-  passManager.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
-
-  // Convert memref-returning functions to void + out-param immediately after
-  // bufferization, before the ownership-based deallocation pass runs.
-  // buffer-results-to-out-params is incompatible with
-  // ownership-based-buffer-deallocation when run after it: the dealloc pass
-  // marks the returned buffer as "escaping to caller" and omits its dealloc;
-  // the out-params pass then removes the return, leaving the buffer un-freed
-  // and confusing the lowered dealloc logic. Running it first lets the dealloc
-  // pass see a void function with a plain memref.copy and handle ownership correctly.
-  passManager.addPass(mlir::bufferization::createBufferResultsToOutParamsPass());
-
-  // Insert deallocs for buffers created during bufferization.
-  passManager.addPass(
-      mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
-  passManager.addPass(mlir::createCanonicalizerPass());
-  passManager.addPass(
-      mlir::bufferization::createBufferDeallocationSimplificationPass());
-  passManager.addPass(mlir::bufferization::createLowerDeallocationsPass());
+  addBufferizationPasses(passManager, /*withOutParams=*/true);
 
   // Convert scf.forall (outer 64×64 tile loops) → scf.parallel → omp.parallel.
   // OMP conversion runs HERE while the forall body contains only linalg ops
@@ -312,48 +351,16 @@ void MLIRLowering::addConversionPasses() {
 
   // Lower ub.poison (generated by VectorToSCF for out-of-bounds positions)
   passManager.addPass(mlir::createUBToLLVMConversionPass());
-  // Lower inner scf.for loops → CF. scf.parallel was already converted to
-  // omp.parallel above, so only the inner serial loops remain here.
-  passManager.addPass(mlir::createSCFToControlFlowPass());
 
-  // Expand memref.subview with dynamic offsets (produced by tiling) into
-  // explicit arith/affine pointer arithmetic — must run before lower-affine
-  // and finalize-memref-to-llvm.
-  passManager.addPass(mlir::memref::createExpandStridedMetadataPass());
+  addSharedFinalLLVMLoweringPasses(passManager);
 
-  // Lower affine.apply (produced by expand-strided-metadata) to arith ops.
-  passManager.addPass(mlir::createLowerAffinePass());
-
-  // Lower arith ops → LLVM (after affine is gone).
-  passManager.addPass(mlir::createArithToLLVMConversionPass());
-
-  passManager.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
-  passManager.addPass(mlir::createConvertControlFlowToLLVMPass());
   passManager.addPass(mlir::createConvertFuncToLLVMPass());
   passManager.addPass(mlir::createConvertOpenMPToLLVMPass());
-
   passManager.addPass(mlir::createReconcileUnrealizedCastsPass());
 }
 
 bool MLIRLowering::runLoweringPipeline(mlir::ModuleOp module) {
-  if (std::getenv("TRACE_PASSES")) {
-    passManager.getContext()->disableMultithreading();
-    passManager.enableIRPrinting(
-        /*shouldPrintBeforePass=*/[](mlir::Pass *,
-                                     mlir::Operation *) { return true; },
-        /*shouldPrintAfterPass=*/nullptr,
-        /*printModuleScope=*/true,
-        /*printAfterOnlyOnChange=*/false,
-        /*printAfterOnlyOnFailure=*/false, llvm::errs());
-  }
-  if (mlir::succeeded(passManager.run(module)))
-    return true;
-  // Capture partially-lowered module — always, regardless of snapshotsEnabled
-  llvm::raw_string_ostream os(failureIR_);
-  module.print(os);
-  llvm::errs() << "\n[mlir_edsl] Lowering pipeline failed. IR at failure:\n"
-               << failureIR_ << "\n";
-  return false;
+  return runPipeline(passManager, module);
 }
 
 LoweredModule MLIRLowering::lowerToLLVMModule(mlir::ModuleOp module) {
@@ -414,16 +421,7 @@ void MLIRLowering::registerGPUDialects(mlir::MLIRContext *ctx) {
 void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &pm) {
   pm.addPass(mlir::createLinalgElementwiseOpFusionPass());
 
-  mlir::bufferization::OneShotBufferizePassOptions bufOpts;
-  bufOpts.bufferizeFunctionBoundaries = true;
-  bufOpts.functionBoundaryTypeConversion =
-      mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
-  pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
-
-  pm.addPass(mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-  pm.addPass(mlir::bufferization::createBufferDeallocationSimplificationPass());
-  pm.addPass(mlir::bufferization::createLowerDeallocationsPass());
+  addBufferizationPasses(pm, /*withOutParams=*/false);
 
   // Tile matmul into 32x32 scf.forall blocks before parallel loop conversion.
   // Outer tile loops (M/32, N/32) → blockIdx; inner 32x32 → threadIdx (1024 max).
@@ -449,25 +447,14 @@ void MLIRLowering::addGPUNVVMPasses(mlir::PassManager &pm) {
   auto &gpuPm = pm.nest<mlir::gpu::GPUModuleOp>();
   gpuPm.addPass(mlir::createConvertGpuOpsToNVVMOps());
 
-  pm.addPass(mlir::createSCFToControlFlowPass());
-  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
-  pm.addPass(mlir::createLowerAffinePass());
-  pm.addPass(mlir::createArithToLLVMConversionPass());
-  pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
-  pm.addPass(mlir::createConvertControlFlowToLLVMPass());
+  addSharedFinalLLVMLoweringPasses(pm);
+
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
 }
 
 bool MLIRLowering::runGPULoweringPipeline(mlir::ModuleOp module,
                                           mlir::PassManager &pm) {
-  pm.enableVerifier(true);
-  if (mlir::succeeded(pm.run(module)))
-    return true;
-  llvm::raw_string_ostream os(failureIR_);
-  module.print(os);
-  llvm::errs() << "\n[mlir_edsl] GPU lowering pipeline failed. IR at failure:\n"
-               << failureIR_ << "\n";
-  return false;
+  return runPipeline(pm, module);
 }
 
 // Walk gpu.launch_func ops and classify each kernel argument so that
@@ -610,9 +597,7 @@ GPULoweredModule MLIRLowering::lowerToGPUModule(mlir::ModuleOp module) {
   // Phase 1: outline kernels
   {
     mlir::PassManager pm1(ctx);
-    if (snapshotsEnabled)
-      pm1.addInstrumentation(
-          std::make_unique<IRSnapshotInstrumentation>(&snapshots));
+    attachInstrumentation(pm1);
     addGPUPreOutliningPasses(pm1);
     if (!runGPULoweringPipeline(*cloned, pm1))
       throw std::runtime_error("GPU pre-outlining pipeline failed");
@@ -628,9 +613,7 @@ GPULoweredModule MLIRLowering::lowerToGPUModule(mlir::ModuleOp module) {
   // Phase 2: lower gpu.module contents to NVVM/LLVM dialect
   {
     mlir::PassManager pm2(ctx);
-    if (snapshotsEnabled)
-      pm2.addInstrumentation(
-          std::make_unique<IRSnapshotInstrumentation>(&snapshots));
+    attachInstrumentation(pm2);
     addGPUNVVMPasses(pm2);
     if (!runGPULoweringPipeline(*cloned, pm2))
       throw std::runtime_error("GPU NVVM lowering pipeline failed");

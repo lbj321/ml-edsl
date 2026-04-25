@@ -76,12 +76,20 @@ private:
   SnapshotList snapshots;
   std::string failureIR_;
 
-  // Helper methods
+  // Shared infrastructure
   void registerRequiredDialects();
   void registerRequiredDialects(mlir::MLIRContext *ctx);
+  void attachInstrumentation(mlir::PassManager &pm);
+  bool runPipeline(mlir::PassManager &pm, mlir::ModuleOp module);
+
+  // CPU pipeline
   void setupLoweringPipeline();
   void addConversionPasses();
   bool runLoweringPipeline(mlir::ModuleOp module);
+
+  // Shared pass-sequence building blocks
+  void addBufferizationPasses(mlir::PassManager &pm, bool withOutParams);
+  void addSharedFinalLLVMLoweringPasses(mlir::PassManager &pm);
 
   // GPU-path helpers
   void registerGPUDialects(mlir::MLIRContext *ctx);
