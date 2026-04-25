@@ -156,8 +156,8 @@ class TestTensorReturnIR:
         // CHECK-NOT: bufferization.to_tensor
         """)
 
-    def test_tensor_return_has_materialize_in_destination(self, check_lowered_ir):
-        """After TensorReturnToOutParamPass: non-linalg tensor return uses materialize_in_destination fallback."""
+    def test_tensor_return_lowered_to_out_param_copy(self, check_lowered_ir):
+        """After buffer-results-to-out-params: constant tensor return becomes memref.copy into out-param."""
         @ml_function
         def tr_ir_mat() -> Tensor[f32, 4]:
             return Tensor[f32, 4]([1.0, 2.0, 3.0, 4.0])
@@ -165,11 +165,10 @@ class TestTensorReturnIR:
         tr_ir_mat()
 
         check_lowered_ir("""
-        // CHECK: func.func @tr_ir_mat
-        // CHECK-SAME: bufferization.writable = true
-        // CHECK: bufferization.materialize_in_destination
-        // CHECK-NOT: restrict writable
-        """, after="tensor-return-to-out-param")
+        // CHECK: func.func @tr_ir_mat(%arg0: memref<4xf32>)
+        // CHECK: memref.copy
+        // CHECK-NOT: tensor<
+        """, after="buffer-results-to-out-params")
 
 
 if __name__ == "__main__":
