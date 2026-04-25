@@ -39,6 +39,16 @@ void MLIRExecutor::initialize() {
   }
 #endif
 
+  // Load mlir_c_runner_utils with RTLD_GLOBAL so memrefCopy (used by
+  // memref.copy ops emitted when tiling produces multi-tile output assembly)
+  // is visible to the JIT linker.
+#ifdef MLIR_EDSL_C_RUNNER_UTILS_PATH
+  {
+    std::string err;
+    llvm::sys::DynamicLibrary::LoadLibraryPermanently(MLIR_EDSL_C_RUNNER_UTILS_PATH, &err);
+  }
+#endif
+
   auto jitOrError = llvm::orc::LLJITBuilder().create();
   if (!jitOrError) {
     throw std::runtime_error("Failed to create LLJIT");

@@ -21,6 +21,19 @@ if(NOT LIBOMP_PATH)
     message(WARNING "libomp not found — OMP parallel execution will abort at runtime")
 endif()
 
+# memrefCopy and similar MLIR runtime helpers live in libmlir_c_runner_utils.
+# MLIRExecutor::initialize() opens it with RTLD_GLOBAL so the LLJIT resolver
+# can find memrefCopy at JIT link time (same pattern as libomp above).
+find_library(MLIR_C_RUNNER_UTILS_PATH NAMES mlir_c_runner_utils
+    PATHS
+        ${LLVM_LIBRARY_DIR}
+        /usr/lib/x86_64-linux-gnu
+        /usr/local/lib
+)
+if(NOT MLIR_C_RUNNER_UTILS_PATH)
+    message(WARNING "libmlir_c_runner_utils not found — memrefCopy will be missing at JIT link time")
+endif()
+
 # Core MLIR components library
 add_library(mlir_edsl_core STATIC
     src/MLIRBuilder.cpp
@@ -86,6 +99,11 @@ if(LIBOMP_PATH)
     target_link_libraries(mlir_edsl_executor PUBLIC ${LIBOMP_PATH})
     target_compile_definitions(mlir_edsl_executor PRIVATE
         MLIR_EDSL_LIBOMP_PATH="${LIBOMP_PATH}")
+endif()
+
+if(MLIR_C_RUNNER_UTILS_PATH)
+    target_compile_definitions(mlir_edsl_executor PRIVATE
+        MLIR_EDSL_C_RUNNER_UTILS_PATH="${MLIR_C_RUNNER_UTILS_PATH}")
 endif()
 
 if(MLIR_EDSL_CUDA)
