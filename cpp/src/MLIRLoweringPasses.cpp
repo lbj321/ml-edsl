@@ -391,6 +391,10 @@ std::unique_ptr<mlir::Pass> createLinalgGenericTilingPass() {
 std::unique_ptr<mlir::Pass> createLinalgMatmulTilingPass() {
   return std::make_unique<LinalgMatmulTilingPass>(8, 8, 8);
 }
+std::unique_ptr<mlir::Pass> createLinalgMatmulParallelTilingPass() {
+  using LoopType = mlir::scf::SCFTilingOptions::LoopType;
+  return std::make_unique<LinalgMatmulTilingPass>(64, 64, 0, LoopType::ForallOp);
+}
 
 #ifdef MLIR_EDSL_CUDA_ENABLED
 std::unique_ptr<mlir::Pass> createLinalgGPUMatmulTilingPass() {

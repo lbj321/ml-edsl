@@ -6,13 +6,14 @@ TestGPUMatmulTiled: sizes > 32 to exercise LinalgGPUMatmulTilingPass.
   - Multiples of 32 (64, 128): clean tile boundaries.
   - Non-multiples (48, 96): produce boundary tiles that cannot be
     canonicalized away, exercising the fallback scalar loop path.
+TestGPUDenseLayerTiled: matmul + bias + relu on GPU.
 """
 
 import ctypes
 import pytest
 import numpy as np
 
-from mlir_edsl import ml_function, Tensor, f32
+from mlir_edsl import ml_function, Tensor, f32, relu
 
 
 # ---------------------------------------------------------------------------
@@ -143,3 +144,67 @@ class TestGPUMatmulTiled:
         A = np.random.rand(96, 96).astype(np.float32)
         B = np.random.rand(96, 96).astype(np.float32)
         np.testing.assert_allclose(matmul_96(A, B), A @ B, rtol=1e-4, atol=1e-4)
+
+
+class TestGPUDenseLayerTiled:
+    """Correctness tests for matmul + bias + relu on GPU.
+
+    These tests run against the current 3-kernel path (fill + matmul + bias+relu)
+    and serve as the regression baseline for the upcoming tile-and-fuse optimization.
+    """
+
+    def test_dense_relu_32x32(self, gpu_backend):
+        """Single tile — no forall tiling fires, exercises un-tiled path."""
+        @ml_function(target="gpu")
+        def dense_32(X: Tensor[f32, 32, 32],
+                     W: Tensor[f32, 32, 32],
+                     b: Tensor[f32, 32]) -> Tensor[f32, 32, 32]:
+            return relu(X @ W + b)
+
+        X = np.random.rand(32, 32).astype(np.float32)
+        W = np.random.rand(32, 32).astype(np.float32)
+        b = np.random.rand(32).astype(np.float32)
+        np.testing.assert_allclose(dense_32(X, W, b), np.maximum(X @ W + b, 0.0),
+                                   rtol=1e-3, atol=1e-3)
+
+    def test_dense_relu_64x64(self, gpu_backend):
+        """2×2 tile grid — exercises tiled path with clean boundaries."""
+        @ml_function(target="gpu")
+        def dense_64(X: Tensor[f32, 64, 64],
+                     W: Tensor[f32, 64, 64],
+                     b: Tensor[f32, 64]) -> Tensor[f32, 64, 64]:
+            return relu(X @ W + b)
+
+        X = np.random.rand(64, 64).astype(np.float32)
+        W = np.random.rand(64, 64).astype(np.float32)
+        b = np.random.rand(64).astype(np.float32)
+        np.testing.assert_allclose(dense_64(X, W, b), np.maximum(X @ W + b, 0.0),
+                                   rtol=1e-3, atol=1e-3)
+
+    def test_dense_relu_96x96(self, gpu_backend):
+        """3×3 tile grid — non-multiple of 32 exercises boundary tile handling."""
+        @ml_function(target="gpu")
+        def dense_96(X: Tensor[f32, 96, 96],
+                     W: Tensor[f32, 96, 96],
+                     b: Tensor[f32, 96]) -> Tensor[f32, 96, 96]:
+            return relu(X @ W + b)
+
+        X = np.random.rand(96, 96).astype(np.float32)
+        W = np.random.rand(96, 96).astype(np.float32)
+        b = np.random.rand(96).astype(np.float32)
+        np.testing.assert_allclose(dense_96(X, W, b), np.maximum(X @ W + b, 0.0),
+                                   rtol=1e-3, atol=1e-3)
+
+    def test_dense_no_relu_64x64(self, gpu_backend):
+        """Bias-only (no relu) — verifies epilogue detection doesn't break the no-relu path."""
+        @ml_function(target="gpu")
+        def dense_bias(X: Tensor[f32, 64, 64],
+                       W: Tensor[f32, 64, 64],
+                       b: Tensor[f32, 64]) -> Tensor[f32, 64, 64]:
+            return X @ W + b
+
+        X = np.random.rand(64, 64).astype(np.float32)
+        W = np.random.rand(64, 64).astype(np.float32)
+        b = np.random.rand(64).astype(np.float32)
+        np.testing.assert_allclose(dense_bias(X, W, b), X @ W + b,
+                                   rtol=1e-3, atol=1e-3)

@@ -273,23 +273,19 @@ void MLIRLowering::addConversionPasses() {
   // Fuse elementwise linalg ops (bias_add + relu → one linalg.generic).
   passManager.addPass(mlir::createLinalgElementwiseOpFusionPass());
 
-  // Tile the merged bias+relu generic [64×64] with scf.forall and greedily
-  // fuse matmul + fill upward into the generated loops (epilogue fusion).
-  // Running pre-bufferization keeps the matmul output tile in L2 cache instead
-  // of writing it to DRAM before bias+relu read it.
-  passManager.addNestedPass<mlir::func::FuncOp>(
-      createLinalgOuterTileAndFusePass());
-  passManager.addPass(mlir::createCanonicalizerPass());
-
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
   // function boundaries, matching the memref descriptors Python passes in.
   addBufferizationPasses(passManager, /*withOutParams=*/true);
 
-  // Convert scf.forall (outer 64×64 tile loops) → scf.parallel → omp.parallel.
-  // OMP conversion runs HERE while the forall body contains only linalg ops
-  // (fill + matmul + generic); inner tiling hasn't run yet so there are no
-  // inner scf.for loops that would violate omp.loop_nest's single-block constraint.
+  // Outer 64×64 parallel tiles → scf.forall → scf.parallel → omp.parallel.
+  // OMP conversion must happen HERE while the body only contains linalg ops;
+  // once inner tiling and vectorization run, the body has scf.for + alloca_scope
+  // and scf-to-control-flow would try to expand them inside omp.loop_nest,
+  // violating its single-block region constraint.
+  passManager.addNestedPass<mlir::func::FuncOp>(
+      createLinalgMatmulParallelTilingPass());
+  passManager.addPass(mlir::createCanonicalizerPass());
   passManager.addPass(mlir::createForallToParallelLoopPass());
   passManager.addPass(mlir::createConvertSCFToOpenMPPass());
 
@@ -425,8 +421,7 @@ void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &pm) {
 
   // Tile matmul into 32x32 scf.forall blocks before parallel loop conversion.
   // Outer tile loops (M/32, N/32) → blockIdx; inner 32x32 → threadIdx (1024 max).
-  pm.addNestedPass<mlir::func::FuncOp>(
-      createLinalgGPUMatmulTilingPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgGPUMatmulTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
   // Convert scf.forall (tile loops) → scf.parallel so gpu-map-parallel-loops
   // can map them to blockIdx alongside the inner thread-level parallel loops.
