@@ -143,6 +143,39 @@ private:
 
 } // anonymous namespace
 
+namespace {
+
+// Tile relu [64×64] into scf.forall, then fuse bias_add → matmul → fill
+// into the forall body. All ops stay in tensor land until bufferization.
+// ForallToParallelLoopPass + ConvertSCFToOpenMPPass downstream convert
+// the forall into omp.parallel.
+static constexpr llvm::StringLiteral kCPUTileAndFuseStrategy = R"mlir(
+module attributes {transform.with_named_sequence} {
+  transform.named_sequence @__transform_main(%root : !transform.any_op {transform.readonly}) {
+    %relu   = transform.structured.match attributes {library_call = "relu"} in %root
+                : (!transform.any_op) -> !transform.any_op
+    %bias   = transform.structured.match attributes {library_call = "bias_add"} in %root
+                : (!transform.any_op) -> !transform.any_op
+    %matmul = transform.structured.match ops{["linalg.matmul"]} in %root
+                : (!transform.any_op) -> !transform.any_op
+    %fill   = transform.structured.match ops{["linalg.fill"]} in %root
+                : (!transform.any_op) -> !transform.any_op
+    %tiled_relu, %forall =
+        transform.structured.tile_using_forall %relu tile_sizes [64, 64]
+            : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.structured.fuse_into_containing_op %bias into %forall
+        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.structured.fuse_into_containing_op %matmul into %forall
+        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.structured.fuse_into_containing_op %fill into %forall
+        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+)mlir";
+
+} // namespace
+
 namespace mlir_edsl {
 
 MLIRLowering::MLIRLowering()
@@ -196,11 +229,11 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   mlir::arith::registerBufferDeallocationOpInterfaceExternalModels(registry);
   mlir::scf::registerBufferDeallocationOpInterfaceExternalModels(registry);
   mlir::cf::registerBufferDeallocationOpInterfaceExternalModels(registry);
-  context->appendDialectRegistry(registry);
-
-  // Register transform dialect extensions (linalg + SCF transform ops)
+  
   mlir::linalg::registerTransformDialectExtension(registry);
   mlir::scf::registerTransformDialectExtension(registry);
+  // Register transform dialect extensions (linalg + SCF transform ops)
+  context->appendDialectRegistry(registry);
 
   // Register LLVM translation interfaces
   mlir::registerLLVMDialectTranslation(*context);
@@ -280,7 +313,19 @@ void MLIRLowering::addSharedFinalLLVMLoweringPasses(mlir::PassManager &pm) {
 
 void MLIRLowering::addConversionPasses() {
 
-  // Fuse elementwise linalg ops (bias_add + relu → one linalg.generic).
+  // Tile relu [64×64] into scf.forall and fuse bias_add → matmul → fill into
+  // the forall body, all in tensor land before bufferization. Must run before
+  // createLinalgElementwiseOpFusionPass: the strategy matches relu and bias_add
+  // by library_call as separate ops; elementwise fusion would merge them into
+  // one generic with no library_call, making them unmatchable.
+  // Replaces the post-bufferize createLinalgMatmulParallelTilingPass.
+  passManager.addPass(createTransformStrategyPass(
+      passManager.getContext(), kCPUTileAndFuseStrategy, "relu"));
+  passManager.addPass(mlir::createCanonicalizerPass());
+
+  // Fuse any remaining adjacent elementwise linalg ops inside the forall body
+  // (e.g. bias_add + relu if the function has no matmul, or future epilogue ops).
+  // Safety net — will be removed once transform strategy is confirmed correct.
   passManager.addPass(mlir::createLinalgElementwiseOpFusionPass());
 
   // Bufferize tensor ops to memref ops, including function boundaries.
@@ -288,14 +333,11 @@ void MLIRLowering::addConversionPasses() {
   // function boundaries, matching the memref descriptors Python passes in.
   addBufferizationPasses(passManager, /*withOutParams=*/true);
 
-  // Outer 64×64 parallel tiles → scf.forall → scf.parallel → omp.parallel.
+  // scf.forall (from transform) → scf.parallel → omp.parallel.
   // OMP conversion must happen HERE while the body only contains linalg ops;
   // once inner tiling and vectorization run, the body has scf.for + alloca_scope
   // and scf-to-control-flow would try to expand them inside omp.loop_nest,
   // violating its single-block region constraint.
-  passManager.addNestedPass<mlir::func::FuncOp>(
-      createLinalgMatmulParallelTilingPass());
-  passManager.addPass(mlir::createCanonicalizerPass());
   passManager.addPass(mlir::createForallToParallelLoopPass());
   passManager.addPass(mlir::createConvertSCFToOpenMPPass());
 

@@ -371,55 +371,62 @@ struct LinalgGenericTilingPass
   }
 };
 
-// Applies an embedded transform dialect strategy (a string containing a
-// `module attributes {transform.with_named_sequence}` block) to the module.
-// Parses the strategy once on first use and calls applyTransformNamedSequence
-// directly — no runtime file I/O, no preloaded library constraints.
+// Applies a pre-parsed transform dialect strategy to the module.
+// The strategy module is parsed eagerly at pipeline setup time (when the
+// context is fully configured) and shared via shared_ptr across clones.
+// This avoids context mutation during pass execution and parse-time
+// "unknown op" errors caused by extensions not yet being applied.
 struct TransformStrategyPass
     : public mlir::PassWrapper<TransformStrategyPass,
                                mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TransformStrategyPass)
 
-  llvm::StringRef strategyStr;
-  mlir::OwningOpRef<mlir::ModuleOp> strategyModule;
+  // Shared across clones — parsed once at factory time.
+  std::shared_ptr<mlir::OwningOpRef<mlir::ModuleOp>> strategyModule;
+  // If non-empty, skip modules that don't contain a linalg.generic with
+  // this library_call string (e.g. skip pure matmul for a relu strategy).
+  std::string guardLibraryCall;
 
-  explicit TransformStrategyPass(llvm::StringRef strategy)
-      : strategyStr(strategy) {}
-
-  // Copy constructor: only copy the strategy string; strategyModule is
-  // re-parsed by initialize() on each clone.
-  TransformStrategyPass(const TransformStrategyPass &other)
-      : mlir::PassWrapper<TransformStrategyPass,
-                          mlir::OperationPass<mlir::ModuleOp>>(other),
-        strategyStr(other.strategyStr) {}
+  TransformStrategyPass(
+      std::shared_ptr<mlir::OwningOpRef<mlir::ModuleOp>> strategyMod,
+      llvm::StringRef guard)
+      : strategyModule(std::move(strategyMod)),
+        guardLibraryCall(guard.str()) {}
 
   llvm::StringRef getArgument() const override {
     return "apply-transform-strategy";
   }
   llvm::StringRef getDescription() const override {
-    return "Apply an embedded transform dialect strategy to the module";
-  }
-
-  mlir::LogicalResult initialize(mlir::MLIRContext *context) override {
-    strategyModule =
-        mlir::parseSourceString<mlir::ModuleOp>(strategyStr, context);
-    if (!strategyModule)
-      return mlir::failure();
-    return mlir::success();
+    return "Apply a pre-parsed transform dialect strategy to the module";
   }
 
   void runOnOperation() override {
     mlir::ModuleOp module = getOperation();
+
+    if (!guardLibraryCall.empty()) {
+      bool found = false;
+      module.walk([&](mlir::linalg::GenericOp op) {
+        auto lc = op->getAttrOfType<mlir::StringAttr>("library_call");
+        if (lc && lc.getValue() == guardLibraryCall) {
+          found = true;
+          return mlir::WalkResult::interrupt();
+        }
+        return mlir::WalkResult::advance();
+      });
+      if (!found)
+        return;
+    }
+
     mlir::Operation *transformRoot =
-        mlir::transform::detail::findTransformEntryPoint(module,
-                                                         *strategyModule);
+        mlir::transform::detail::findTransformEntryPoint(
+            module, **strategyModule);
     if (!transformRoot) {
       signalPassFailure();
       return;
     }
     mlir::transform::TransformOptions options;
     if (mlir::failed(mlir::transform::applyTransformNamedSequence(
-            module, transformRoot, *strategyModule, options)))
+            module, transformRoot, **strategyModule, options)))
       signalPassFailure();
   }
 };
@@ -428,8 +435,15 @@ struct TransformStrategyPass
 
 namespace mlir_edsl {
 
-std::unique_ptr<mlir::Pass> createTransformStrategyPass(llvm::StringRef strategy) {
-  return std::make_unique<TransformStrategyPass>(strategy);
+std::unique_ptr<mlir::Pass> createTransformStrategyPass(mlir::MLIRContext *ctx,
+                                                        llvm::StringRef strategy,
+                                                        llvm::StringRef guardLibraryCall) {
+  auto strategyMod = std::make_shared<mlir::OwningOpRef<mlir::ModuleOp>>(
+      mlir::parseSourceString<mlir::ModuleOp>(strategy, ctx));
+  if (!*strategyMod)
+    llvm::report_fatal_error("TransformStrategyPass: failed to parse strategy");
+  return std::make_unique<TransformStrategyPass>(std::move(strategyMod),
+                                                 guardLibraryCall);
 }
 std::unique_ptr<mlir::Pass> createLinalgOuterTileAndFusePass() {
   return std::make_unique<LinalgOuterTileAndFusePass>(64, 64);
