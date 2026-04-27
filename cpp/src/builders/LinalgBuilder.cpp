@@ -231,6 +231,10 @@ mlir::Value LinalgBuilder::buildActivation(const mlir_edsl::LinalgActivation &no
         b.create<mlir::linalg::YieldOp>(innerLoc, result);
       });
 
+  llvm::StringRef libCall =
+      node.act_type() == mlir_edsl::RELU ? "relu" : "leaky_relu";
+  genericOp->setAttr("library_call", builder.getStringAttr(libCall));
+
   return genericOp->getResult(0);
 }
 
@@ -330,6 +334,7 @@ mlir::Value LinalgBuilder::buildBinaryOp(const mlir_edsl::LinalgBinaryOp &node,
               applyArithOp(b, innerLoc, opType, blockArgs[0], blockArgs[1]);
           b.create<mlir::linalg::YieldOp>(innerLoc, result);
         });
+    genericOp->setAttr("library_call", builder.getStringAttr("bias_add"));
     return genericOp->getResult(0);
   }
 
