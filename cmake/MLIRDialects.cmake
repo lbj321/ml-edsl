@@ -83,6 +83,7 @@ if(MLIR_EDSL_CUDA)
         MLIRGPUToGPURuntimeTransforms
         MLIRGPUTransforms
         MLIRGPUToNVVMTransforms
+        MLIRGPUTransformOps
         MLIRMathToLLVM
         MLIRNVVMDialect
         MLIRNVVMToLLVM
@@ -100,6 +101,14 @@ if(MLIR_EDSL_CUDA)
     add_compile_definitions(MLIR_EDSL_CUDA_ENABLED)
 endif()
 
+# Transform dialect and extension libraries
+set(MLIR_TRANSFORM_LIBS
+    MLIRTransformDialect
+    MLIRTransformDialectTransforms
+    MLIRLinalgTransformOps
+    MLIRSCFTransformOps
+)
+
 # Combine all current libraries
 set(MLIR_CURRENT_LIBS
     ${MLIR_CORE_LIBS}
@@ -109,6 +118,7 @@ set(MLIR_CURRENT_LIBS
     ${MLIR_SCF_LIBS}
     ${MLIR_MEMORY_LIBS}
     ${MLIR_VECTOR_LIBS}
+    ${MLIR_TRANSFORM_LIBS}
     MLIRAffineToStandard
     MLIRReconcileUnrealizedCasts
 )

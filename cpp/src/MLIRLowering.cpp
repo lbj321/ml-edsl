@@ -18,6 +18,7 @@
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/GPU/Transforms/Passes.h"
+#include "mlir/Dialect/GPU/TransformOps/GPUTransformOps.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
@@ -75,6 +76,10 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tensor/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Transform/IR/TransformDialect.h"
+#include "mlir/Dialect/Transform/Transforms/Passes.h"
+#include "mlir/Dialect/Linalg/TransformOps/DialectExtension.h"
+#include "mlir/Dialect/SCF/TransformOps/SCFTransformOps.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/Passes.h"
 #include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
@@ -171,6 +176,7 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   context->getOrLoadDialect<mlir::bufferization::BufferizationDialect>();
   context->getOrLoadDialect<mlir::omp::OpenMPDialect>();
   context->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+  context->getOrLoadDialect<mlir::transform::TransformDialect>();
 
   // Register bufferizable op interfaces (tells one-shot-bufferize how to
   // convert each op)
@@ -191,6 +197,10 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   mlir::scf::registerBufferDeallocationOpInterfaceExternalModels(registry);
   mlir::cf::registerBufferDeallocationOpInterfaceExternalModels(registry);
   context->appendDialectRegistry(registry);
+
+  // Register transform dialect extensions (linalg + SCF transform ops)
+  mlir::linalg::registerTransformDialectExtension(registry);
+  mlir::scf::registerTransformDialectExtension(registry);
 
   // Register LLVM translation interfaces
   mlir::registerLLVMDialectTranslation(*context);
@@ -396,6 +406,7 @@ void MLIRLowering::registerGPUDialects(mlir::MLIRContext *ctx) {
   // dialects. Vector dialect is loaded (via linalg setup) but its LLVM
   // conversion extension isn't registered by default — register it here.
   mlir::DialectRegistry reg;
+  mlir::gpu::registerTransformDialectExtension(reg);
   mlir::arith::registerConvertArithToLLVMInterface(reg);
   mlir::registerConvertComplexToLLVMInterface(reg);
   mlir::cf::registerConvertControlFlowToLLVMInterface(reg);

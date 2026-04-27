@@ -1,10 +1,12 @@
 #pragma once
 
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/StringRef.h"
 #include <memory>
 
 namespace mlir_edsl {
 
+std::unique_ptr<mlir::Pass> createTransformStrategyPass(llvm::StringRef strategy);
 std::unique_ptr<mlir::Pass> createLinalgOuterTileAndFusePass();
 std::unique_ptr<mlir::Pass> createLinalgMatmulToContractPass();
 std::unique_ptr<mlir::Pass> createLinalgVectorizationPass();
