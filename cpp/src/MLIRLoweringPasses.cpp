@@ -404,16 +404,17 @@ struct TransformStrategyPass
     mlir::ModuleOp module = getOperation();
 
     if (!guardLibraryCall.empty()) {
-      bool found = false;
+      // Require exactly one op with the guard library_call. The strategy is
+      // designed for a single dense layer (one relu → one forall). With multiple
+      // layers in one function, match returns multi-value handles and
+      // fuse_into_containing_op would cross-fuse incorrectly.
+      int count = 0;
       module.walk([&](mlir::linalg::GenericOp op) {
         auto lc = op->getAttrOfType<mlir::StringAttr>("library_call");
-        if (lc && lc.getValue() == guardLibraryCall) {
-          found = true;
-          return mlir::WalkResult::interrupt();
-        }
-        return mlir::WalkResult::advance();
+        if (lc && lc.getValue() == guardLibraryCall)
+          ++count;
       });
-      if (!found)
+      if (count != 1)
         return;
     }
 
