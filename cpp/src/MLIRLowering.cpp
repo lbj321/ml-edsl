@@ -145,10 +145,60 @@ private:
 
 namespace {
 
-// Tile relu [64×64] into scf.forall, then fuse bias_add → matmul → fill
-// into the forall body. All ops stay in tensor land until bufferization.
-// ForallToParallelLoopPass + ConvertSCFToOpenMPPass downstream convert
-// the forall into omp.parallel.
+// Two-level GPU tile-and-fuse strategy (tensor land, pre-bufferize):
+//
+//   Level 1 — block: tile relu [32×32] → one scf.forall per thread block,
+//             fuse bias_add → matmul → fill into that forall.
+//   Level 2 — thread: tile the block-level relu [1×1] → one scf.forall per
+//             output element (= one thread), fuse block-level ops inward.
+//
+// After bufferize + scf-forall-to-parallel on both levels:
+//   scf.parallel [4,4]   → blockIdx   (grid 4×4 for 128×128 output)
+//   scf.parallel [32,32] → threadIdx  (1024 threads per block)
+//     scf.for [128]      → sequential K reduction, one per thread
+//
+// Each thread computes one output element: fill → matmul K-reduction →
+// bias_add → relu. No __syncthreads needed between epilogue ops since
+// each thread owns its element from start to finish.
+//
+// Verified via experiments/tile_fuse_gpu_pipeline.sh Variant D.
+static constexpr llvm::StringLiteral kGPUTileAndFuseStrategy = R"mlir(
+module attributes {transform.with_named_sequence} {
+  transform.named_sequence @__transform_main(%root : !transform.any_op {transform.readonly}) {
+    %relu   = transform.structured.match attributes {library_call = "relu"} in %root
+                : (!transform.any_op) -> !transform.any_op
+    %bias   = transform.structured.match attributes {library_call = "bias_add"} in %root
+                : (!transform.any_op) -> !transform.any_op
+    %matmul = transform.structured.match ops{["linalg.matmul"]} in %root
+                : (!transform.any_op) -> !transform.any_op
+    %fill   = transform.structured.match ops{["linalg.fill"]} in %root
+                : (!transform.any_op) -> !transform.any_op
+    %tiled_relu, %block_forall =
+        transform.structured.tile_using_forall %relu tile_sizes [32, 32]
+            : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    %block_bias, %block_forall2 =
+        transform.structured.fuse_into_containing_op %bias into %block_forall
+            : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    %block_matmul, %block_forall3 =
+        transform.structured.fuse_into_containing_op %matmul into %block_forall2
+            : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    %block_fill, %block_forall4 =
+        transform.structured.fuse_into_containing_op %fill into %block_forall3
+            : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    %thread_relu, %thread_forall =
+        transform.structured.tile_using_forall %tiled_relu tile_sizes [1, 1]
+            : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.structured.fuse_into_containing_op %block_bias into %thread_forall
+        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.structured.fuse_into_containing_op %block_matmul into %thread_forall
+        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.structured.fuse_into_containing_op %block_fill into %thread_forall
+        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+)mlir";
+
 static constexpr llvm::StringLiteral kCPUTileAndFuseStrategy = R"mlir(
 module attributes {transform.with_named_sequence} {
   transform.named_sequence @__transform_main(%root : !transform.any_op {transform.readonly}) {
@@ -274,7 +324,8 @@ void MLIRLowering::setupLoweringPipeline() {
 }
 
 void MLIRLowering::addBufferizationPasses(mlir::PassManager &pm,
-                                          bool withOutParams) {
+                                          bool withOutParams,
+                                          bool withDealloc) {
   mlir::bufferization::OneShotBufferizePassOptions bufOpts;
   bufOpts.bufferizeFunctionBoundaries = true;
   bufOpts.functionBoundaryTypeConversion =
@@ -468,19 +519,23 @@ void MLIRLowering::registerGPUDialects(mlir::MLIRContext *ctx) {
 // Phase 1: fuse + bufferize + linalg→parallel→gpu + kernel outlining.
 // After this runs, gpu.launch_func ops are present and can be analyzed.
 void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &pm) {
+  // Fuse adjacent elementwise linalg ops (bias_add + relu → one generic).
   pm.addPass(mlir::createLinalgElementwiseOpFusionPass());
 
-  addBufferizationPasses(pm, /*withOutParams=*/false);
+  addBufferizationPasses(pm, /*withOutParams=*/false, /*withDealloc=*/false);
 
-  // Tile matmul into 32x32 scf.forall blocks before parallel loop conversion.
-  // Outer tile loops (M/32, N/32) → blockIdx; inner 32x32 → threadIdx (1024 max).
+  // Tile matmul into 32x32 scf.forall blocks for GPU block mapping.
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgGPUMatmulTilingPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-  // Convert scf.forall (tile loops) → scf.parallel so gpu-map-parallel-loops
-  // can map them to blockIdx alongside the inner thread-level parallel loops.
+  // Convert scf.forall (tile loops, with GPU mapping) → scf.parallel so
+  // gpu-map-parallel-loops can annotate them for blockIdx mapping.
   pm.addPass(mlir::createForallToParallelLoopPass());
 
   pm.addPass(mlir::createConvertLinalgToParallelLoopsPass());
+  // Fold the trivial [1×1] scf.parallel loops produced by converting the
+  // 1×1 linalg ops (fill, bias, relu) inside the thread forall. Without
+  // this, GpuMapParallelLoopsPass encounters depth-2 parallels it cannot
+  // assign to any GPU dimension and fails to map the whole structure.
+  pm.addPass(mlir::createCanonicalizerPass());
   // GpuMapParallelLoopsPass is OperationPass<func::FuncOp> — must be nested
   pm.addNestedPass<mlir::func::FuncOp>(mlir::createGpuMapParallelLoopsPass());
   pm.addPass(mlir::createConvertParallelLoopToGpuPass());

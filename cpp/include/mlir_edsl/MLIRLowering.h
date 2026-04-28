@@ -88,7 +88,8 @@ private:
   bool runLoweringPipeline(mlir::ModuleOp module);
 
   // Shared pass-sequence building blocks
-  void addBufferizationPasses(mlir::PassManager &pm, bool withOutParams);
+  void addBufferizationPasses(mlir::PassManager &pm, bool withOutParams,
+                              bool withDealloc = true);
   void addSharedFinalLLVMLoweringPasses(mlir::PassManager &pm);
 
   // GPU-path helpers
