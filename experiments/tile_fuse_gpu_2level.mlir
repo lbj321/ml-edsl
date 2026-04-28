@@ -1,17 +1,24 @@
-// GPU tile-and-fuse strategy using transform dialect.
+// GPU two-level tile-and-fuse strategy using the transform dialect.
 //
-// Tiles relu [32×32] into scf.forall with GPU block mapping, then fuses
-// bias_add → matmul → fill into the same forall body. All in tensor land
-// before bufferization. The single forall outlines to ONE gpu.launch kernel
-// (fill → matmul → bias_add → relu per block), replacing the current
-// two-operation approach (separate matmul kernel + bias+relu kernel).
+// Level 1 (block): tile relu [32×32] → scf.forall per output block, fuse
+//                  bias_add → matmul → fill into that block forall.
+// Level 2 (thread): tile the block-level relu [1×1] → scf.forall per
+//                   element (= one thread), fuse the block-level ops inward.
+//
+// After bufferize + scf-forall-to-parallel on both foralls:
+//   scf.parallel [4,4]   → blockIdx  (gpu-map-parallel-loops level 0)
+//   scf.parallel [32,32] → threadIdx (gpu-map-parallel-loops level 1)
+//     scf.for [128]      → sequential K reduction (one per thread)
+//
+// This produces a single gpu.launch with grid(4,4,1) block(32,32,1), where
+// each of the 1024 threads computes one output element of the 32×32 tile.
 //
 // Run:
-//   mlir-opt --transform-interpreter --cse --canonicalize \
-//             experiments/tile_fuse_gpu_strategy.mlir
+//   mlir-opt --transform-interpreter --canonicalize \
+//             experiments/tile_fuse_gpu_2level.mlir
 //
-// Expected: scf.forall [4, 4] body with gpu.block mapping contains
-//   linalg.fill → linalg.matmul → linalg.generic(bias_add) → linalg.generic(relu)
+// Or via the pipeline script (Variant C):
+//   ./experiments/tile_fuse_gpu_pipeline.sh
 
 func.func @dense_layer(
     %A:    tensor<128x128xf32>,
@@ -75,21 +82,36 @@ module attributes {transform.with_named_sequence} {
     %fill   = transform.structured.match ops{["linalg.fill"]} in %root
                 : (!transform.any_op) -> !transform.any_op
 
-    // Tile relu [32×32] into a plain forall (no GPU mapping attr).
-    // GpuMapParallelLoopsPass downstream assigns blockIdx to the resulting
-    // scf.parallel, same as the original pipeline. Using GPU block mapping
-    // here conflicts with ForallToParallelLoopPass → ConvertParallelLoopToGpu.
-    // Results: (tiled_op, forall_op)
-    %tiled_relu, %forall =
+    // Level 1 — block tiling: one scf.forall tile per GPU thread block.
+    %tiled_relu, %block_forall =
         transform.structured.tile_using_forall %relu tile_sizes [32, 32]
             : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
 
-    // Fuse producers inward: bias_add → matmul → fill
-    transform.structured.fuse_into_containing_op %bias into %forall
+    // Fuse producers into the block forall; capture the block-level handles
+    // so we can fuse them into the thread forall in level 2.
+    %block_bias, %block_forall2 =
+        transform.structured.fuse_into_containing_op %bias into %block_forall
+            : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    %block_matmul, %block_forall3 =
+        transform.structured.fuse_into_containing_op %matmul into %block_forall2
+            : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    %block_fill, %block_forall4 =
+        transform.structured.fuse_into_containing_op %fill into %block_forall3
+            : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+
+    // Level 2 — thread tiling: one element per thread (1×1 tiles).
+    // Tiles the block-level relu — each thread computes exactly one output element.
+    %thread_relu, %thread_forall =
+        transform.structured.tile_using_forall %tiled_relu tile_sizes [1, 1]
+            : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+
+    // Fuse the block-level ops into the thread forall.
+    // Each is sliced to [1×1] (element-wise) or [1×K×1] (matmul, K stays sequential).
+    transform.structured.fuse_into_containing_op %block_bias into %thread_forall
         : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.structured.fuse_into_containing_op %matmul into %forall
+    transform.structured.fuse_into_containing_op %block_matmul into %thread_forall
         : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.structured.fuse_into_containing_op %fill into %forall
+    transform.structured.fuse_into_containing_op %block_fill into %thread_forall
         : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
 
     transform.yield
