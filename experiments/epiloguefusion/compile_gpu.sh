@@ -39,7 +39,6 @@ done
 info "Step 1: tiling + epilogue fusion"
 mlir-opt "$INPUT" \
   --transform-interpreter \
-  --test-transform-dialect-erase-schedule \
   --canonicalize -cse \
   -o "$OUT_TILED"
 

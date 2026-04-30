@@ -339,12 +339,14 @@ void MLIRLowering::addBufferizationPasses(mlir::PassManager &pm,
   if (withOutParams)
     pm.addPass(mlir::bufferization::createBufferResultsToOutParamsPass());
 
-  pm.addPass(
-      mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-  pm.addPass(
-      mlir::bufferization::createBufferDeallocationSimplificationPass());
-  pm.addPass(mlir::bufferization::createLowerDeallocationsPass());
+  if (withDealloc) {
+    pm.addPass(
+        mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(
+        mlir::bufferization::createBufferDeallocationSimplificationPass());
+    pm.addPass(mlir::bufferization::createLowerDeallocationsPass());
+  }
 }
 
 void MLIRLowering::addSharedFinalLLVMLoweringPasses(mlir::PassManager &pm) {
@@ -518,40 +520,72 @@ void MLIRLowering::registerGPUDialects(mlir::MLIRContext *ctx) {
 
 // Phase 1: fuse + bufferize + linalg→parallel→gpu + kernel outlining.
 // After this runs, gpu.launch_func ops are present and can be analyzed.
+// Pass ordering mirrors compile_gpu.sh steps 1-3.
 void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &pm) {
-  // Fuse adjacent elementwise linalg ops (bias_add + relu → one generic).
-  pm.addPass(mlir::createLinalgElementwiseOpFusionPass());
-
-  addBufferizationPasses(pm, /*withOutParams=*/false, /*withDealloc=*/false);
-
-  // Tile matmul into 32x32 scf.forall blocks for GPU block mapping.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgGPUMatmulTilingPass());
-  // Convert scf.forall (tile loops, with GPU mapping) → scf.parallel so
-  // gpu-map-parallel-loops can annotate them for blockIdx mapping.
-  pm.addPass(mlir::createForallToParallelLoopPass());
-
-  pm.addPass(mlir::createConvertLinalgToParallelLoopsPass());
-  // Fold the trivial [1×1] scf.parallel loops produced by converting the
-  // 1×1 linalg ops (fill, bias, relu) inside the thread forall. Without
-  // this, GpuMapParallelLoopsPass encounters depth-2 parallels it cannot
-  // assign to any GPU dimension and fails to map the whole structure.
+  // Step 1 equivalent: pre-bufferization tile+fuse for the full dense layer.
+  // Guard "relu" means this is a no-op for matmul-only functions.
+  // Do NOT run createLinalgElementwiseOpFusionPass first: it merges bias+relu
+  // into one unnamed generic, breaking the library_call match in the strategy.
+  pm.addPass(createTransformStrategyPass(
+      pm.getContext(), kGPUTileAndFuseStrategy, "relu"));
   pm.addPass(mlir::createCanonicalizerPass());
-  // GpuMapParallelLoopsPass is OperationPass<func::FuncOp> — must be nested
+
+  // Fallback for matmul-only (no relu): strategy above was a no-op, so tile
+  // matmul into 32x32 forall blocks here. For the full dense case the matmul
+  // is already fused into a 1x1 thread tile — tiling a 1x1 matmul at [32,32]
+  // produces a trivial 1x1 forall that canonicalize folds away.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgGPUMatmulTilingPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  // Step 2 equivalent: bufferize without out-params (GPU args passed as
+  // cuLaunchKernel void**) and without deallocation (output buffer lifetime
+  // spans the kernel launch).
+  addBufferizationPasses(pm, /*withOutParams=*/false, /*withDealloc=*/false);
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::createCSEPass());
+
+  // Step 3 equivalent: mirrors the script's func.func(...) block.
+  pm.addPass(mlir::createLinalgGeneralizeNamedOpsPass());
+  pm.addPass(mlir::createForallToParallelLoopPass());
+  // Use convert-linalg-to-loops (sequential), NOT convert-linalg-to-parallel-loops.
+  // Block/thread parallelism is expressed by the forall loops from the transform
+  // strategy; extra scf.parallel from the linalg conversion would confuse
+  // gpu-map-parallel-loops.
+  pm.addPass(mlir::createConvertLinalgToLoopsPass());
+  // GpuMapParallelLoopsPass is OperationPass<func::FuncOp> — must be nested.
   pm.addNestedPass<mlir::func::FuncOp>(mlir::createGpuMapParallelLoopsPass());
   pm.addPass(mlir::createConvertParallelLoopToGpuPass());
+  // lower-affine and scf-to-cf MUST run before outlining: after
+  // gpu-kernel-outlining the kernel lives in gpu.func, not func.func, so
+  // OperationPass<func::FuncOp> passes no longer reach the kernel body.
+  pm.addPass(mlir::createLowerAffinePass());
+  pm.addPass(mlir::createSCFToControlFlowPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::createCSEPass());
+
   pm.addPass(mlir::createGpuKernelOutliningPass());
   pm.addPass(mlir::createCanonicalizerPass());
 }
 
 // Phase 2: NVVM lowering on the gpu.module, then host-level LLVM passes.
-// convert-gpu-to-nvvm must be nested inside gpu.module; finalize-memref-to-llvm
-// must run on the outer builtin.module (it recurses into gpu.module contents).
+// Mirrors compile_gpu.sh step 4. lower-affine and scf-to-cf are omitted
+// (already done before outlining in addGPUPreOutliningPasses).
+// convert-func-to-llvm is omitted — the host func keeps gpu.launch_func ops;
+// executeGPUFunction launches via the CUDA driver API using metadata from
+// analyzeKernelLaunches rather than a fully LLVM-lowered host function.
 void MLIRLowering::addGPUNVVMPasses(mlir::PassManager &pm) {
   auto &gpuPm = pm.nest<mlir::gpu::GPUModuleOp>();
   gpuPm.addPass(mlir::createConvertGpuOpsToNVVMOps());
+  gpuPm.addPass(mlir::createReconcileUnrealizedCastsPass());
 
-  addSharedFinalLLVMLoweringPasses(pm);
-
+  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
+  // expand-strided-metadata produces affine.apply ops — must lower them before
+  // arith-to-llvm or the resulting unrealized casts cannot be reconciled.
+  pm.addPass(mlir::createLowerAffinePass());
+  pm.addPass(mlir::createConvertIndexToLLVMPass());
+  pm.addPass(mlir::createArithToLLVMConversionPass());
+  pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+  pm.addPass(mlir::createConvertControlFlowToLLVMPass());
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
 }
 
