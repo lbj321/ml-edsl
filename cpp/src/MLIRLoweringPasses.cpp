@@ -297,9 +297,24 @@ struct LinalgMatmulTilingPass
     func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
 
     for (mlir::linalg::MatmulOp op : matmuls) {
+      // For ForallOp (GPU path), clamp tile sizes to at most half the static
+      // dimension so scf.forall always has ≥ 2 iterations per dim. A
+      // single-iteration forall (1,1) gets folded by canonicalize, leaving no
+      // gpu.launch after kernel outlining.
+      int64_t effM = tileM, effN = tileN;
+      if (loopType == LoopType::ForallOp) {
+        auto resultType = mlir::cast<mlir::ShapedType>(
+            op.getResult(0).getType());
+        if (resultType.hasStaticShape()) {
+          int64_t M = resultType.getDimSize(0);
+          int64_t N = resultType.getDimSize(1);
+          if (M > 1) effM = std::min(tileM, M / 2);
+          if (N > 1) effN = std::min(tileN, N / 2);
+        }
+      }
       // Named variable required — setTileSizes captures a non-owning ArrayRef.
       llvm::SmallVector<mlir::OpFoldResult> tileSizes =
-          mlir::getAsIndexOpFoldResult(op->getContext(), {tileM, tileN, tileK});
+          mlir::getAsIndexOpFoldResult(op->getContext(), {effM, effN, tileK});
       mlir::scf::SCFTilingOptions opts;
       opts.setTileSizes(tileSizes);
       opts.setLoopType(loopType);
