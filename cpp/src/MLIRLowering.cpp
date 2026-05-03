@@ -230,21 +230,14 @@ namespace mlir_edsl {
 
 MLIRLowering::MLIRLowering()
     : context(std::make_unique<mlir::MLIRContext>()),
-      passManager(context.get()) {
-  registerRequiredDialects();
-  setupLoweringPipeline();
+      ctx_(context.get()) {
+  registerRequiredDialects(ctx_);
 }
 
 MLIRLowering::MLIRLowering(mlir::MLIRContext *sharedContext,
                            bool captureSnapshots)
-    : context(nullptr), passManager(sharedContext),
-      snapshotsEnabled(captureSnapshots) {
-  registerRequiredDialects(sharedContext);
-  setupLoweringPipeline();
-}
-
-void MLIRLowering::registerRequiredDialects() {
-  registerRequiredDialects(context.get());
+    : ctx_(sharedContext), snapshotsEnabled(captureSnapshots) {
+  registerRequiredDialects(ctx_);
 }
 
 void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
@@ -318,11 +311,6 @@ bool MLIRLowering::runPipeline(mlir::PassManager &pm, mlir::ModuleOp module) {
   return false;
 }
 
-void MLIRLowering::setupLoweringPipeline() {
-  attachInstrumentation(passManager);
-  addConversionPasses();
-}
-
 void MLIRLowering::addBufferizationPasses(mlir::PassManager &pm,
                                           bool withOutParams,
                                           bool withDealloc) {
@@ -362,106 +350,96 @@ void MLIRLowering::addSharedFinalLLVMLoweringPasses(mlir::PassManager &pm) {
   pm.addPass(mlir::createConvertControlFlowToLLVMPass());
 }
 
-void MLIRLowering::addConversionPasses() {
-
+void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // Fuse adjacent elementwise linalg ops (e.g. bias_add + relu → one generic).
-  passManager.addPass(mlir::createLinalgElementwiseOpFusionPass());
+  pm.addPass(mlir::createLinalgElementwiseOpFusionPass());
 
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
   // function boundaries, matching the memref descriptors Python passes in.
-  addBufferizationPasses(passManager, /*withOutParams=*/true);
+  addBufferizationPasses(pm, /*withOutParams=*/true);
 
   // Outer 64×64 parallel tiling for functions where the transform strategy
   // didn't fire (no relu, or multi-layer). When the strategy did fire, the
   // matmul is already a ≤64×64 tile so this produces a trivial 1×1 forall
   // that the subsequent canonicalizer folds away.
-  passManager.addNestedPass<mlir::func::FuncOp>(
-      createLinalgMatmulParallelTilingPass());
-  passManager.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulParallelTilingPass());
+  pm.addPass(mlir::createCanonicalizerPass());
 
   // scf.forall → scf.parallel → omp.parallel.
   // OMP conversion must happen HERE while the body only contains linalg ops;
   // once inner tiling and vectorization run, the body has scf.for + alloca_scope
   // and scf-to-control-flow would try to expand them inside omp.loop_nest,
   // violating its single-block region constraint.
-  passManager.addPass(mlir::createForallToParallelLoopPass());
-  passManager.addPass(mlir::createConvertSCFToOpenMPPass());
+  pm.addPass(mlir::createForallToParallelLoopPass());
+  pm.addPass(mlir::createConvertSCFToOpenMPPass());
 
   // Inner 8x8 serial tiles for vectorization (runs inside omp.loop_nest body)
-  passManager.addNestedPass<mlir::func::FuncOp>(
-      createLinalgMatmulTilingPass());
-  passManager.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulTilingPass());
+  pm.addPass(mlir::createCanonicalizerPass());
 
   // Lower static 8x8 linalg.matmul tiles to vector.contract with standard
   // 2D indexing maps (m,k)x(k,n)->(m,n). Must run before LinalgVectorizationPass
   // which skips matmul — linalg::vectorize always produces a 3D double-broadcast
   // form that the OuterProduct lowering cannot decompose into vector.fma.
-  passManager.addNestedPass<mlir::func::FuncOp>(
-      createLinalgMatmulToContractPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulToContractPass());
 
   // Tile linalg.generic ops (elementwise, bias, relu, etc.) to strips of 8
   // along the innermost dimension before vectorization. Without this, the
   // vectorizer sees the full tensor as a single vector<NxNxf32>, causing LLVM
   // O3 to hang on large shapes (e.g. 512x512) due to combinatorial explosion
   // in its analysis passes.
-  passManager.addNestedPass<mlir::func::FuncOp>(
-      createLinalgGenericTilingPass());
-  passManager.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgGenericTilingPass());
+  pm.addPass(mlir::createCanonicalizerPass());
 
   // Vectorize remaining linalg structured ops → vector dialect
   // (linalg.matmul is already handled by LinalgMatmulToContractPass above)
-  passManager.addNestedPass<mlir::func::FuncOp>(
-      createLinalgVectorizationPass());
-  passManager.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgVectorizationPass());
+  pm.addPass(mlir::createCanonicalizerPass());
 
   // Fuse mulf + multi_reduction → vector.contract for better LLVM codegen
-  passManager.addNestedPass<mlir::func::FuncOp>(
-      createVectorCleanupPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createVectorCleanupPass());
 
   // Lower vector.contract → vector.outerproduct on rank-1 slices.
   // Must happen before convert-vector-to-scf: if a rank-3 contract is still
   // present at that pass, it expands the 3D transfer_reads into
   // broadcast+transpose+alloca loops, defeating vectorization entirely.
-  passManager.addNestedPass<mlir::func::FuncOp>(
-      createVectorContractToOuterProductPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createVectorContractToOuterProductPass());
 
   // Fallback: lower any remaining (un-vectorized) linalg ops to scf.for loops
-  passManager.addPass(mlir::createConvertLinalgToLoopsPass());
+  pm.addPass(mlir::createConvertLinalgToLoopsPass());
 
   // Lower vector.multi_reduction (produced by linalg.reduce vectorization)
-  passManager.addNestedPass<mlir::func::FuncOp>(
+  pm.addNestedPass<mlir::func::FuncOp>(
       mlir::vector::createLowerVectorMultiReductionPass());
 
   // Lower complex vector.transfer_read/write (permutation maps, broadcasts)
   // to scalar SCF loops before LLVM conversion
-  passManager.addNestedPass<mlir::func::FuncOp>(
-      mlir::createConvertVectorToSCFPass());
+  pm.addNestedPass<mlir::func::FuncOp>(mlir::createConvertVectorToSCFPass());
 
   // Lower all remaining vector ops → LLVM intrinsics.
   // x86Vector enables AVX/FMA intrinsic emission for vector.fma on x86.
   mlir::ConvertVectorToLLVMPassOptions vecToLLVMOpts;
   vecToLLVMOpts.x86Vector = true;
-  passManager.addPass(mlir::createConvertVectorToLLVMPass(vecToLLVMOpts));
+  pm.addPass(mlir::createConvertVectorToLLVMPass(vecToLLVMOpts));
 
   // Lower ub.poison (generated by VectorToSCF for out-of-bounds positions)
-  passManager.addPass(mlir::createUBToLLVMConversionPass());
+  pm.addPass(mlir::createUBToLLVMConversionPass());
 
-  addSharedFinalLLVMLoweringPasses(passManager);
+  addSharedFinalLLVMLoweringPasses(pm);
 
-  passManager.addPass(mlir::createConvertFuncToLLVMPass());
-  passManager.addPass(mlir::createConvertOpenMPToLLVMPass());
-  passManager.addPass(mlir::createReconcileUnrealizedCastsPass());
-}
-
-bool MLIRLowering::runLoweringPipeline(mlir::ModuleOp module) {
-  return runPipeline(passManager, module);
+  pm.addPass(mlir::createConvertFuncToLLVMPass());
+  pm.addPass(mlir::createConvertOpenMPToLLVMPass());
+  pm.addPass(mlir::createReconcileUnrealizedCastsPass());
 }
 
 LoweredModule MLIRLowering::lowerToLLVMModule(mlir::ModuleOp module) {
   mlir::OwningOpRef<mlir::ModuleOp> clonedModule = module.clone();
 
-  if (!runLoweringPipeline(*clonedModule)) {
+  mlir::PassManager pm(ctx_);
+  attachInstrumentation(pm);
+  addCPUPasses(pm);
+  if (!runPipeline(pm, *clonedModule)) {
     throw std::runtime_error("Lowering pipeline failed");
   }
 
@@ -549,11 +527,6 @@ void MLIRLowering::addGPUNVVMPasses(mlir::PassManager &pm) {
   addSharedFinalLLVMLoweringPasses(pm);
 
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
-}
-
-bool MLIRLowering::runGPULoweringPipeline(mlir::ModuleOp module,
-                                          mlir::PassManager &pm) {
-  return runPipeline(pm, module);
 }
 
 // Walk gpu.launch_func ops and classify each kernel argument so that
@@ -698,7 +671,7 @@ GPULoweredModule MLIRLowering::lowerToGPUModule(mlir::ModuleOp module) {
     mlir::PassManager pm1(ctx);
     attachInstrumentation(pm1);
     addGPUPreOutliningPasses(pm1);
-    if (!runGPULoweringPipeline(*cloned, pm1))
+    if (!runPipeline(pm1, *cloned))
       throw std::runtime_error("GPU pre-outlining pipeline failed");
   }
 
@@ -714,7 +687,7 @@ GPULoweredModule MLIRLowering::lowerToGPUModule(mlir::ModuleOp module) {
     mlir::PassManager pm2(ctx);
     attachInstrumentation(pm2);
     addGPUNVVMPasses(pm2);
-    if (!runGPULoweringPipeline(*cloned, pm2))
+    if (!runPipeline(pm2, *cloned))
       throw std::runtime_error("GPU NVVM lowering pipeline failed");
   }
 
@@ -749,9 +722,6 @@ GPULoweredModule MLIRLowering::lowerToGPUModule(mlir::ModuleOp module) {
 void MLIRLowering::registerGPUDialects(mlir::MLIRContext *) {}
 void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &) {}
 void MLIRLowering::addGPUNVVMPasses(mlir::PassManager &) {}
-bool MLIRLowering::runGPULoweringPipeline(mlir::ModuleOp, mlir::PassManager &) {
-  return false;
-}
 void MLIRLowering::analyzeKernelLaunches(mlir::ModuleOp, GPULoweredModule &) {}
 GPULoweredModule MLIRLowering::lowerToGPUModule(mlir::ModuleOp) {
   throw std::runtime_error(

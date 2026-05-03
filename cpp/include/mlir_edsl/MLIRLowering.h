@@ -59,9 +59,6 @@ public:
   // Lower MLIR module to PTX via GPU dialect pipeline (CUDA path)
   GPULoweredModule lowerToGPUModule(mlir::ModuleOp module);
 
-  // Get the pass manager for advanced usage
-  mlir::PassManager &getPassManager() { return passManager; }
-
   // Move captured snapshots out (only populated when captureSnapshots=true)
   SnapshotList takeSnapshots() { return std::move(snapshots); }
 
@@ -70,22 +67,19 @@ public:
   bool hadFailure() const { return !failureIR_.empty(); }
 
 private:
-  std::unique_ptr<mlir::MLIRContext> context;
-  mlir::PassManager passManager;
+  std::unique_ptr<mlir::MLIRContext> context; // owned context (no-arg constructor only)
+  mlir::MLIRContext *ctx_ = nullptr;          // non-owning pointer to active context
   bool snapshotsEnabled = false;
   SnapshotList snapshots;
   std::string failureIR_;
 
   // Shared infrastructure
-  void registerRequiredDialects();
   void registerRequiredDialects(mlir::MLIRContext *ctx);
   void attachInstrumentation(mlir::PassManager &pm);
   bool runPipeline(mlir::PassManager &pm, mlir::ModuleOp module);
 
-  // CPU pipeline
-  void setupLoweringPipeline();
-  void addConversionPasses();
-  bool runLoweringPipeline(mlir::ModuleOp module);
+  // CPU pipeline passes
+  void addCPUPasses(mlir::PassManager &pm);
 
   // Shared pass-sequence building blocks
   void addBufferizationPasses(mlir::PassManager &pm, bool withOutParams,
@@ -96,7 +90,6 @@ private:
   void registerGPUDialects(mlir::MLIRContext *ctx);
   void addGPUPreOutliningPasses(mlir::PassManager &pm);
   void addGPUNVVMPasses(mlir::PassManager &pm);
-  bool runGPULoweringPipeline(mlir::ModuleOp module, mlir::PassManager &pm);
   void analyzeKernelLaunches(mlir::ModuleOp module, GPULoweredModule &result);
 };
 
