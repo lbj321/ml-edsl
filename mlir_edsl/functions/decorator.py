@@ -24,17 +24,28 @@ class MLFunction:
         MLFunction._next_id += 1
 
         self.signature = FunctionSignature.from_callable(func)
+        # Always embed func_id so two wrappers with the same Python function
+        # name (e.g. both named "fn" but with different types) never collide in
+        # the backend's has_function cache.
+        self.signature.name = f"{func.__name__}_{self._func_id}"
 
         self._compiled: CompiledFunction | None = None
+        self._cached_ast = None
 
         if self.signature.has_dynamic_dims:
-            # Embed func_id so variant names (e.g. my_sum_0__4) are unique
-            # across multiple wrappers with the same Python function name
-            self.signature.name = f"{func.__name__}_{self._func_id}"
+            # DYN: validate eagerly as a syntax check; each shape re-validates in
+            # _execute_dynamic anyway, so _cached_ast is only used for early errors.
+            self._cached_ast, _ = validate_function_body(func, self.signature)
             self._compiled_variants: Dict[Tuple, CompiledFunction] = {}
-
-        # Validate and cache AST for later compilation (also serves as early syntax check for DYN)
-        self._cached_ast, _ = validate_function_body(func, self.signature)
+        else:
+            # Static: attempt eager validation to surface type errors at decoration
+            # time. If the body references the function itself (recursion), the
+            # Python name isn't bound yet and raises NameError — catch that case
+            # only and defer to the first __call__ instead.
+            try:
+                self._cached_ast, _ = validate_function_body(func, self.signature)
+            except NameError:
+                pass  # recursive self-reference; validation deferred to first __call__
 
         # Store Python source on backend for HTML report (SAVE_IR=1)
         if os.getenv("SAVE_IR"):
@@ -57,6 +68,8 @@ class MLFunction:
             return self._execute_dynamic(args, kwargs)
 
         if self._compiled is None:
+            if self._cached_ast is None:
+                self._cached_ast, _ = validate_function_body(self.func, self.signature)
             self._compiled = compile_function(self.signature, self._cached_ast,
                                               target=self._target)
         return self._compiled.execute(args, kwargs)

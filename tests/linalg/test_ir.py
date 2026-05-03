@@ -34,7 +34,7 @@ class TestLinalgDotIR:
         dot_fn(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32),
                np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32))
         check_ir("""
-        // CHECK: func.func @dot_fn(%arg0: tensor<4xf32>, %arg1: tensor<4xf32>)
+        // CHECK: func.func @dot_fn_{{[0-9]+}}(%arg0: tensor<4xf32>, %arg1: tensor<4xf32>)
         // CHECK-NOT: bufferization.to_tensor
         // CHECK: tensor.empty
         // CHECK: linalg.fill
@@ -74,7 +74,7 @@ class TestEmittedIR:
         mm(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
            np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32))
         check_ir("""
-        // CHECK: func.func @mm(%arg0: tensor<2x2xf32>, %arg1: tensor<2x2xf32>) -> tensor<2x2xf32>
+        // CHECK: func.func @mm_{{[0-9]+}}(%arg0: tensor<2x2xf32>, %arg1: tensor<2x2xf32>) -> tensor<2x2xf32>
         // CHECK: tensor.empty
         // CHECK: linalg.fill
         // CHECK: linalg.matmul
@@ -89,7 +89,7 @@ class TestEmittedIR:
 
         scale(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
         check_ir("""
-        // CHECK: func.func @scale(%arg0: tensor<4xf32>) -> tensor<4xf32>
+        // CHECK: func.func @scale_{{[0-9]+}}(%arg0: tensor<4xf32>) -> tensor<4xf32>
         // CHECK: tensor.empty
         // CHECK: linalg.map
         // CHECK: return {{.*}} : tensor<4xf32>
@@ -104,7 +104,7 @@ class TestEmittedIR:
         mm(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
            np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32))
         check_ir("""
-        // CHECK: func.func @mm(%arg0: tensor<2x2xf32>, %arg1: tensor<2x2xf32>) -> tensor<2x2xf32>
+        // CHECK: func.func @mm_{{[0-9]+}}(%arg0: tensor<2x2xf32>, %arg1: tensor<2x2xf32>) -> tensor<2x2xf32>
         // CHECK-NOT: bufferization.writable
         // CHECK-NOT: bufferization.materialize_in_destination
         """)
@@ -122,7 +122,7 @@ class TestDirectOutputBuffer:
 
         scale(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
         check_lowered_ir("""
-        // CHECK: func.func @scale(%arg0: memref<4xf32>, %arg1: memref<4xf32>)
+        // CHECK: func.func @scale_{{[0-9]+}}(%arg0: memref<4xf32>, %arg1: memref<4xf32>)
         // CHECK: linalg.map
         // CHECK: memref.copy
         // CHECK-NOT: tensor<
@@ -137,7 +137,7 @@ class TestDirectOutputBuffer:
         mm(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
            np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32))
         check_lowered_ir("""
-        // CHECK: func.func @mm(%arg0: memref<2x2xf32>, %arg1: memref<2x2xf32>, %arg2: memref<2x2xf32>)
+        // CHECK: func.func @mm_{{[0-9]+}}(%arg0: memref<2x2xf32>, %arg1: memref<2x2xf32>, %arg2: memref<2x2xf32>)
         // CHECK: linalg.fill
         // CHECK: linalg.matmul
         // CHECK: memref.copy
@@ -153,7 +153,7 @@ class TestDirectOutputBuffer:
 
         scale(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
         check_lowered_ir("""
-        // CHECK: func.func @scale(%arg0: memref<4xf32>) -> memref<4xf32>
+        // CHECK: func.func @scale_{{[0-9]+}}(%arg0: memref<4xf32>) -> memref<4xf32>
         // CHECK: memref.alloc
         // CHECK: linalg.map
         // CHECK-NOT: memref.copy
@@ -168,7 +168,7 @@ class TestDirectOutputBuffer:
         mm(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
            np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32))
         check_lowered_ir("""
-        // CHECK: func.func @mm(%arg0: memref<2x2xf32>, %arg1: memref<2x2xf32>) -> memref<2x2xf32>
+        // CHECK: func.func @mm_{{[0-9]+}}(%arg0: memref<2x2xf32>, %arg1: memref<2x2xf32>) -> memref<2x2xf32>
         // CHECK: memref.alloc
         // CHECK: linalg.fill
         // CHECK: linalg.matmul

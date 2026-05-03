@@ -6,11 +6,13 @@ This test suite validates recursive function capabilities:
 - Symbol resolution for self-referencing functions
 - MLIR/LLVM code generation for recursive calls
 
-Recursion uses the `call()` function with explicit function name references.
+Recursion works by calling the decorated MLFunction directly inside the function
+body. In symbolic context, MLFunction.__call__ returns CallOp(self.signature.name, ...)
+which uses the correct registered name (including the unique _func_id suffix).
 """
 
 import pytest
-from mlir_edsl import ml_function, add, sub, mul, eq, le, If, call
+from mlir_edsl import ml_function, add, sub, mul, eq, le, If
 from mlir_edsl import i32
 
 
@@ -25,7 +27,7 @@ class TestBasicRecursion:
         def factorial(n: int) -> int:
             return If(eq(n, 0),
                       1,
-                      mul(n, call("factorial", [sub(n, 1)], i32)))
+                      mul(n, factorial(sub(n, 1))))
 
         result = factorial(5)
         assert result == 120
@@ -36,8 +38,8 @@ class TestBasicRecursion:
         def fibonacci(n: int) -> int:
             return If(le(n, 1),
                       n,
-                      add(call("fibonacci", [sub(n, 1)], i32),
-                          call("fibonacci", [sub(n, 2)], i32)))
+                      add(fibonacci(sub(n, 1)),
+                          fibonacci(sub(n, 2))))
 
         result = fibonacci(7)
         assert result == 13
@@ -48,7 +50,7 @@ class TestBasicRecursion:
         def countdown(n: int) -> int:
             return If(le(n, 0),
                       0,
-                      call("countdown", [sub(n, 1)], i32))
+                      countdown(sub(n, 1)))
 
         result = countdown(10)
         assert result == 0
@@ -65,7 +67,7 @@ class TestTailRecursion:
         def tail_sum(n: int, acc: int) -> int:
             return If(eq(n, 0),
                       acc,
-                      call("tail_sum", [sub(n, 1), add(acc, n)], i32))
+                      tail_sum(sub(n, 1), add(acc, n)))
 
         result = tail_sum(10, 0)
         assert result == 55  # 1+2+3+...+10
@@ -76,7 +78,7 @@ class TestTailRecursion:
         def tail_factorial(n: int, acc: int) -> int:
             return If(eq(n, 0),
                       acc,
-                      call("tail_factorial", [sub(n, 1), mul(acc, n)], i32))
+                      tail_factorial(sub(n, 1), mul(acc, n)))
 
         result = tail_factorial(5, 1)
         assert result == 120
@@ -89,17 +91,12 @@ class TestRecursionSymbolResolution:
 
     def test_recursive_function_symbol_resolution(self, backend):
         """Test that recursive functions can reference themselves during definition"""
-        # This tests that a function is available in the symbol table
-        # while its body is being defined, allowing self-reference
         @ml_function
         def self_test(x: int) -> int:
-            # Self-reference during definition
-            # Using If to avoid infinite recursion at runtime
             return If(eq(x, 0),
                       x,
-                      add(x, call("self_test", [sub(x, 1)], i32)))
+                      add(x, self_test(sub(x, 1))))
 
-        # Compilation should succeed
         result = self_test(3)
         assert result == 6  # 3 + 2 + 1 + 0
 
@@ -107,11 +104,10 @@ class TestRecursionSymbolResolution:
         """Test multiple recursive calls in a single expression"""
         @ml_function
         def nested_fib(n: int) -> int:
-            # Multiple recursive calls in one expression
             return If(le(n, 1),
                       n,
-                      add(call("nested_fib", [sub(n, 1)], i32),
-                          call("nested_fib", [sub(n, 2)], i32)))
+                      add(nested_fib(sub(n, 1)),
+                          nested_fib(sub(n, 2))))
 
         result = nested_fib(6)
         assert result == 8  # Fibonacci(6) = 8
@@ -126,9 +122,8 @@ class TestRecursionCodeGeneration:
         """Test that recursive factorial compiles without errors"""
         @ml_function
         def fact(n: int) -> int:
-            return If(eq(n, 0), 1, mul(n, call("fact", [sub(n, 1)], i32)))
+            return If(eq(n, 0), 1, mul(n, fact(sub(n, 1))))
 
-        # Just verify compilation succeeds
         result = fact(4)
         assert result == 24
 
@@ -142,9 +137,8 @@ class TestRecursionEdgeCases:
         """Test recursion where base case is hit immediately"""
         @ml_function
         def factorial(n: int) -> int:
-            return If(eq(n, 0), 1, mul(n, call("factorial", [sub(n, 1)], i32)))
+            return If(eq(n, 0), 1, mul(n, factorial(sub(n, 1))))
 
-        # Base case: n = 0
         result = factorial(0)
         assert result == 1
 
@@ -152,9 +146,8 @@ class TestRecursionEdgeCases:
         """Test recursion with single recursive call"""
         @ml_function
         def factorial(n: int) -> int:
-            return If(eq(n, 0), 1, mul(n, call("factorial", [sub(n, 1)], i32)))
+            return If(eq(n, 0), 1, mul(n, factorial(sub(n, 1))))
 
-        # One level of recursion: n = 1 -> factorial(0)
         result = factorial(1)
         assert result == 1
 
@@ -162,9 +155,8 @@ class TestRecursionEdgeCases:
         """Test that deeper recursion compiles correctly"""
         @ml_function
         def factorial(n: int) -> int:
-            return If(eq(n, 0), 1, mul(n, call("factorial", [sub(n, 1)], i32)))
+            return If(eq(n, 0), 1, mul(n, factorial(sub(n, 1))))
 
-        # Test with moderate depth (10 levels)
         result = factorial(10)
         assert result == 3628800
 

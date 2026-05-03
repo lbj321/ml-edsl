@@ -165,7 +165,7 @@ class TestTensorReturnIR:
         tr_ir_mat()
 
         check_lowered_ir("""
-        // CHECK: func.func @tr_ir_mat(%arg0: memref<4xf32>)
+        // CHECK: func.func @tr_ir_mat_{{[0-9]+}}(%arg0: memref<4xf32>)
         // CHECK: memref.copy
         // CHECK-NOT: tensor<
         """, after="buffer-results-to-out-params")

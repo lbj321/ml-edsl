@@ -27,7 +27,7 @@ class TestControlFlowIR:
         clamp(5, 0, 10)
 
         check_ir("""
-        // CHECK: func.func @clamp(%arg0: i32, %arg1: i32, %arg2: i32) -> i32
+        // CHECK: func.func @clamp_{{[0-9]+}}(%arg0: i32, %arg1: i32, %arg2: i32) -> i32
         // CHECK: arith.cmpi slt
         // CHECK: scf.if
         // CHECK: arith.cmpi sgt
