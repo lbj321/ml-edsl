@@ -364,19 +364,7 @@ void MLIRLowering::addSharedFinalLLVMLoweringPasses(mlir::PassManager &pm) {
 
 void MLIRLowering::addConversionPasses() {
 
-  // Tile relu [64×64] into scf.forall and fuse bias_add → matmul → fill into
-  // the forall body, all in tensor land before bufferization. Must run before
-  // createLinalgElementwiseOpFusionPass: the strategy matches relu and bias_add
-  // by library_call as separate ops; elementwise fusion would merge them into
-  // one generic with no library_call, making them unmatchable.
-  // Replaces the post-bufferize createLinalgMatmulParallelTilingPass.
-  passManager.addPass(createTransformStrategyPass(
-      passManager.getContext(), kCPUTileAndFuseStrategy, "relu"));
-  passManager.addPass(mlir::createCanonicalizerPass());
-
-  // Fuse any remaining adjacent elementwise linalg ops inside the forall body
-  // (e.g. bias_add + relu if the function has no matmul, or future epilogue ops).
-  // Safety net — will be removed once transform strategy is confirmed correct.
+  // Fuse adjacent elementwise linalg ops (e.g. bias_add + relu → one generic).
   passManager.addPass(mlir::createLinalgElementwiseOpFusionPass());
 
   // Bufferize tensor ops to memref ops, including function boundaries.
@@ -384,7 +372,15 @@ void MLIRLowering::addConversionPasses() {
   // function boundaries, matching the memref descriptors Python passes in.
   addBufferizationPasses(passManager, /*withOutParams=*/true);
 
-  // scf.forall (from transform) → scf.parallel → omp.parallel.
+  // Outer 64×64 parallel tiling for functions where the transform strategy
+  // didn't fire (no relu, or multi-layer). When the strategy did fire, the
+  // matmul is already a ≤64×64 tile so this produces a trivial 1×1 forall
+  // that the subsequent canonicalizer folds away.
+  passManager.addNestedPass<mlir::func::FuncOp>(
+      createLinalgMatmulParallelTilingPass());
+  passManager.addPass(mlir::createCanonicalizerPass());
+
+  // scf.forall → scf.parallel → omp.parallel.
   // OMP conversion must happen HERE while the body only contains linalg ops;
   // once inner tiling and vectorization run, the body has scf.for + alloca_scope
   // and scf-to-control-flow would try to expand them inside omp.loop_nest,
