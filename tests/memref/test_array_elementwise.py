@@ -63,21 +63,25 @@ class TestArrayArrayOps:
 
     def test_array_shape_mismatch_error(self):
         """Test that mismatched array shapes raise TypeError"""
+        @ml_function
+        def bad_add() -> i32:
+            arr1 = Array[i32, 3]([1, 2, 3])
+            arr2 = Array[i32, 4]([1, 2, 3, 4])
+            return (arr1 + arr2)[0]
+
         with pytest.raises(TypeError, match="shapes must match"):
-            @ml_function
-            def bad_add() -> i32:
-                arr1 = Array[i32, 3]([1, 2, 3])
-                arr2 = Array[i32, 4]([1, 2, 3, 4])
-                return (arr1 + arr2)[0]
+            bad_add()
 
     def test_array_type_mismatch_error(self):
         """Test that mismatched element types raise TypeError"""
+        @ml_function
+        def bad_types() -> i32:
+            arr1 = Array[i32, 3]([1, 2, 3])
+            arr2 = Array[f32, 3]([1.0, 2.0, 3.0])
+            return (arr1 + arr2)[0]
+
         with pytest.raises(TypeError, match="element types must match"):
-            @ml_function
-            def bad_types() -> i32:
-                arr1 = Array[i32, 3]([1, 2, 3])
-                arr2 = Array[f32, 3]([1.0, 2.0, 3.0])
-                return (arr1 + arr2)[0]
+            bad_types()
 
 
 # ==================== ARRAY-SCALAR OPERATIONS ====================
@@ -127,12 +131,14 @@ class TestArrayScalarOps:
 
     def test_array_scalar_type_mismatch_error(self):
         """Test that scalar type must match array element type"""
+        @ml_function
+        def bad_types() -> i32:
+            arr = Array[i32, 3]([1, 2, 3])
+            result = arr + 2.5  # i32 array + f32 scalar
+            return result[0]
+
         with pytest.raises(TypeError, match="Scalar type must match"):
-            @ml_function
-            def bad_types() -> i32:
-                arr = Array[i32, 3]([1, 2, 3])
-                result = arr + 2.5  # i32 array + f32 scalar
-                return result[0]
+            bad_types()
 
 
 # ==================== SCALAR-ARRAY OPERATIONS ====================
@@ -182,12 +188,14 @@ class TestScalarArrayOps:
 
     def test_scalar_array_type_mismatch_error(self):
         """Test that scalar type must match array element type"""
+        @ml_function
+        def bad_types() -> f32:
+            arr = Array[f32, 3]([1.0, 2.0, 3.0])
+            result = 5 + arr  # i32 scalar + f32 array
+            return result[0]
+
         with pytest.raises(TypeError, match="Scalar type must match"):
-            @ml_function
-            def bad_types() -> f32:
-                arr = Array[f32, 3]([1.0, 2.0, 3.0])
-                result = 5 + arr  # i32 scalar + f32 array
-                return result[0]
+            bad_types()
 
 
 # ==================== FLOAT ARRAY OPERATIONS ====================

@@ -80,10 +80,12 @@ class TestArrayExecution:
 
     def test_direct_assignment_blocked(self):
         """Test that direct assignment raises helpful error message"""
+        @ml_function
+        def bad_store() -> i32:
+            arr = Array[i32, 3]([1, 2, 3])
+            arr[1] = 99  # Should raise TypeError with helpful message
+            return arr[1]
+
         # Match key parts of the error message
         with pytest.raises(TypeError, match=r"arr = arr\.at\[.*\]\.set"):
-            @ml_function
-            def bad_store() -> i32:
-                arr = Array[i32, 3]([1, 2, 3])
-                arr[1] = 99  # Should raise TypeError with helpful message
-                return arr[1]
+            bad_store()

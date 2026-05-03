@@ -141,18 +141,22 @@ class TestDynReturnErrors:
 
     def test_static_return_with_dyn_inferred_raises(self):
         """Declaring static return type but body returns DYN tensor raises TypeError."""
+        @ml_function
+        def tr_err_static_decl(t: Tensor[f32, DYN]) -> Tensor[f32, 5]:
+            # This would return a size-DYN tensor, but the declared type is size-5
+            return t
+
         with pytest.raises(TypeError, match="[Rr]eturn type"):
-            @ml_function
-            def tr_err_static_decl(t: Tensor[f32, DYN]) -> Tensor[f32, 5]:
-                # This would return a size-DYN tensor, but the declared type is size-5
-                return t
+            tr_err_static_decl(np.ones(4, dtype=np.float32))
 
     def test_wrong_element_type_return_raises(self):
-        """Element type mismatch in return raises TypeError at decoration."""
+        """Element type mismatch in return raises TypeError at first call."""
+        @ml_function
+        def tr_err_dtype(t: Tensor[f32, DYN]) -> Tensor[i32, DYN]:
+            return t
+
         with pytest.raises(TypeError):
-            @ml_function
-            def tr_err_dtype(t: Tensor[f32, DYN]) -> Tensor[i32, DYN]:
-                return t
+            tr_err_dtype(np.ones(4, dtype=np.float32))
 
 
 if __name__ == "__main__":

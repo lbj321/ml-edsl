@@ -50,11 +50,14 @@ class TestDotDynValidation:
         assert abs(result - 14.0) < 1e-5
 
     def test_static_dot_mismatched_lengths_raises_at_decoration(self):
-        """Statically incompatible dot operands are caught at decoration time."""
+        """Statically incompatible dot operands are caught at first call."""
+        @ml_function
+        def dot_static_mismatch(a: Tensor[f32, 3], b: Tensor[f32, 4]) -> f32:
+            return dot(a, b)
+
         with pytest.raises(TypeError, match="lengths must match"):
-            @ml_function
-            def dot_static_mismatch(a: Tensor[f32, 3], b: Tensor[f32, 4]) -> f32:
-                return dot(a, b)
+            dot_static_mismatch(np.ones(3, dtype=np.float32),
+                                np.ones(4, dtype=np.float32))
 
 
 # ==================== MATMUL — DYN INNER DIMENSION VALIDATION ====================
@@ -92,11 +95,14 @@ class TestMatmulDynValidation:
         np.testing.assert_allclose(result, [[19.0, 22.0], [43.0, 50.0]], rtol=1e-3)
 
     def test_static_matmul_incompatible_inner_dims_raises_at_decoration(self):
-        """Statically incompatible matmul inner dims are caught at decoration time."""
+        """Statically incompatible matmul inner dims are caught at first call."""
+        @ml_function
+        def matmul_static_mismatch(A: Tensor[f32, 2, 3], B: Tensor[f32, 4, 2]) -> Tensor[f32, 2, 2]:
+            return matmul(A, B)
+
         with pytest.raises(TypeError, match="inner dimensions must match"):
-            @ml_function
-            def matmul_static_mismatch(A: Tensor[f32, 2, 3], B: Tensor[f32, 4, 2]) -> Tensor[f32, 2, 2]:
-                return matmul(A, B)
+            matmul_static_mismatch(np.ones((2, 3), dtype=np.float32),
+                                   np.ones((4, 2), dtype=np.float32))
 
 
 if __name__ == "__main__":
