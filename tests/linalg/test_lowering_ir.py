@@ -5,7 +5,7 @@ replaced by lower-level ops at specific pipeline stages.
 """
 
 import numpy as np
-from mlir_edsl import ml_function, Tensor, f32, dot, matmul, tensor_sum
+from mlir_edsl import ml_function, Tensor, f32, dot, matmul, tensor_sum, relu
 
 
 class TestLinalgDotLoweringIR:
@@ -327,3 +327,50 @@ class TestVectorContractToOuterProductPass:
         // CHECK: vector.fma
         // CHECK-NOT: vector.contract
         """, after="vector-contract-to-outerproduct")
+
+
+class TestLinalgGenericTilingPass:
+    """IR tests for LinalgGenericTilingPass (linalg-tile-generic).
+
+    Tiles linalg.generic ops along the innermost dimension to strips of 8,
+    preventing LLVM O3 from seeing large vector<NxNxf32> types that cause
+    combinatorial explosion in its analysis passes (e.g. bias_add/relu at 512x512).
+    """
+
+    def test_2d_elementwise_tiled_to_scf_for(self, check_lowered_ir):
+        """2D elementwise op is tiled into scf.for over innermost-dim strips."""
+        @ml_function
+        def bias_fn(X: Tensor[f32, 16, 16], b: Tensor[f32, 16]) -> Tensor[f32, 16, 16]:
+            return X + b
+
+        bias_fn(np.ones((16, 16), dtype=np.float32),
+                np.ones(16, dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: scf.for
+        // CHECK: linalg.generic
+        """, after="linalg-tile-generic")
+
+    def test_tile_step_is_8(self, check_lowered_ir):
+        """Innermost dimension is tiled with step size 8."""
+        @ml_function
+        def bias_fn(X: Tensor[f32, 16, 16], b: Tensor[f32, 16]) -> Tensor[f32, 16, 16]:
+            return X + b
+
+        bias_fn(np.ones((16, 16), dtype=np.float32),
+                np.ones(16, dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: arith.constant 8 : index
+        // CHECK: scf.for
+        """, after="linalg-tile-generic")
+
+    def test_generic_removed_after_vectorization(self, check_lowered_ir):
+        """After vectorization, tiled linalg.generic strips are fully lowered to vector ops."""
+        @ml_function
+        def relu_fn(X: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
+            return relu(X)
+
+        relu_fn(np.ones((16, 16), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: vector.
+        // CHECK-NOT: linalg.generic
+        """, after="linalg-vectorize")

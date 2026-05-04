@@ -121,32 +121,39 @@ class TestStrictTypeMatching:
 
     def test_strict_type_mismatch_add(self):
         """Test that adding int and float without cast fails"""
-        with pytest.raises(TypeError, match="requires matching types"):
-            @ml_function
-            def bad_add(x: int, y: float) -> float:
-                return add(x, y)  # Should fail - no auto promotion
+        @ml_function
+        def bad_add(x: int, y: float) -> float:
+            return add(x, y)  # Should fail - no auto promotion
 
+        with pytest.raises(TypeError, match="requires matching types"):
+            bad_add(1, 2.0)
 
     def test_strict_type_mismatch_sub(self):
         """Test that subtracting different types without cast fails"""
+        @ml_function
+        def bad_sub(x: i32, y: f32) -> f32:
+            return sub(x, y)
+
         with pytest.raises(TypeError, match="requires matching types"):
-            @ml_function
-            def bad_sub(x: i32, y: f32) -> f32:
-                return sub(x, y)
+            bad_sub(1, 2.0)
 
     def test_strict_type_mismatch_mul(self):
         """Test that multiplying different types without cast fails"""
+        @ml_function
+        def bad_mul(x: int, y: float) -> float:
+            return mul(x, y)
+
         with pytest.raises(TypeError, match="requires matching types"):
-            @ml_function
-            def bad_mul(x: int, y: float) -> float:
-                return mul(x, y)
+            bad_mul(1, 2.0)
 
     def test_strict_type_mismatch_div(self):
         """Test that dividing different types without cast fails"""
+        @ml_function
+        def bad_div(x: i32, y: f32) -> f32:
+            return div(x, y)
+
         with pytest.raises(TypeError, match="requires matching types"):
-            @ml_function
-            def bad_div(x: i32, y: f32) -> f32:
-                return div(x, y)
+            bad_div(1, 2.0)
 
 
 # ==================== EXPLICIT CAST OPERATIONS ====================
@@ -208,18 +215,21 @@ class TestReturnTypeValidation:
 
     def test_return_type_mismatch_int_declared_float_returned(self):
         """Test that declaring i32 but returning f32 fails"""
-        with pytest.raises(TypeError, match="Return type mismatch"):
-            @ml_function
-            def bad_return(x: float, y: float) -> int:  # Declares i32
-                return add(x, y)  # Returns f32
+        @ml_function
+        def bad_return(x: float, y: float) -> int:  # Declares i32
+            return add(x, y)  # Returns f32
 
+        with pytest.raises(TypeError, match="Return type mismatch"):
+            bad_return(1.0, 2.0)
 
     def test_return_type_mismatch_float_declared_int_returned(self):
         """Test that declaring f32 but returning i32 fails"""
+        @ml_function
+        def bad_return(x: int, y: int) -> float:  # Declares f32
+            return add(x, y)  # Returns i32
+
         with pytest.raises(TypeError, match="Return type mismatch"):
-            @ml_function
-            def bad_return(x: int, y: int) -> float:  # Declares f32
-                return add(x, y)  # Returns i32
+            bad_return(1, 2)
 
     def test_return_type_matches(self):
         """Test that matching return types succeed"""
@@ -349,22 +359,25 @@ class TestErrorMessageQuality:
 
     def test_error_message_shows_hint(self):
         """Test that error messages show helpful hints"""
+        @ml_function
+        def bad_op(x: int, y: float) -> float:
+            return add(x, y)
+
         try:
-            @ml_function
-            def bad_op(x: int, y: float) -> float:
-                return add(x, y)
+            bad_op(1, 2.0)
             assert False, "Should have raised TypeError"
         except TypeError as e:
             error_msg = str(e)
             assert "Use cast()" in error_msg or "matching types" in error_msg
 
-
     def test_error_message_shows_types(self):
         """Test that error messages show the conflicting types"""
+        @ml_function
+        def bad_return(x: int) -> float:
+            return x  # Returns i32 but declared f32
+
         try:
-            @ml_function
-            def bad_return(x: int) -> float:
-                return x  # Returns i32 but declared f32
+            bad_return(1)
             assert False, "Should have raised TypeError"
         except TypeError as e:
             error_msg = str(e)

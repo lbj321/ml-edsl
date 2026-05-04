@@ -76,14 +76,6 @@ class FunctionSignature:
         """Return list of (name, type) tuples for backend compilation."""
         return [(name, self.param_types[name]) for name in self.param_names]
 
-    @property
-    def has_dynamic_dims(self) -> bool:
-        """True if any parameter has a dynamic (DYN) dimension."""
-        return any(
-            isinstance(t, (ArrayType, TensorType)) and t.is_dynamic
-            for t in self.param_types.values()
-        )
-
     def specialize(self, concrete_shapes: Dict[str, tuple]) -> "FunctionSignature":
         """Return a new signature with DYN dims replaced by concrete shapes.
 
@@ -109,7 +101,7 @@ class FunctionSignature:
             if n in concrete_shapes
         )
         return FunctionSignature(
-            name=f"{self.name}__{suffix}",
+            name=f"{self.name}__{suffix}" if suffix else self.name,
             param_names=self.param_names,
             param_types=new_types,
             return_type=self.return_type,

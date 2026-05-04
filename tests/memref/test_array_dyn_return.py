@@ -141,17 +141,21 @@ class TestDynArrayReturnErrors:
 
     def test_static_return_with_dyn_inferred_raises(self):
         """Declaring static return type but body returns DYN array raises TypeError."""
+        @ml_function
+        def ar_err_static_decl(a: Array[f32, DYN]) -> Array[f32, 5]:
+            return a
+
         with pytest.raises(TypeError, match="[Rr]eturn type"):
-            @ml_function
-            def ar_err_static_decl(a: Array[f32, DYN]) -> Array[f32, 5]:
-                return a
+            ar_err_static_decl(np.ones(4, dtype=np.float32))
 
     def test_wrong_element_type_return_raises(self):
-        """Element type mismatch in return raises TypeError at decoration."""
+        """Element type mismatch in return raises TypeError at first call."""
+        @ml_function
+        def ar_err_dtype(a: Array[f32, DYN]) -> Array[i32, DYN]:
+            return a
+
         with pytest.raises(TypeError):
-            @ml_function
-            def ar_err_dtype(a: Array[f32, DYN]) -> Array[i32, DYN]:
-                return a
+            ar_err_dtype(np.ones(4, dtype=np.float32))
 
 
 if __name__ == "__main__":

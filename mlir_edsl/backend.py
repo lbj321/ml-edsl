@@ -1,14 +1,8 @@
 """C++ MLIR backend integration"""
 import ctypes
 from typing import Union
-from .types import Type, ScalarType, ArrayType, TensorType
-
-try:
-    import numpy as np
-    _HAS_NUMPY = True
-except ImportError:
-    np = None  # type: ignore[assignment]
-    _HAS_NUMPY = False
+import numpy as np
+from .types import Type, ScalarType
 
 
 try:
@@ -30,14 +24,11 @@ TYPE_TO_CTYPES = {
     ScalarType.I1: ctypes.c_bool,
 }
 
-# Populated once numpy is confirmed available (same shape as TYPE_TO_CTYPES)
-SCALAR_TYPE_TO_NUMPY_DTYPE: dict = {}
-if _HAS_NUMPY:
-    SCALAR_TYPE_TO_NUMPY_DTYPE = {
-        ScalarType.F32: np.float32,
-        ScalarType.I32: np.int32,
-        ScalarType.I1: np.bool_,
-    }
+SCALAR_TYPE_TO_NUMPY_DTYPE = {
+    ScalarType.F32: np.float32,
+    ScalarType.I32: np.int32,
+    ScalarType.I1: np.bool_,
+}
 
 _global_backend = None
 
@@ -47,14 +38,9 @@ def _make_output_descriptor(array_type) -> tuple:
     """Allocate a zeroed output buffer and build its memref descriptor.
 
     Returns (c_types, c_vals, buf) matching the standard MLIR memref descriptor
-    layout. buf is Python-owned and must be kept alive through the ctypes call.
-    Returns np.ndarray as buf when numpy is available, otherwise ctypes array.
+    layout. buf is a numpy array, Python-owned and must be kept alive through
+    the ctypes call.
     """
-    _ELEM_CTYPES = {
-        ScalarType.I32: ctypes.c_int32,
-        ScalarType.F32: ctypes.c_float,
-        ScalarType.I1: ctypes.c_bool,
-    }
     shape = array_type.shape
     ndim = len(shape)
 
@@ -63,19 +49,9 @@ def _make_output_descriptor(array_type) -> tuple:
     for i in range(ndim - 2, -1, -1):
         strides[i] = strides[i + 1] * shape[i + 1]
 
-    if _HAS_NUMPY:
-        dtype = SCALAR_TYPE_TO_NUMPY_DTYPE[array_type.element_type.kind]
-        buf = np.empty(shape, dtype=dtype)
-        ptr = buf.ctypes.data_as(ctypes.c_void_p)
-    elif array_type.element_type.kind in _ELEM_CTYPES:
-        elem_ctype = _ELEM_CTYPES[array_type.element_type.kind]
-        total = array_type.total_elements
-        buf = (elem_ctype * total)()  # zeroed, Python-owned
-        ptr = ctypes.cast(buf, ctypes.c_void_p)
-    else:
-        raise TypeError(
-            f"Unsupported element type {array_type.element_type} for output descriptor"
-        )
+    dtype = SCALAR_TYPE_TO_NUMPY_DTYPE[array_type.element_type.kind]
+    buf = np.empty(shape, dtype=dtype)
+    ptr = buf.ctypes.data_as(ctypes.c_void_p)
 
     c_types = (
         [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
@@ -103,22 +79,16 @@ def _make_memref_descriptor(data, array_type) -> tuple:
     shape = array_type.shape
     ndim = len(shape)
 
-    if _HAS_NUMPY and isinstance(data, np.ndarray):
-        expected_dtype = SCALAR_TYPE_TO_NUMPY_DTYPE[array_type.element_type.kind]
-        if data.dtype != expected_dtype:
-            raise TypeError(
-                f"ndarray dtype {data.dtype} does not match expected "
-                f"{expected_dtype} for {array_type}"
-            )
-        if not data.flags['C_CONTIGUOUS']:
-            data = np.ascontiguousarray(data)
-        ptr = data.ctypes.data_as(ctypes.c_void_p)
-        strides = [s // data.itemsize for s in data.strides]
-        buf = data
-    else:
+    expected_dtype = SCALAR_TYPE_TO_NUMPY_DTYPE[array_type.element_type.kind]
+    if data.dtype != expected_dtype:
         raise TypeError(
-            f"Expected np.ndarray for array parameter, got {type(data).__name__}"
+            f"ndarray dtype {data.dtype} does not match expected "
+            f"{expected_dtype} for {array_type}"
         )
+    if not data.flags['C_CONTIGUOUS']:
+        data = np.ascontiguousarray(data)
+    ptr = data.ctypes.data_as(ctypes.c_void_p)
+    strides = [s // data.itemsize for s in data.strides]
 
     c_types = (
         [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
@@ -129,7 +99,7 @@ def _make_memref_descriptor(data, array_type) -> tuple:
     # dimensions, but MLIR needs the actual runtime sizes in the descriptor.
     c_vals = [ptr, ptr, 0] + list(data.shape) + strides
 
-    return c_types, c_vals, buf
+    return c_types, c_vals, data
 
 
 class CppMLIRBackend:
@@ -189,19 +159,19 @@ class CppMLIRBackend:
         raise RuntimeError(f"Aggregate types not supported for {context} in JIT execution")
 
     # ==================== JIT EXECUTION ====================
-    def execute_function(self, name: str, *args) -> Union[int, float, bool, list]:
+    def execute_function(self, name: str, *args) -> Union[int, float, bool, np.ndarray]:
         """Execute compiled function via JIT with ctypes."""
         param_types, return_type = self._signatures[name]
 
         flat_c_types = []
         flat_args = []
-        live_buffers = []  # Keep ctypes arrays alive through the call
+        live_buffers = []  # Keep arrays alive through the call
 
         for pt, val in zip(param_types, args):
             if isinstance(pt, ScalarType):
                 flat_c_types.append(TYPE_TO_CTYPES[pt.kind])
                 flat_args.append(val)
-            elif isinstance(pt, (ArrayType, TensorType)):
+            elif pt.is_aggregate():
                 c_types, c_vals, buf = _make_memref_descriptor(val, pt)
                 flat_c_types.extend(c_types)
                 flat_args.extend(c_vals)
@@ -211,17 +181,14 @@ class CppMLIRBackend:
 
         ptr = self.compiler.get_function_pointer(name)
 
-        if isinstance(return_type, (ArrayType, TensorType)):
+        if return_type.is_aggregate():
             # Aggregate return: append Python-allocated output descriptor.
             out_c_types, out_c_vals, out_buf = _make_output_descriptor(return_type)
             flat_c_types.extend(out_c_types)
             flat_args.extend(out_c_vals)
             live_buffers.append(out_buf)
             ctypes.CFUNCTYPE(None, *flat_c_types)(ptr)(*flat_args)
-            if _HAS_NUMPY and isinstance(out_buf, np.ndarray):
-                return out_buf
-            else:
-                return _unflatten(list(out_buf), return_type.shape)
+            return out_buf
         elif isinstance(return_type, ScalarType):
             c_ret = self._type_to_ctype(return_type, "return type")
             return ctypes.CFUNCTYPE(c_ret, *flat_c_types)(ptr)(*flat_args)
@@ -278,18 +245,15 @@ class CppMLIRBackend:
             raise ValueError(f"Invalid target '{target}'. Must be 'cpu' or 'gpu'.")
         self.compiler.set_target(target)
 
-    def execute_gpu_function(self, name: str, *args) -> 'np.ndarray':
+    def execute_gpu_function(self, name: str, *args) -> np.ndarray:
         """Execute a GPU-compiled function with automatic H2D/D2H transfers."""
-        if not _HAS_NUMPY:
-            raise RuntimeError("NumPy required for GPU execution")
-
         param_types, return_type = self._signatures[name]
 
         # Build (data_ptr, shape) pairs for each input
         inputs = []
         live_buffers = []
         for pt, val in zip(param_types, args):
-            if isinstance(pt, (ArrayType, TensorType)):
+            if pt.is_aggregate():
                 arr = val if val.flags['C_CONTIGUOUS'] else np.ascontiguousarray(val)
                 live_buffers.append(arr)
                 inputs.append((arr.ctypes.data, list(arr.shape)))
