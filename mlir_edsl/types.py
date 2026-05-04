@@ -25,7 +25,11 @@ class Type(ABC):
 
     @abstractmethod
     def is_aggregate(self) -> bool:
-        """Returns True if this is an aggregate type (memref, tensor)"""
+        """Returns True for shaped types (memref/tensor).
+
+        Aggregate types are lowered to struct descriptors and returned via
+        caller-allocated output parameter at the JIT ABI boundary.
+        """
         pass
 
     @abstractmethod

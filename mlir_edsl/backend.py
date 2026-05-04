@@ -1,7 +1,7 @@
 """C++ MLIR backend integration"""
 import ctypes
 from typing import Union
-from .types import Type, ScalarType, ArrayType, TensorType
+from .types import Type, ScalarType
 
 try:
     import numpy as np
@@ -201,7 +201,7 @@ class CppMLIRBackend:
             if isinstance(pt, ScalarType):
                 flat_c_types.append(TYPE_TO_CTYPES[pt.kind])
                 flat_args.append(val)
-            elif isinstance(pt, (ArrayType, TensorType)):
+            elif pt.is_aggregate():
                 c_types, c_vals, buf = _make_memref_descriptor(val, pt)
                 flat_c_types.extend(c_types)
                 flat_args.extend(c_vals)
@@ -211,7 +211,7 @@ class CppMLIRBackend:
 
         ptr = self.compiler.get_function_pointer(name)
 
-        if isinstance(return_type, (ArrayType, TensorType)):
+        if return_type.is_aggregate():
             # Aggregate return: append Python-allocated output descriptor.
             out_c_types, out_c_vals, out_buf = _make_output_descriptor(return_type)
             flat_c_types.extend(out_c_types)
@@ -289,7 +289,7 @@ class CppMLIRBackend:
         inputs = []
         live_buffers = []
         for pt, val in zip(param_types, args):
-            if isinstance(pt, (ArrayType, TensorType)):
+            if pt.is_aggregate():
                 arr = val if val.flags['C_CONTIGUOUS'] else np.ascontiguousarray(val)
                 live_buffers.append(arr)
                 inputs.append((arr.ctypes.data, list(arr.shape)))

@@ -5,7 +5,6 @@ import os
 import textwrap
 from typing import Callable, Dict, Tuple, Union
 from ..ast import CallOp, Value
-from ..types import ArrayType, TensorType
 from .context import in_symbolic_context
 from .signature import FunctionSignature
 from .validation import validate_function_body
@@ -68,7 +67,7 @@ class MLFunction:
         concrete_shapes = {}
         for name, val in zip(self.signature.param_names, ordered):
             t = self.signature.param_types[name]
-            if isinstance(t, (ArrayType, TensorType)) and t.is_dynamic:
+            if t.is_aggregate() and t.is_dynamic:
                 concrete_shapes[name] = tuple(val.shape)
 
         shape_key = tuple(
@@ -82,7 +81,7 @@ class MLFunction:
             specialized_ast, inferred_return = validate_function_body(self.func, specialized_sig)
             # Replace DYN return type with the concrete shape inferred by abstract evaluation
             ret = specialized_sig.return_type
-            if isinstance(ret, (ArrayType, TensorType)) and ret.is_dynamic:
+            if ret.is_aggregate() and ret.is_dynamic:
                 if inferred_return.is_dynamic:
                     raise TypeError(
                         f"Cannot determine return shape for DYN return type in '{self.func.__name__}': "
