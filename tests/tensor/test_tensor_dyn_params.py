@@ -191,7 +191,8 @@ class TestDynTensorIR:
 
         check_ir("""
         // CHECK: func.func @tdyn_ir
-        // CHECK-SAME: tensor<4xf32>
+        // CHECK-SAME: memref<4xf32>
+        // CHECK: bufferization.to_tensor {{.*}} : memref<4xf32> to tensor<4xf32>
         // CHECK-NOT: tensor<?xf32>
         """)
 

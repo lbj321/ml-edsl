@@ -142,8 +142,8 @@ class TestTensorReturnMixedParams:
 class TestTensorReturnIR:
     """IR structure tests for tensor return functions."""
 
-    def test_tensor_return_has_tensor_param(self, check_ir):
-        """Tensor param should appear as tensor type in the function signature"""
+    def test_tensor_return_has_memref_param(self, check_ir):
+        """Tensor param is exposed as memref at the boundary; to_tensor wraps it inside."""
         @ml_function
         def tr_ir_param(t: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return t
@@ -152,12 +152,13 @@ class TestTensorReturnIR:
 
         check_ir("""
         // CHECK: func.func @tr_ir_param
-        // CHECK-SAME: tensor<4xf32>
-        // CHECK-NOT: bufferization.to_tensor
+        // CHECK-SAME: memref<4xf32>
+        // CHECK: bufferization.to_tensor
+        // CHECK: bufferization.materialize_in_destination
         """)
 
-    def test_tensor_return_lowered_to_out_param_copy(self, check_lowered_ir):
-        """After buffer-results-to-out-params: constant tensor return becomes memref.copy into out-param."""
+    def test_tensor_literal_return_bufferizes_to_out_param(self, check_lowered_ir):
+        """After one-shot-bufferize: constant tensor return copies literal into the out-param."""
         @ml_function
         def tr_ir_mat() -> Tensor[f32, 4]:
             return Tensor[f32, 4]([1.0, 2.0, 3.0, 4.0])
@@ -168,7 +169,7 @@ class TestTensorReturnIR:
         // CHECK: func.func @tr_ir_mat_{{[0-9]+}}(%arg0: memref<4xf32>)
         // CHECK: memref.copy
         // CHECK-NOT: tensor<
-        """, after="buffer-results-to-out-params")
+        """, after="one-shot-bufferize")
 
 
 if __name__ == "__main__":
