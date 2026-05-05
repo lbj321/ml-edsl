@@ -557,6 +557,15 @@ void MLIRLowering::analyzeKernelLaunches(mlir::ModuleOp module,
     kernel.blockY = extractConstIndex(block.y);
     kernel.blockZ = extractConstIndex(block.z);
 
+    // Convention: void-returning host functions use the last block arg as the
+    // caller-allocated output out-param. Scalar-returning functions have no
+    // out-param (UINT_MAX = sentinel for "no output arg").
+    auto hostFunc = launchOp->getParentOfType<mlir::func::FuncOp>();
+    const unsigned numHostArgs = hostFunc ? hostFunc.getNumArguments() : 0;
+    const bool hasOutParam =
+        hostFunc && hostFunc.getResultTypes().empty() && numHostArgs > 0;
+    const unsigned outParamArgIdx = hasOutParam ? (numHostArgs - 1) : UINT_MAX;
+
     for (mlir::Value arg : launchOp.getKernelOperands()) {
       mlir::Type ty = arg.getType();
       GPUKernelArg ka;
@@ -564,12 +573,18 @@ void MLIRLowering::analyzeKernelLaunches(mlir::ModuleOp module,
       if (auto memTy = mlir::dyn_cast<mlir::MemRefType>(ty)) {
         auto shape = std::vector<int64_t>(memTy.getShape().begin(),
                                           memTy.getShape().end());
-        if (mlir::isa<mlir::BlockArgument>(arg)) {
-          ka.kind     = GPUKernelArg::Kind::InputMemRef;
-          ka.paramIdx = mlir::cast<mlir::BlockArgument>(arg).getArgNumber();
-          ka.shape    = shape;
+        if (auto blockArg = mlir::dyn_cast<mlir::BlockArgument>(arg)) {
+          if (blockArg.getArgNumber() == outParamArgIdx) {
+            ka.kind  = GPUKernelArg::Kind::OutputMemRef;
+            ka.shape = shape;
+          } else {
+            ka.kind     = GPUKernelArg::Kind::InputMemRef;
+            ka.paramIdx = blockArg.getArgNumber();
+            ka.shape    = shape;
+          }
         } else {
-          // Defined by memref.alloc — this is the function's output buffer.
+          // Non-block-arg memref — not expected with the new IR pattern but
+          // kept for robustness.
           ka.kind  = GPUKernelArg::Kind::OutputMemRef;
           ka.shape = shape;
         }
