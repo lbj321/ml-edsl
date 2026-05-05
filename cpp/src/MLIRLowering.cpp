@@ -314,16 +314,16 @@ bool MLIRLowering::runPipeline(mlir::PassManager &pm, mlir::ModuleOp module) {
 void MLIRLowering::addBufferizationPasses(mlir::PassManager &pm,
                                           bool withOutParams,
                                           bool withDealloc) {
+  // Fold tensor.empty ops that only serve as destinations into direct writes
+  // on the destination buffer. Must run before one-shot-bufferize.
+  pm.addPass(mlir::bufferization::createEmptyTensorEliminationPass());
+
   mlir::bufferization::OneShotBufferizePassOptions bufOpts;
   bufOpts.bufferizeFunctionBoundaries = true;
   bufOpts.functionBoundaryTypeConversion =
       mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
   pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
 
-  // Convert memref-returning functions to void + out-param before the
-  // ownership-based deallocation pass runs. Running it first lets the dealloc
-  // pass see a void function with a plain memref.copy and handle ownership
-  // correctly. (CPU path only — GPU params are passed as cuLaunchKernel void**.)
   if (withOutParams)
     pm.addPass(mlir::bufferization::createBufferResultsToOutParamsPass());
 
@@ -357,7 +357,7 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
   // function boundaries, matching the memref descriptors Python passes in.
-  addBufferizationPasses(pm, /*withOutParams=*/true);
+  addBufferizationPasses(pm, /*withOutParams=*/false);
 
   // Outer 64×64 parallel tiling for functions where the transform strategy
   // didn't fire (no relu, or multi-layer). When the strategy did fire, the

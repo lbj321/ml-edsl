@@ -73,47 +73,78 @@ void MLIRCompiler::createFunction(
     mlir::Type returnType) {
   resetFunctionState();
 
-  // Build parameter types directly — tensor params stay as tensor types.
-  // bufferize-function-boundaries will convert them to memref at the ABI
-  // boundary during lowering.
+  auto loc = opBuilder->getUnknownLoc();
+
+  // Build parameter types. Tensor params are exposed as memref at the function
+  // boundary; the entry block wraps each with bufferization.to_tensor restrict
+  // so downstream builders still receive tensor values.
   std::vector<mlir::Type> paramTypes;
+  std::vector<mlir::Type> originalParamTypes;
   for (const auto &[paramName, typeSpec] : params) {
-    paramTypes.push_back(builder->convertType(typeSpec));
+    mlir::Type t = builder->convertType(typeSpec);
+    originalParamTypes.push_back(t);
+    if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(t)) {
+      paramTypes.push_back(
+          mlir::MemRefType::get(tensorType.getShape(), tensorType.getElementType()));
+    } else if (mlir::isa<mlir::MemRefType>(t)) {
+      paramTypes.push_back(t);
+    } else if (mlir::isa<mlir::IntegerType, mlir::FloatType>(t)) {
+      paramTypes.push_back(t);
+    } else {
+      throw std::runtime_error("createFunction: unsupported parameter type");
+    }
   }
 
-  // Aggregate return: append a hidden out-param and use void return.
-  // Python allocates the output buffer and passes it as a memref descriptor.
-  // Tensor returns stay as explicit tensor return values — buffer-results-to-out-params
-  // converts them to out-params after bufferization, appending at the same position.
-  const bool memrefReturn = mlir::isa<mlir::MemRefType>(returnType);
-  const bool tensorReturn = mlir::isa<mlir::RankedTensorType>(returnType);
-
-  if (memrefReturn) {
+  // Determine return convention and append out-param if needed.
+  mlir::TypeRange funcReturnTypes;
+  if (auto tensorReturnType = mlir::dyn_cast<mlir::RankedTensorType>(returnType)) {
+    // Tensor return: out-param is the memref equivalent, void return.
+    paramTypes.push_back(mlir::MemRefType::get(
+        tensorReturnType.getShape(), tensorReturnType.getElementType()));
+    funcReturnTypes = mlir::TypeRange{};
+  } else if (mlir::isa<mlir::MemRefType>(returnType)) {
+    // Memref return: out-param is the memref directly, void return.
     paramTypes.push_back(returnType);
+    funcReturnTypes = mlir::TypeRange{};
+  } else if (mlir::isa<mlir::IntegerType, mlir::FloatType>(returnType)) {
+    // Scalar return: return by value, no out-param.
+    funcReturnTypes = mlir::TypeRange{returnType};
+  } else {
+    throw std::runtime_error("createFunction: unsupported return type");
   }
 
-  auto funcType = opBuilder->getFunctionType(
-      paramTypes,
-      memrefReturn ? mlir::TypeRange{} : mlir::TypeRange{returnType});
-  currentFunction = opBuilder->create<mlir::func::FuncOp>(
-      opBuilder->getUnknownLoc(), name, funcType);
-
+  auto funcType = opBuilder->getFunctionType(paramTypes, funcReturnTypes);
+  currentFunction = opBuilder->create<mlir::func::FuncOp>(loc, name, funcType);
   functionTable[name] = currentFunction;
 
   auto *entryBlock = currentFunction.addEntryBlock();
   opBuilder->setInsertionPointToStart(entryBlock);
 
-  // Map parameter names to block arguments directly — params are already the
-  // right types (tensor or memref), no casts needed.
+  // Map parameter names. Tensor params are wrapped with to_tensor restrict so
+  // linalg builders receive tensor values without any changes on their side.
   for (size_t i = 0; i < params.size(); i++) {
-    parameterMap[params[i].first] = entryBlock->getArgument(i);
+    mlir::Value arg = entryBlock->getArgument(i);
+    if (auto tensorType = mlir::dyn_cast<mlir::RankedTensorType>(originalParamTypes[i])) {
+      auto toTensor =
+          opBuilder->create<mlir::bufferization::ToTensorOp>(loc, tensorType, arg);
+      toTensor.setRestrict(true);
+      parameterMap[params[i].first] = toTensor.getResult();
+    } else if (mlir::isa<mlir::MemRefType>(originalParamTypes[i])) {
+      parameterMap[params[i].first] = arg;
+    } else if (mlir::isa<mlir::IntegerType, mlir::FloatType>(originalParamTypes[i])) {
+      parameterMap[params[i].first] = arg;
+    } else {
+      throw std::runtime_error("createFunction: unsupported parameter type in entry block");
+    }
   }
 
-  // Store the out-param block arg for use in finalizeFunction (memref path only).
-  if (memrefReturn) {
+  // Store the out-param block arg for use in finalizeFunction.
+  if (mlir::isa<mlir::RankedTensorType>(returnType)) {
+    currentOutParam = entryBlock->getArgument(params.size());
+  } else if (mlir::isa<mlir::MemRefType>(returnType)) {
     currentOutParam = entryBlock->getArgument(params.size());
   }
-  (void)tensorReturn;
+  // Scalar return: currentOutParam stays unset.
 }
 
 void MLIRCompiler::finalizeFunction(const std::string &name,
@@ -122,26 +153,25 @@ void MLIRCompiler::finalizeFunction(const std::string &name,
     throw std::runtime_error("No current function to finish");
   }
 
-  // Aggregate return: write result into the caller-allocated out-param.
-  if (currentOutParam) {
-    auto loc = opBuilder->getUnknownLoc();
-    // currentOutParam is only set for memref returns.
-    if (mlir::isa<mlir::MemRefType>(result.getType())) {
-      // MemRef result: copy only when result is not already the out-param.
-      if (result != currentOutParam)
-        opBuilder->create<mlir::memref::CopyOp>(loc, result, currentOutParam);
-    } else {
-      throw std::runtime_error(
-          "finalizeFunction: out-param set for non-aggregate type");
-    }
+  auto loc = opBuilder->getUnknownLoc();
+  if (mlir::isa<mlir::RankedTensorType>(result.getType())) {
+    // Tensor result: materialize directly into the caller-allocated out-param.
+    // The restrict+writable contract lets one-shot-bufferize fold the
+    // tensor.empty + linalg ops to write directly into the out-param memref.
+    auto materialize =
+        opBuilder->create<mlir::bufferization::MaterializeInDestinationOp>(
+            loc, mlir::TypeRange{}, mlir::ValueRange{result, currentOutParam});
+    materialize.setRestrict(true);
+    materialize.setWritable(true);
     opBuilder->create<mlir::func::ReturnOp>(loc);
-  } else if (mlir::isa<mlir::RankedTensorType>(result.getType())) {
-    // Tensor result: return directly. buffer-results-to-out-params converts
-    // this to an out-param after bufferization, preserving the Python ABI.
-    opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(), result);
+  } else if (mlir::isa<mlir::MemRefType>(result.getType())) {
+    // Memref result: copy only when result is not already the out-param.
+    if (result != currentOutParam)
+      opBuilder->create<mlir::memref::CopyOp>(loc, result, currentOutParam);
+    opBuilder->create<mlir::func::ReturnOp>(loc);
   } else if (mlir::isa<mlir::IntegerType, mlir::FloatType>(result.getType())) {
-    // Scalar return — normal path.
-    opBuilder->create<mlir::func::ReturnOp>(opBuilder->getUnknownLoc(), result);
+    // Scalar return — return by value, no out-param.
+    opBuilder->create<mlir::func::ReturnOp>(loc, result);
   } else {
     std::string typeName;
     llvm::raw_string_ostream os(typeName);
@@ -206,12 +236,12 @@ void MLIRCompiler::compileFunction(const mlir_edsl::FunctionDef &funcDef) {
 
   mlir::Type returnType = convertType(retType);
 
-  // Create function, build body, finalize
+  // Create function, build body, finalize.
+  // No outParam passed — materialize_in_destination in finalizeFunction
+  // gives one-shot-bufferize the destination hint to write directly into
+  // the caller-allocated output buffer.
   createFunction(funcDef.name(), params, returnType);
-  // Pass currentOutParam so array-producing ops write directly into the
-  // Python-allocated output buffer, skipping the intermediate alloca+copy.
-  mlir::Value result =
-      builder->buildFromProtobufNode(funcDef.body(), currentOutParam);
+  mlir::Value result = builder->buildFromProtobufNode(funcDef.body(), {});
   finalizeFunction(funcDef.name(), result);
 }
 
