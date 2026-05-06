@@ -8,6 +8,7 @@ to get stable measurements even for small matrices.
 
 """
 
+import time
 import timeit
 
 import numpy as np
@@ -35,62 +36,50 @@ def repeats_for(N: int) -> int:
 
 
 def make_edsl_matmul(N: int):
-    """Compile a fixed-size NxN matmul function. Returns the callable."""
-    backend = get_backend()
-    backend.clear_module()
-    backend.set_optimization_level(3)
-
+    """Compile a fixed-size NxN matmul function. Returns (callable, compile_time_seconds)."""
     @ml_function
     def matmul_fn(A: Tensor[f32, N, N], B: Tensor[f32, N, N]) -> Tensor[f32, N, N]:
         return matmul(A, B)
 
     A = np.ones((N, N), dtype=np.float32)
     B = np.ones((N, N), dtype=np.float32)
+    t0 = time.perf_counter()
     matmul_fn(A, B)
-
-    return matmul_fn
+    return matmul_fn, time.perf_counter() - t0
 
 
 def make_edsl_bias_add(N: int):
-    """Compile a fixed-size NxN bias add function. Returns the callable."""
-    backend = get_backend()
-    backend.clear_module()
-    backend.set_optimization_level(3)
-
+    """Compile a fixed-size NxN bias add function. Returns (callable, compile_time_seconds)."""
     @ml_function
     def bias_fn(X: Tensor[f32, N, N], b: Tensor[f32, N]) -> Tensor[f32, N, N]:
         return X + b
 
     X = np.ones((N, N), dtype=np.float32)
     b = np.ones(N, dtype=np.float32)
+    t0 = time.perf_counter()
     bias_fn(X, b)
-
-    return bias_fn
+    return bias_fn, time.perf_counter() - t0
 
 
 def make_edsl_relu(N: int):
-    """Compile a fixed-size NxN relu function. Returns the callable."""
-    backend = get_backend()
-    backend.clear_module()
-    backend.set_optimization_level(3)
-
+    """Compile a fixed-size NxN relu function. Returns (callable, compile_time_seconds)."""
     @ml_function
     def relu_fn(X: Tensor[f32, N, N]) -> Tensor[f32, N, N]:
         return relu(X)
 
     X = np.ones((N, N), dtype=np.float32)
+    t0 = time.perf_counter()
     relu_fn(X)
-
-    return relu_fn
+    return relu_fn, time.perf_counter() - t0
 
 
 def print_section(title: str, rows: list):
     print(f"\n=== {title} ===")
-    print(f"{'Size':>6}  {'EDSL (µs)':>12}  {'NumPy (µs)':>12}  {'Ratio':>8}")
-    print("-" * 46)
-    for size_label, edsl_t, numpy_t in rows:
+    print(f"{'Size':>6}  {'Call (µs)':>12}  {'NumPy (µs)':>12}  {'Ratio':>8}  {'Compile (ms)':>14}")
+    print("-" * 62)
+    for size_label, edsl_t, numpy_t, compile_t in rows:
         ratio = edsl_t / numpy_t
-        print(f"{size_label:>6}  {edsl_t * 1e6:>12.2f}  {numpy_t * 1e6:>12.2f}  {ratio:>7.2f}x")
+        print(f"{size_label:>6}  {edsl_t * 1e6:>12.2f}  {numpy_t * 1e6:>12.2f}  {ratio:>7.2f}x  {compile_t * 1e3:>14.1f}")
 
 
 def main():
@@ -124,6 +113,8 @@ def main():
         print(f"  numpy {N:>3}x{N}: matmul={np_matmul_t[N]*1e6:.2f} µs  bias={np_bias_t[N]*1e6:.2f} µs  relu={np_relu_t[N]*1e6:.2f} µs")
 
     # Phase 2: EDSL benchmarks (triggers libomp RTLD_GLOBAL on first call).
+    backend = get_backend()
+    backend.set_optimization_level(3)
     print("\nPhase 2: EDSL...")
     matmul_rows = []
     bias_rows   = []
@@ -134,25 +125,25 @@ def main():
         n = repeats_for(N)
         label = f"{N:>4}x{N:<2}"
 
-        edsl_fn = make_edsl_matmul(N)
+        edsl_fn, matmul_compile = make_edsl_matmul(N)
         for _ in range(WARMUP):
             edsl_fn(A, B)
         matmul_t = timeit.timeit(lambda: edsl_fn(A, B), number=n) / n
-        matmul_rows.append((label, matmul_t, np_matmul_t[N]))
+        matmul_rows.append((label, matmul_t, np_matmul_t[N], matmul_compile))
 
-        edsl_fn = make_edsl_bias_add(N)
+        edsl_fn, bias_compile = make_edsl_bias_add(N)
         for _ in range(WARMUP):
             edsl_fn(A, b)
         bias_t = timeit.timeit(lambda: edsl_fn(A, b), number=n) / n
-        bias_rows.append((label, bias_t, np_bias_t[N]))
+        bias_rows.append((label, bias_t, np_bias_t[N], bias_compile))
 
-        edsl_fn = make_edsl_relu(N)
+        edsl_fn, relu_compile = make_edsl_relu(N)
         for _ in range(WARMUP):
             edsl_fn(A)
         relu_t = timeit.timeit(lambda: edsl_fn(A), number=n) / n
-        relu_rows.append((label, relu_t, np_relu_t[N]))
+        relu_rows.append((label, relu_t, np_relu_t[N], relu_compile))
 
-        print(f"  edsl  {N:>3}x{N}: matmul={matmul_t*1e6:.2f} µs  bias={bias_t*1e6:.2f} µs  relu={relu_t*1e6:.2f} µs")
+        print(f"  edsl  {N:>3}x{N}: matmul={matmul_t*1e6:.2f} µs (compile={matmul_compile*1e3:.1f} ms)  bias={bias_t*1e6:.2f} µs  relu={relu_t*1e6:.2f} µs")
 
     print()
     print_section("Matmul: X @ W", matmul_rows)

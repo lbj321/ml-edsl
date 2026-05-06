@@ -6,13 +6,14 @@ Usage:
     python3 benchmarks/bench_dense_layer.py
 """
 
+import time
 import timeit
 import numpy as np
 
 from mlir_edsl import ml_function, Tensor, f32, relu
 from mlir_edsl.backend import get_backend
 
-SIZES = [2, 4, 8, 16, 32, 64, 128, 256]
+SIZES = [2, 4, 8, 16, 32, 64, 128, 256, 512]
 WARMUP = 5
 
 
@@ -28,22 +29,17 @@ def repeats_for(N: int) -> int:
 
 
 def make_edsl_dense(N: int):
-    """Compile a fixed-size NxN dense layer function. Returns the callable."""
-    backend = get_backend()
-    backend.clear_module()
-    backend.set_optimization_level(3)
-
+    """Compile a fixed-size NxN dense layer function. Returns (callable, compile_time_seconds)."""
     @ml_function
     def dense_fn(X: Tensor[f32, N, N], W: Tensor[f32, N, N], b: Tensor[f32, N]) -> Tensor[f32, N, N]:
         return relu(X @ W + b)
 
-    # Trigger JIT compilation
     X = np.ones((N, N), dtype=np.float32)
     W = np.ones((N, N), dtype=np.float32)
     b = np.zeros(N, dtype=np.float32)
+    t0 = time.perf_counter()
     dense_fn(X, W, b)
-
-    return dense_fn
+    return dense_fn, time.perf_counter() - t0
 
 
 
@@ -71,25 +67,28 @@ def main():
         print(f"  numpy {N:>3}x{N}: {numpy_times[N] * 1e6:.2f} µs")
 
     # Phase 2: EDSL benchmarks (triggers libomp RTLD_GLOBAL on first call).
+    backend = get_backend()
+    backend.set_optimization_level(3)
     print("\nPhase 2: EDSL...")
     edsl_times = {}
+    compile_times = {}
 
     for N in SIZES:
         X, W, b = inputs[N]
         n = repeats_for(N)
 
-        edsl_fn = make_edsl_dense(N)
+        edsl_fn, compile_times[N] = make_edsl_dense(N)
         for _ in range(WARMUP):
             edsl_fn(X, W, b)
 
         edsl_times[N] = timeit.timeit(lambda: edsl_fn(X, W, b), number=n) / n
-        print(f"  edsl  {N:>3}x{N}: {edsl_times[N] * 1e6:.2f} µs")
+        print(f"  edsl  {N:>3}x{N}: call={edsl_times[N] * 1e6:.2f} µs  compile={compile_times[N] * 1e3:.1f} ms")
 
-    print(f"\n{'Size':>6}  {'EDSL (µs)':>12}  {'NumPy (µs)':>12}  {'Ratio':>8}")
-    print("-" * 46)
+    print(f"\n{'Size':>6}  {'Call (µs)':>12}  {'NumPy (µs)':>12}  {'Ratio':>8}  {'Compile (ms)':>14}")
+    print("-" * 62)
     for N in SIZES:
         ratio = edsl_times[N] / numpy_times[N]
-        print(f"{N:>4}x{N:<2}  {edsl_times[N] * 1e6:>12.2f}  {numpy_times[N] * 1e6:>12.2f}  {ratio:>7.2f}x")
+        print(f"{N:>4}x{N:<2}  {edsl_times[N] * 1e6:>12.2f}  {numpy_times[N] * 1e6:>12.2f}  {ratio:>7.2f}x  {compile_times[N] * 1e3:>14.1f}")
 
 
 if __name__ == "__main__":
