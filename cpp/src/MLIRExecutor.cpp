@@ -63,9 +63,13 @@ void MLIRExecutor::compileModule(std::unique_ptr<llvm::Module> module,
                                  const std::vector<std::string> &functionNames) {
   initialize();
 
-  // Save unoptimized LLVM IR if SAVE_IR environment variable is set
   const bool saveIR = std::getenv("SAVE_IR") != nullptr;
   if (saveIR) {
+    lastUnoptLLVMIR_.clear();
+    {
+      llvm::raw_string_ostream ss(lastUnoptLLVMIR_);
+      module->print(ss, nullptr);
+    }
     std::string filename = "ir_output/module_unopt.ll";
     std::error_code EC;
     llvm::raw_fd_ostream outFile(filename, EC);
@@ -76,8 +80,12 @@ void MLIRExecutor::compileModule(std::unique_ptr<llvm::Module> module,
 
   optimizeModule(module.get());
 
-  // Save optimized LLVM IR if SAVE_IR environment variable is set
   if (saveIR) {
+    lastOptLLVMIR_.clear();
+    {
+      llvm::raw_string_ostream ss(lastOptLLVMIR_);
+      module->print(ss, nullptr);
+    }
     std::string filename = "ir_output/module_opt.ll";
     std::error_code EC;
     llvm::raw_fd_ostream outFile(filename, EC);
@@ -127,6 +135,8 @@ void MLIRExecutor::clear() {
     jit = std::move(jitOrError.get());
   }
   functionPointers.clear();
+  lastUnoptLLVMIR_.clear();
+  lastOptLLVMIR_.clear();
 }
 
 void MLIRExecutor::optimizeModule(llvm::Module *module) {

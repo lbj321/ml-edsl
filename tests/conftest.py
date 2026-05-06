@@ -15,16 +15,10 @@ import pytest
 
 from mlir_edsl.backend import get_backend
 
+_SAVE_IR = os.getenv("SAVE_IR", "").lower() in ("1", "true", "yes")
+
 
 # ==================== HELPERS ====================
-
-def _read_file(path):
-    """Read file contents, return placeholder if file doesn't exist."""
-    try:
-        with open(path, 'r') as f:
-            return f.read()
-    except FileNotFoundError:
-        return f"(File not found: {path})"
 
 
 def _generate_ir_html(test_name, func_name, func_source, ast_dump, mlir,
@@ -240,17 +234,14 @@ def _generate_ir_html(test_name, func_name, func_source, ast_dump, mlir,
 
 
 def _save_ir_for_test(backend, node, failed: bool = False, failure_ir: str = ""):
-    """Save IR files and generate HTML report for a test.
+    """Generate HTML report for a test.
 
     Uses the pytest node ID to create a hierarchical output structure:
         tests/memref/test_array_execution.py::TestArrayExecution::test_basic
         -> ir_html/memref/test_array_execution/test_basic.html
     """
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    ir_output_dir = os.path.join(project_root, "ir_output")
     ir_html_dir = os.path.join(project_root, "ir_html")
-
-    os.makedirs(ir_output_dir, exist_ok=True)
 
     functions = backend.list_functions()
     func_name = functions[0] if functions else "__unknown__"
@@ -271,10 +262,10 @@ def _save_ir_for_test(backend, node, failed: bool = False, failure_ir: str = "")
     html_dir = os.path.join(ir_html_dir, file_dir)
     os.makedirs(html_dir, exist_ok=True)
 
-    # Read IR files written by C++ backend
-    mlir_ir = _read_file(os.path.join(ir_output_dir, f"{func_name}.mlir"))
-    unopt_ir = _read_file(os.path.join(ir_output_dir, "module_unopt.ll"))
-    opt_ir = _read_file(os.path.join(ir_output_dir, "module_opt.ll"))
+    # Fetch IR from backend API
+    mlir_ir = backend.get_module_ir()
+    unopt_ir = backend.get_unopt_llvm_ir()
+    opt_ir = backend.get_opt_llvm_ir()
 
     # Get lowering pipeline snapshots, AST dump, and Python source
     snapshots = backend.get_lowering_snapshots()
@@ -290,6 +281,30 @@ def _save_ir_for_test(backend, node, failed: bool = False, failure_ir: str = "")
     )
     with open(html_path, "w") as f:
         f.write(html_content)
+
+
+def _run_filecheck(filecheck_bin: str, pattern: str, ir: str, context: str = "") -> None:
+    """Run FileCheck on `ir` using `pattern` as the check file."""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.check', delete=False) as f:
+        f.write(pattern)
+        check_file = f.name
+    try:
+        result = subprocess.run(
+            [filecheck_bin, check_file],
+            input=ir,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            ctx = f" (after pass '{context}')" if context else ""
+            pytest.fail(
+                f"FileCheck failed{ctx}:\n"
+                f"--- Pattern ---\n{pattern}\n"
+                f"--- IR ---\n{ir}\n"
+                f"--- FileCheck stderr ---\n{result.stderr}"
+            )
+    finally:
+        os.unlink(check_file)
 
 
 def _find_filecheck():
@@ -327,14 +342,11 @@ def pytest_runtest_makereport(item, call):
 
 @pytest.fixture(scope="session", autouse=True)
 def session_setup():
-    """Clear and create ir_output/ before any test runs.
+    """Clear ir_output/ and ir_html/ before any test runs (SAVE_IR=1 only).
 
-    C++ saves {name}.mlir and module_unopt.ll during test execution.
-    ir_output/ must exist before tests start, otherwise the C++ saves fail
-    silently and the HTML report shows '(File not found: ...)'.
+    ir_output/ must exist before tests start so C++ file writes don't fail silently.
     """
-    save_ir = os.getenv("SAVE_IR", "").lower() in ("1", "true", "yes")
-    if save_ir:
+    if _SAVE_IR:
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         ir_output_dir = os.path.join(project_root, "ir_output")
         ir_html_dir = os.path.join(project_root, "ir_html")
@@ -371,10 +383,9 @@ def clean_module(request):
     yield
 
     if b is not None:
-        save_ir = os.getenv("SAVE_IR", "").lower() in ("1", "true", "yes")
         rep = getattr(request.node, 'rep_call', None)
         test_failed = rep is not None and rep.failed
-        if save_ir or test_failed:
+        if _SAVE_IR or test_failed:
             failure_ir = b.get_failure_ir() if test_failed else ""
             try:
                 _save_ir_for_test(b, request.node, failed=test_failed,
@@ -405,30 +416,7 @@ def check_ir(backend):
         pytest.skip("FileCheck binary not found")
 
     def _check(pattern: str):
-        ir = backend.get_module_ir()
-
-        with tempfile.NamedTemporaryFile(
-            mode='w', suffix='.check', delete=False
-        ) as f:
-            f.write(pattern)
-            check_file = f.name
-
-        try:
-            result = subprocess.run(
-                [filecheck_bin, check_file],
-                input=ir,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                pytest.fail(
-                    f"FileCheck failed:\n"
-                    f"--- Pattern ---\n{pattern}\n"
-                    f"--- Actual IR ---\n{ir}\n"
-                    f"--- FileCheck stderr ---\n{result.stderr}"
-                )
-        finally:
-            os.unlink(check_file)
+        _run_filecheck(filecheck_bin, pattern, backend.get_module_ir())
 
     return _check
 
@@ -461,7 +449,7 @@ def check_lowered_ir(backend):
         # Ensure lowering has run (idempotent if already finalized)
         functions = backend.list_functions()
         if functions:
-            backend.compiler.get_function_pointer(functions[0])
+            backend.get_function_pointer(functions[0])
 
         snapshots = backend.get_lowering_snapshots()
         if not snapshots:
@@ -478,27 +466,6 @@ def check_lowered_ir(backend):
             available = [name for name, _ in snapshots]
             pytest.fail(f"Pass '{after}' not found. Available: {available}")
 
-        with tempfile.NamedTemporaryFile(
-            mode='w', suffix='.check', delete=False
-        ) as f:
-            f.write(pattern)
-            check_file = f.name
-
-        try:
-            result = subprocess.run(
-                [filecheck_bin, check_file],
-                input=ir,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                pytest.fail(
-                    f"FileCheck failed (after pass '{after}'):\n"
-                    f"--- Pattern ---\n{pattern}\n"
-                    f"--- Lowered IR ---\n{ir}\n"
-                    f"--- FileCheck stderr ---\n{result.stderr}"
-                )
-        finally:
-            os.unlink(check_file)
+        _run_filecheck(filecheck_bin, pattern, ir, context=after)
 
     return _check

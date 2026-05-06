@@ -210,6 +210,18 @@ class CppMLIRBackend:
         """Get current MLIR module IR as string."""
         return self.compiler.get_module_ir()
 
+    def get_unopt_llvm_ir(self) -> str:
+        """Unoptimized LLVM IR from last compilation; empty if SAVE_IR not set."""
+        return self.compiler.get_unopt_llvm_ir()
+
+    def get_opt_llvm_ir(self) -> str:
+        """Optimized LLVM IR from last compilation; empty if SAVE_IR not set."""
+        return self.compiler.get_opt_llvm_ir()
+
+    def get_function_pointer(self, name: str) -> int:
+        """Get JIT-compiled function pointer, triggering finalization if needed."""
+        return self.compiler.get_function_pointer(name)
+
     def get_lowering_snapshots(self) -> list[tuple[str, str]]:
         """Get IR snapshots from lowering pipeline."""
         return self.compiler.get_lowering_snapshots()

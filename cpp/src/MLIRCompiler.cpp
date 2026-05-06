@@ -356,6 +356,14 @@ std::string MLIRCompiler::getModuleIR() {
   return result;
 }
 
+std::string MLIRCompiler::getUnoptLLVMIR() const {
+  return executor->getUnoptLLVMIR();
+}
+
+std::string MLIRCompiler::getOptLLVMIR() const {
+  return executor->getOptLLVMIR();
+}
+
 // ==================== TESTING UTILITIES ====================
 
 void MLIRCompiler::injectTestFailure() {

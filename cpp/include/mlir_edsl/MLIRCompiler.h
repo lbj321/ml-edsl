@@ -55,6 +55,8 @@ public:
   bool hasFunction(const std::string &name) const;
   std::vector<std::string> listFunctions() const;
   std::string getModuleIR();
+  std::string getUnoptLLVMIR() const;
+  std::string getOptLLVMIR() const;
 
   // ==================== IR SNAPSHOTS ====================
   using SnapshotList = std::vector<std::pair<std::string, std::string>>;

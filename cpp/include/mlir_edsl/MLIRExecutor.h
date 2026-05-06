@@ -37,6 +37,10 @@ class MLIRExecutor {
 
     bool isInitialized() const { return initialized; }
 
+    // LLVM IR captured during last compileModule() call; empty before first compile
+    std::string getUnoptLLVMIR() const { return lastUnoptLLVMIR_; }
+    std::string getOptLLVMIR()   const { return lastOptLLVMIR_; }
+
     enum class OptLevel { O0, O2, O3 };
     void setOptimizationLevel(OptLevel level);
 
@@ -49,6 +53,9 @@ class MLIRExecutor {
 
     // Store compiled function pointers
     std::unordered_map<std::string, void*> functionPointers;
+
+    std::string lastUnoptLLVMIR_;
+    std::string lastOptLLVMIR_;
 };
 
 
