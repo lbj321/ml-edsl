@@ -105,6 +105,7 @@ def main():
     np_bias_t   = {}
     np_relu_t   = {}
 
+    print("Phase 1: NumPy...")
     for N in SIZES:
         A = rng.random((N, N), dtype=np.float32)
         B = rng.random((N, N), dtype=np.float32)
@@ -120,8 +121,10 @@ def main():
         np_matmul_t[N] = timeit.timeit(lambda: np.matmul(A, B), number=n) / n
         np_bias_t[N]   = timeit.timeit(lambda: np.add(A, b),    number=n) / n
         np_relu_t[N]   = timeit.timeit(lambda: np.maximum(A, 0.0), number=n) / n
+        print(f"  numpy {N:>3}x{N}: matmul={np_matmul_t[N]*1e6:.2f} µs  bias={np_bias_t[N]*1e6:.2f} µs  relu={np_relu_t[N]*1e6:.2f} µs")
 
     # Phase 2: EDSL benchmarks (triggers libomp RTLD_GLOBAL on first call).
+    print("\nPhase 2: EDSL...")
     matmul_rows = []
     bias_rows   = []
     relu_rows   = []
@@ -134,21 +137,24 @@ def main():
         edsl_fn = make_edsl_matmul(N)
         for _ in range(WARMUP):
             edsl_fn(A, B)
-        edsl_t = timeit.timeit(lambda: edsl_fn(A, B), number=n) / n
-        matmul_rows.append((label, edsl_t, np_matmul_t[N]))
+        matmul_t = timeit.timeit(lambda: edsl_fn(A, B), number=n) / n
+        matmul_rows.append((label, matmul_t, np_matmul_t[N]))
 
         edsl_fn = make_edsl_bias_add(N)
         for _ in range(WARMUP):
             edsl_fn(A, b)
-        edsl_t = timeit.timeit(lambda: edsl_fn(A, b), number=n) / n
-        bias_rows.append((label, edsl_t, np_bias_t[N]))
+        bias_t = timeit.timeit(lambda: edsl_fn(A, b), number=n) / n
+        bias_rows.append((label, bias_t, np_bias_t[N]))
 
         edsl_fn = make_edsl_relu(N)
         for _ in range(WARMUP):
             edsl_fn(A)
-        edsl_t = timeit.timeit(lambda: edsl_fn(A), number=n) / n
-        relu_rows.append((label, edsl_t, np_relu_t[N]))
+        relu_t = timeit.timeit(lambda: edsl_fn(A), number=n) / n
+        relu_rows.append((label, relu_t, np_relu_t[N]))
 
+        print(f"  edsl  {N:>3}x{N}: matmul={matmul_t*1e6:.2f} µs  bias={bias_t*1e6:.2f} µs  relu={relu_t*1e6:.2f} µs")
+
+    print()
     print_section("Matmul: X @ W", matmul_rows)
     print_section("Bias Add: X + b", bias_rows)
     print_section("ReLU: relu(X)", relu_rows)
