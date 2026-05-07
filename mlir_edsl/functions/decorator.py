@@ -107,11 +107,7 @@ class MLFunction:
         variant = self._compiled_variants[shape_key]
         variant.signature.validate_runtime_args(args, kwargs)
         ordered = variant.signature.order_args(args, kwargs)
-        from ..backend import get_backend
-        backend = get_backend()
-        if self._target == "gpu":
-            return backend.execute_gpu_function(variant.name, *ordered)
-        return backend.execute_function(variant.name, *ordered)
+        return variant.call(ordered)
 
 
 def ml_function(func: Callable = None, *, target: str = "cpu"):

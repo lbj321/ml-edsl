@@ -34,6 +34,34 @@ _global_backend = None
 
 
 
+def _build_c_types_for_type(t: "Type") -> list:
+    """Return the flat ctypes list for a single parameter or return type.
+
+    Scalar → [c_int32 | c_float | c_bool]
+    Aggregate (ndim N) → [c_void_p, c_void_p, c_int64] + [c_int64]*N + [c_int64]*N
+    """
+    if isinstance(t, ScalarType):
+        return [TYPE_TO_CTYPES[t.kind]]
+    if t.is_aggregate():
+        ndim = len(t.shape)
+        return (
+            [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
+            + [ctypes.c_int64] * ndim
+            + [ctypes.c_int64] * ndim
+        )
+    raise RuntimeError(f"_build_c_types_for_type: unsupported type {t}")
+
+
+def _build_flat_args_for_param(val, t: "Type") -> tuple:
+    """Return (c_vals_list, live_buf_or_None) for a single param at call time."""
+    if isinstance(t, ScalarType):
+        return [val], None
+    if t.is_aggregate():
+        _c_types, c_vals, buf = _make_memref_descriptor(val, t)
+        return c_vals, buf
+    raise RuntimeError(f"_build_flat_args_for_param: unsupported type {t}")
+
+
 def _make_output_descriptor(array_type) -> tuple:
     """Allocate a zeroed output buffer and build its memref descriptor.
 
