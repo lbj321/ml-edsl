@@ -29,9 +29,9 @@ def repeats_for(N: int) -> int:
     if N <= 128:
         return 200
     if N <= 256:
-        return 50
+        return 200
     if N <= 512:
-        return 10
+        return 150
     return 5
 
 
