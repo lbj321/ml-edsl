@@ -58,6 +58,7 @@ class CompiledFunction:
         self.signature = signature
         self._backend = backend
         self._target = target
+        self._param_types = [signature.param_types[n] for n in signature.param_names]
         if target == "cpu":
             self._cfunc, self._ret_is_aggregate = _build_cfunc(name, signature, backend)
         else:
@@ -69,11 +70,10 @@ class CompiledFunction:
         if self._target == "gpu":
             return self._backend.execute_gpu_function(self.name, *ordered_args)
 
-        param_types = [self.signature.param_types[n] for n in self.signature.param_names]
         flat_args = []
         live_buffers = []
 
-        for pt, val in zip(param_types, ordered_args):
+        for pt, val in zip(self._param_types, ordered_args):
             c_vals, buf = _build_flat_args_for_param(val, pt)
             flat_args.extend(c_vals)
             if buf is not None:
