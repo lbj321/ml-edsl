@@ -105,8 +105,6 @@ class MLFunction:
                     b._func_sources[specialized_sig.name] = src
 
         variant = self._compiled_variants[shape_key]
-        variant.signature.validate_runtime_args(args, kwargs)
-        ordered = variant.signature.order_args(args, kwargs)
         return variant.call(ordered)
 
 
