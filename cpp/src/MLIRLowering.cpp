@@ -35,6 +35,7 @@
 #endif
 
 #include "mlir/IR/OwningOpRef.h"
+#include "llvm/Support/FileSystem.h"
 
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -100,7 +101,11 @@ public:
   using SnapshotList = std::vector<std::pair<std::string, std::string>>;
 
   explicit IRSnapshotInstrumentation(SnapshotList *snapshots)
-      : snapshots(snapshots) {}
+      : snapshots(snapshots), flushDir(std::getenv("FLUSH_IR") ? "ir_flush" : ""),
+        flushCounter(0) {
+    if (!flushDir.empty())
+      llvm::sys::fs::create_directories(flushDir);
+  }
 
   void runAfterPass(mlir::Pass *pass, mlir::Operation *op) override {
     // OpToOpPassAdaptor is an internal MLIR wrapper for nested passes.
@@ -116,10 +121,11 @@ public:
     while (root->getParentOp())
       root = root->getParentOp();
     root->print(os);
-    // Prefer human-readable pass argument name, fall back to class name
     std::string passName = pass->getArgument().str();
     if (passName.empty())
       passName = pass->getName().str();
+    if (!flushDir.empty())
+      flushToDisk(passName, ir);
     snapshots->emplace_back(std::move(passName), std::move(ir));
   }
 
@@ -133,11 +139,30 @@ public:
     std::string passName = pass->getArgument().str();
     if (passName.empty())
       passName = pass->getName().str();
+    if (!flushDir.empty())
+      flushToDisk("[FAILED] " + passName, ir);
     snapshots->emplace_back("[FAILED] " + passName, std::move(ir));
   }
 
 private:
   SnapshotList *snapshots;
+  std::string flushDir;
+  int flushCounter;
+
+  void flushToDisk(const std::string &passName, const std::string &ir) {
+    // Sanitize pass name for use as filename
+    std::string safe = passName;
+    for (char &c : safe)
+      if (c == '/' || c == ' ' || c == '[' || c == ']')
+        c = '_';
+    std::string idx = std::to_string(flushCounter++);
+    idx = std::string(3 - std::min<int>(3, idx.size()), '0') + idx;
+    std::string path = flushDir + "/" + idx + "_" + safe + ".mlir";
+    std::error_code ec;
+    llvm::raw_fd_ostream f(path, ec);
+    if (!ec)
+      f << ir;
+  }
 };
 
 
