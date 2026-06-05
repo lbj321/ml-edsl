@@ -48,6 +48,8 @@ class MLFunction:
 
     def __call__(self, *args, **kwargs) -> Union[int, float, bool, Value]:
         """JIT compile and execute the function - returns numeric result OR AST node"""
+        # True only when this function is called from inside another @ml_function's
+        # symbolic execution — i.e. one compiled function referencing another.
         if in_symbolic_context():
             ast_args = list(args) + list(kwargs.values())
             return CallOp(self.signature.name, ast_args, self.signature.return_type)

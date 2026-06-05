@@ -90,14 +90,6 @@ class CompiledFunction:
 
         return self._cfunc(*flat_args)
 
-    def execute(self, args: tuple, kwargs: dict) -> Union[int, float, bool]:
-        """Execute with runtime values."""
-        self.signature.validate_runtime_args(args, kwargs)
-        ordered_args = self.signature.order_args(args, kwargs)
-        if self._target == "gpu":
-            return self._backend.execute_gpu_function(self.name, *ordered_args)
-        return self._backend.execute_function(self.name, *ordered_args)
-
 
 def compile_function(signature: FunctionSignature, result_ast: Value,
                      target: str = "cpu") -> CompiledFunction:
