@@ -403,12 +403,7 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Lower static 8x8 linalg.matmul tiles to vector.contract with standard
-  // 2D indexing maps (m,k)x(k,n)->(m,n). Must run before LinalgVectorizationPass
-  // which skips matmul — linalg::vectorize always produces a 3D double-broadcast
-  // form that the OuterProduct lowering cannot decompose into vector.fma.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulToContractPass());
-
+  
   // Tile linalg.generic ops (elementwise, bias, relu, etc.) to strips of 8
   // along the innermost dimension before vectorization. Without this, the
   // vectorizer sees the full tensor as a single vector<NxNxf32>, causing LLVM
@@ -416,6 +411,12 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // in its analysis passes.
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgGenericTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
+  
+  // Lower static 8x8 linalg.matmul tiles to vector.contract with standard
+  // 2D indexing maps (m,k)x(k,n)->(m,n). Must run before LinalgVectorizationPass
+  // which skips matmul — linalg::vectorize always produces a 3D double-broadcast
+  // form that the OuterProduct lowering cannot decompose into vector.fma.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulToContractPass());
 
   // Vectorize remaining linalg structured ops → vector dialect
   // (linalg.matmul is already handled by LinalgMatmulToContractPass above)
