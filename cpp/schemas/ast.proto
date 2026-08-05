@@ -13,8 +13,7 @@ package mlir_edsl;
 message TypeSpec {
   oneof type_kind {
     ScalarTypeSpec scalar = 1;
-    MemRefTypeSpec memref = 2;
-    TensorTypeSpec tensor = 3;
+    ShapedTypeSpec shaped = 2;
     // Future extensions:
     // TupleTypeSpec tuple = 4;
     // ComplexTypeSpec complex = 5;
@@ -37,20 +36,21 @@ message ScalarTypeSpec {
   Kind kind = 1;
 }
 
-// MemRef type specification (fixed-size arrays)
-message MemRefTypeSpec {
-  repeated int64 shape = 1;        // Shape: [4] for 1D, [2,3] for 2D, [2,3,4] for 3D
-  TypeSpec element_type = 2;       // Element type (RECURSIVE - can be any TypeSpec!)
+// Shaped type specification - shared by memref (mutable, fixed-size arrays)
+// and tensor (value-semantic, immutable) types. `kind` distinguishes which
+// MLIR type the shape/element_type get lowered to.
+message ShapedTypeSpec {
+  enum Kind {
+    MEMREF = 0;
+    TENSOR = 1;
+  }
+  Kind kind = 1;
+  repeated int64 shape = 2;        // Shape: [4] for 1D, [2,3] for 2D, [2,3,4] for 3D. Use -1 for dynamic dims (tensor only).
+  TypeSpec element_type = 3;       // Element type (RECURSIVE - can be any TypeSpec!)
 
   // Future extensions for advanced memref features:
-  // MemRefLayout layout = 3;      // Strided layouts, affine maps
-  // MemorySpace memory_space = 4; // GPU global, shared, etc.
-}
-
-// Tensor type specification (value-semantic, immutable)
-message TensorTypeSpec {
-  repeated int64 shape = 1;        // Shape: [4] for 1D, [2,3] for 2D. Use -1 for dynamic dims.
-  TypeSpec element_type = 2;       // Element type
+  // MemRefLayout layout = 4;      // Strided layouts, affine maps
+  // MemorySpace memory_space = 5; // GPU global, shared, etc.
 }
 
 // ============================================================================
@@ -274,7 +274,7 @@ message ForIterArg {
 
 // Array literal creation: Array[4, i32]([1, 2, 3, 4])
 message ArrayLiteral {
-  TypeSpec type = 1;              // Array type (MemRefTypeSpec)
+  TypeSpec type = 1;              // Array type (ShapedTypeSpec, kind=MEMREF)
   repeated ASTNode elements = 2;  // Array elements
 }
 
@@ -290,7 +290,7 @@ message ArrayStore {
   ASTNode array = 1;              // Array to store into
   repeated ASTNode indices = 2;   // Index values (must be i32)
   ASTNode value = 3;              // Value to store
-  TypeSpec result_type = 4;       // Result array type (MemRefTypeSpec)
+  TypeSpec result_type = 4;       // Result array type (ShapedTypeSpec, kind=MEMREF)
 }
 
 // Element-wise binary operation on arrays
@@ -298,7 +298,7 @@ message ArrayBinaryOp {
   BinaryOpType op_type = 1;       // ADD, SUB, MUL, DIV
   ASTNode left = 2;               // Left operand (array or scalar)
   ASTNode right = 3;              // Right operand (array or scalar)
-  TypeSpec result_type = 4;       // Result type (MemRefTypeSpec)
+  TypeSpec result_type = 4;       // Result type (ShapedTypeSpec, kind=MEMREF)
   BroadcastMode broadcast = 5;    // Broadcasting mode
 }
 
@@ -308,7 +308,7 @@ message ArrayBinaryOp {
 
 // Create tensor from scalar elements: tensor.from_elements
 message TensorFromElements {
-  TypeSpec type = 1;                // Tensor type (TensorTypeSpec)
+  TypeSpec type = 1;                // Tensor type (ShapedTypeSpec, kind=TENSOR)
   repeated ASTNode elements = 2;   // Scalar elements
 }
 
@@ -324,12 +324,12 @@ message TensorInsert {
   ASTNode tensor = 1;              // Tensor to insert into
   repeated ASTNode indices = 2;    // Index values
   ASTNode value = 3;               // Value to insert
-  TypeSpec result_type = 4;        // Result tensor type (TensorTypeSpec)
+  TypeSpec result_type = 4;        // Result tensor type (ShapedTypeSpec, kind=TENSOR)
 }
 
 // Create uninitialized tensor: tensor.empty
 message TensorEmpty {
-  TypeSpec type = 1;               // Tensor type (TensorTypeSpec with shape + element type)
+  TypeSpec type = 1;               // Tensor type (ShapedTypeSpec, kind=TENSOR, with shape + element type)
   repeated ASTNode dynamic_dims = 2; // Runtime values for dynamic (?) dimensions, in order
 }
 
@@ -364,7 +364,7 @@ message LinalgDot {
 message LinalgMatmul {
   ASTNode  lhs      = 1;  // 2D memref (memref<MxKxf32>)
   ASTNode  rhs      = 2;  // 2D memref (memref<KxNxf32>)
-  TypeSpec out_type = 3;  // Output MemRefTypeSpec (memref<MxNxf32>)
+  TypeSpec out_type = 3;  // Output ShapedTypeSpec, kind=MEMREF (memref<MxNxf32>)
 }
 
 // Element-wise binary op on tensors with optional broadcasting.
@@ -388,7 +388,7 @@ message LinalgMap {
   ASTNode  input           = 1;  // 1D memref input
   ASTNode  body            = 2;  // body expression (references LinalgMapElement)
   int64    element_node_id = 3;  // LinalgMapElement placeholder node ID
-  TypeSpec out_type        = 4;  // output MemRefTypeSpec (same shape as input)
+  TypeSpec out_type        = 4;  // output ShapedTypeSpec, kind=MEMREF (same shape as input)
 }
 
 // Placeholder for the linalg.map body block argument.
