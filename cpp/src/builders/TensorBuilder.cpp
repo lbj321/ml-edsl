@@ -1,6 +1,7 @@
 // cpp/src/builders/TensorBuilder.cpp
 #include "mlir_edsl/TensorBuilder.h"
 #include "mlir_edsl/MLIRBuilder.h"
+#include "mlir_edsl/ShapeUtils.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 
 namespace mlir_edsl {
@@ -68,14 +69,11 @@ mlir::Value TensorBuilder::buildInsert(const TensorInsert &node) {
 mlir::Value TensorBuilder::buildEmpty(const TensorEmpty &node) {
   auto loc = builder.getUnknownLoc();
 
-  // Extract shape and element type directly from protobuf
-  const auto &tensorSpec = node.type().tensor();
-  llvm::SmallVector<int64_t> shape(tensorSpec.shape().begin(),
-                                   tensorSpec.shape().end());
-  // Map protobuf sentinel (-1) to MLIR's kDynamic
-  for (auto &d : shape) {
-    if (d == kProtoDynamicDim) d = mlir::ShapedType::kDynamic;
-  }
+  // Extract shape and element type directly from protobuf. Dynamic dims are
+  // intentionally allowed here (unlike convertTensorType) since Tensor.empty
+  // is the one construct that supports runtime-sized dimensions.
+  const auto &tensorSpec = node.type().shaped();
+  llvm::SmallVector<int64_t> shape = buildShapeFromProto(tensorSpec.shape());
   mlir::Type elemType = parent->convertType(tensorSpec.element_type());
 
   // Build runtime values for dynamic (?) dimensions

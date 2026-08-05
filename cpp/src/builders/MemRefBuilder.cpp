@@ -14,27 +14,20 @@ MemRefBuilder::MemRefBuilder(mlir::OpBuilder &builder,
     : builder(builder), context(context), parent(parent),
       arithBuilder(arithBuilder), scfBuilder(scfBuilder) {}
 
-mlir::MemRefType MemRefBuilder::buildMemRefType(const MemRefTypeSpec &spec) {
-  // Validate element type is scalar (memref-of-memref not supported)
-  if (!spec.element_type().has_scalar()) {
-    throw std::runtime_error(
-        "Array element type must be scalar (i32, f32, or bool)");
+mlir::MemRefType MemRefBuilder::buildMemRefType(const ShapedTypeSpec &spec) {
+  return mlir::cast<mlir::MemRefType>(parent->convertMemRefType(spec));
+}
+
+/// Validates that a TypeSpec is a memref-kind ShapedTypeSpec, throwing
+/// contextMsg otherwise. ArrayLiteral/ArrayBinaryOp are memref-only nodes;
+/// a tensor-kind ShapedTypeSpec here would mean the Python frontend
+/// serialized the wrong node type.
+static const ShapedTypeSpec &requireMemRefType(const TypeSpec &type,
+                                                const char *contextMsg) {
+  if (!type.has_shaped() || type.shaped().kind() != ShapedTypeSpec::MEMREF) {
+    throw std::runtime_error(contextMsg);
   }
-
-  mlir::Type elementType = parent->convertType(spec.element_type());
-
-  // Build shape from protobuf repeated field
-  llvm::SmallVector<int64_t, 3> shape;
-  for (int i = 0; i < spec.shape_size(); ++i) {
-    shape.push_back(spec.shape(i));
-  }
-
-  // Validation: only 1D, 2D, 3D supported
-  if (shape.empty() || shape.size() > 3) {
-    throw std::runtime_error("Only 1D, 2D, and 3D arrays supported");
-  }
-
-  return mlir::MemRefType::get(shape, elementType);
+  return type.shaped();
 }
 
 mlir::Value MemRefBuilder::buildArrayLiteral(const ArrayLiteral &arrayLit,
@@ -42,10 +35,9 @@ mlir::Value MemRefBuilder::buildArrayLiteral(const ArrayLiteral &arrayLit,
   auto loc = builder.getUnknownLoc();
 
   // 1. Build memref type from TypeSpec
-  if (!arrayLit.type().has_memref()) {
-    throw std::runtime_error("ArrayLiteral must have memref type");
-  }
-  mlir::MemRefType memrefType = buildMemRefType(arrayLit.type().memref());
+  const ShapedTypeSpec &memrefSpec =
+      requireMemRefType(arrayLit.type(), "ArrayLiteral must have memref type");
+  mlir::MemRefType memrefType = buildMemRefType(memrefSpec);
 
   // 2. Use Python-allocated out-param directly, or fall back to alloca
   mlir::Value memref = outParam
@@ -133,10 +125,9 @@ mlir::Value MemRefBuilder::buildArrayBinaryOp(const ArrayBinaryOp &op,
   auto opType = op.op_type();
 
   // 3. Use Python-allocated out-param directly, or fall back to alloca
-  if (!op.result_type().has_memref()) {
-    throw std::runtime_error("ArrayBinaryOp must have memref result type");
-  }
-  mlir::MemRefType resultType = buildMemRefType(op.result_type().memref());
+  const ShapedTypeSpec &resultSpec = requireMemRefType(
+      op.result_type(), "ArrayBinaryOp must have memref result type");
+  mlir::MemRefType resultType = buildMemRefType(resultSpec);
   mlir::Value resultArray = outParam
       ? outParam
       : builder.create<mlir::memref::AllocaOp>(loc, resultType).getResult();

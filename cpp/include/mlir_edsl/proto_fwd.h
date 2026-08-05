@@ -26,8 +26,7 @@ class FunctionDef;
 // Type specifications
 class TypeSpec;
 class ScalarTypeSpec;
-class MemRefTypeSpec;
-class TensorTypeSpec;
+class ShapedTypeSpec;
 
 // Scalar operations
 class Constant;

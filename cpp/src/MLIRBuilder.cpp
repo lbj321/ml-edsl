@@ -4,6 +4,7 @@
 #include "mlir_edsl/MemRefBuilder.h"
 #include "mlir_edsl/TensorBuilder.h"
 #include "mlir_edsl/LinalgBuilder.h"
+#include "mlir_edsl/ShapeUtils.h"
 
 #include "ast.pb.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -415,10 +416,16 @@ mlir::Type MLIRBuilder::convertType(const mlir_edsl::TypeSpec &typeSpec) const {
   switch (typeSpec.type_kind_case()) {
     case mlir_edsl::TypeSpec::kScalar:
       return convertScalarType(typeSpec.scalar());
-    case mlir_edsl::TypeSpec::kMemref:
-      return convertMemRefType(typeSpec.memref());
-    case mlir_edsl::TypeSpec::kTensor:
-      return convertTensorType(typeSpec.tensor());
+    case mlir_edsl::TypeSpec::kShaped:
+      switch (typeSpec.shaped().kind()) {
+        case mlir_edsl::ShapedTypeSpec::MEMREF:
+          return convertMemRefType(typeSpec.shaped());
+        case mlir_edsl::ShapedTypeSpec::TENSOR:
+          return convertTensorType(typeSpec.shaped());
+        default:
+          throw std::runtime_error("Unknown ShapedTypeSpec kind: " +
+                                   std::to_string(typeSpec.shaped().kind()));
+      }
     case mlir_edsl::TypeSpec::TYPE_KIND_NOT_SET:
       throw std::runtime_error("TypeSpec has no type set");
     default:
@@ -443,51 +450,33 @@ mlir::Type MLIRBuilder::convertScalarType(
 }
 
 mlir::Type MLIRBuilder::convertMemRefType(
-    const mlir_edsl::MemRefTypeSpec &memrefSpec) const {
-  mlir::Type elementType = convertType(memrefSpec.element_type());
+    const mlir_edsl::ShapedTypeSpec &shapedSpec) const {
+  validateScalarElement(shapedSpec.element_type(), "array");
+  mlir::Type elementType = convertType(shapedSpec.element_type());
 
-  llvm::SmallVector<int64_t> shape(
-      memrefSpec.shape().begin(),
-      memrefSpec.shape().end()
-  );
+  llvm::SmallVector<int64_t> shape = buildShapeFromProto(shapedSpec.shape());
 
   // Dynamic dims are not supported: shapes are fully resolved on the Python
   // frontend before protobuf serialization, and the memref pipeline has no
   // support for dynamic dimensions at function boundaries.
-  for (auto d : shape) {
-    if (d == kProtoDynamicDim)
-      throw std::runtime_error("Dynamic memref dimensions not supported");
-  }
-
-  if (shape.empty() || shape.size() > 3) {
-    throw std::runtime_error("Only 1D, 2D, and 3D arrays supported, got " +
-                             std::to_string(shape.size()) + "D");
-  }
+  rejectDynamicDims(shape, "memref");
+  validateRank(shape, "array");
 
   return mlir::MemRefType::get(shape, elementType);
 }
 
 mlir::Type MLIRBuilder::convertTensorType(
-    const mlir_edsl::TensorTypeSpec &tensorSpec) const {
-  mlir::Type elementType = convertType(tensorSpec.element_type());
+    const mlir_edsl::ShapedTypeSpec &shapedSpec) const {
+  validateScalarElement(shapedSpec.element_type(), "tensor");
+  mlir::Type elementType = convertType(shapedSpec.element_type());
 
-  llvm::SmallVector<int64_t> shape(
-      tensorSpec.shape().begin(),
-      tensorSpec.shape().end()
-  );
+  llvm::SmallVector<int64_t> shape = buildShapeFromProto(shapedSpec.shape());
 
   // Dynamic dims are not supported: shapes are fully resolved on the Python
   // frontend before protobuf serialization, and the memref pipeline has no
   // support for dynamic dimensions at function boundaries.
-  for (auto d : shape) {
-    if (d == kProtoDynamicDim)
-      throw std::runtime_error("Dynamic tensor dimensions not supported");
-  }
-
-  if (shape.empty() || shape.size() > 3) {
-    throw std::runtime_error("Only 1D, 2D, and 3D tensors supported, got " +
-                             std::to_string(shape.size()) + "D");
-  }
+  rejectDynamicDims(shape, "tensor");
+  validateRank(shape, "tensor");
 
   return mlir::RankedTensorType::get(shape, elementType);
 }

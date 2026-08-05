@@ -201,12 +201,15 @@ MLIRCompiler::convertType(const mlir_edsl::TypeSpec &typeSpec) const {
   return builder->convertType(typeSpec);
 }
 
+// has_shaped() covers both memref and tensor kinds. If parameter/return
+// validity ever needs to differ between them, branch on type.shaped().kind()
+// here rather than assuming has_shaped() implies both are equally valid.
 bool MLIRCompiler::isValidParameterType(const mlir_edsl::TypeSpec &type) const {
-  return type.has_scalar() || type.has_memref() || type.has_tensor();
+  return type.has_scalar() || type.has_shaped();
 }
 
 bool MLIRCompiler::isValidReturnType(const mlir_edsl::TypeSpec &type) const {
-  return type.has_scalar() || type.has_memref() || type.has_tensor();
+  return type.has_scalar() || type.has_shaped();
 }
 
 // ==================== COMPILATION ====================
