@@ -288,8 +288,10 @@ class TestTensorProtobufSerialization:
 
         assert pb.HasField("tensor")
         assert pb.tensor.HasField("from_elements")
-        assert pb.tensor.from_elements.type.HasField("tensor")
-        assert list(pb.tensor.from_elements.type.tensor.shape) == [3]
+        assert pb.tensor.from_elements.type.HasField("shaped")
+        from mlir_edsl import ast_pb2
+        assert pb.tensor.from_elements.type.shaped.kind == ast_pb2.ShapedTypeSpec.TENSOR
+        assert list(pb.tensor.from_elements.type.shaped.shape) == [3]
         assert len(pb.tensor.from_elements.elements) == 3
 
     def test_tensor_extract_to_proto(self):
@@ -416,8 +418,8 @@ class TestTensorEmptyCreation:
 
         assert pb.HasField("tensor")
         assert pb.tensor.HasField("empty")
-        assert pb.tensor.empty.type.HasField("tensor")
-        assert list(pb.tensor.empty.type.tensor.shape) == [4]
+        assert pb.tensor.empty.type.HasField("shaped")
+        assert list(pb.tensor.empty.type.shaped.shape) == [4]
 
     def test_tensor_empty_2d_to_proto(self):
         """Test that 2D TensorEmpty serializes shape correctly"""
@@ -425,7 +427,7 @@ class TestTensorEmptyCreation:
         context = SerializationContext()
         pb = t.to_proto(context)
 
-        assert list(pb.tensor.empty.type.tensor.shape) == [2, 3]
+        assert list(pb.tensor.empty.type.shaped.shape) == [2, 3]
 
 
 # ==================== DYNAMIC TENSOR EMPTY ====================
@@ -492,7 +494,7 @@ class TestDynamicTensorEmpty:
 
         assert pb.HasField("tensor")
         assert pb.tensor.HasField("empty")
-        assert list(pb.tensor.empty.type.tensor.shape) == [-1]
+        assert list(pb.tensor.empty.type.shaped.shape) == [-1]
         assert len(pb.tensor.empty.dynamic_dims) == 1
 
     def test_dynamic_empty_mixed_to_proto(self):
@@ -502,7 +504,7 @@ class TestDynamicTensorEmpty:
         context = SerializationContext()
         pb = t.to_proto(context)
 
-        assert list(pb.tensor.empty.type.tensor.shape) == [-1, 3]
+        assert list(pb.tensor.empty.type.shaped.shape) == [-1, 3]
         assert len(pb.tensor.empty.dynamic_dims) == 1
 
     def test_static_empty_no_dynamic_dims(self):

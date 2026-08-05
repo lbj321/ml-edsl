@@ -234,8 +234,10 @@ class TestTensorInsertProtobuf:
         pb = insert.to_proto(context)
 
         assert pb.tensor.insert.HasField("result_type")
-        assert pb.tensor.insert.result_type.HasField("tensor")
-        assert list(pb.tensor.insert.result_type.tensor.shape) == [4]
+        assert pb.tensor.insert.result_type.HasField("shaped")
+        from mlir_edsl import ast_pb2
+        assert pb.tensor.insert.result_type.shaped.kind == ast_pb2.ShapedTypeSpec.TENSOR
+        assert list(pb.tensor.insert.result_type.shaped.shape) == [4]
 
 
 # ==================== END-TO-END EXECUTION ====================

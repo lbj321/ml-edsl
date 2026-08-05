@@ -315,42 +315,44 @@ class TestTensorTypeProtobuf:
     """Test protobuf serialization of TensorType"""
 
     def test_tensor_type_to_proto(self):
-        """Test TensorType serializes to protobuf with tensor field"""
+        """Test TensorType serializes to protobuf with shaped field, kind=TENSOR"""
+        from mlir_edsl import ast_pb2
+
         t_type = Tensor[f32, 4]
         proto = t_type.to_proto()
 
-        assert proto.HasField("tensor")
-        assert list(proto.tensor.shape) == [4]
-        assert proto.tensor.element_type.HasField("scalar")
+        assert proto.HasField("shaped")
+        assert proto.shaped.kind == ast_pb2.ShapedTypeSpec.TENSOR
+        assert list(proto.shaped.shape) == [4]
+        assert proto.shaped.element_type.HasField("scalar")
 
     def test_tensor_type_to_proto_2d(self):
         """Test 2D TensorType serializes shape correctly"""
         t_type = Tensor[i32, 2, 3]
         proto = t_type.to_proto()
 
-        assert proto.HasField("tensor")
-        assert list(proto.tensor.shape) == [2, 3]
+        assert proto.HasField("shaped")
+        assert list(proto.shaped.shape) == [2, 3]
 
     def test_tensor_type_to_proto_element_type(self):
         """Test tensor protobuf includes correct element type"""
         from mlir_edsl import ast_pb2
 
         t_f32 = Tensor[f32, 4]
-        assert t_f32.to_proto().tensor.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.F32
+        assert t_f32.to_proto().shaped.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.F32
 
         t_i32 = Tensor[i32, 4]
-        assert t_i32.to_proto().tensor.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.I32
+        assert t_i32.to_proto().shaped.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.I32
 
     def test_tensor_proto_differs_from_array_proto(self):
-        """Test that tensor and array serialize to different protobuf fields"""
+        """Test that tensor and array serialize with different ShapedTypeSpec.kind"""
+        from mlir_edsl import ast_pb2
+
         t_proto = Tensor[f32, 4].to_proto()
         a_proto = Array[f32, 4].to_proto()
 
-        assert t_proto.HasField("tensor")
-        assert not t_proto.HasField("memref")
-
-        assert a_proto.HasField("memref")
-        assert not a_proto.HasField("tensor")
+        assert t_proto.shaped.kind == ast_pb2.ShapedTypeSpec.TENSOR
+        assert a_proto.shaped.kind == ast_pb2.ShapedTypeSpec.MEMREF
 
 
 # ==================== DYNAMIC TENSOR TYPES ====================
@@ -473,15 +475,15 @@ class TestDynamicTensorProtobuf:
         t_type = Tensor[f32, DYN]
         proto = t_type.to_proto()
 
-        assert proto.HasField("tensor")
-        assert list(proto.tensor.shape) == [-1]
+        assert proto.HasField("shaped")
+        assert list(proto.shaped.shape) == [-1]
 
     def test_mixed_dynamic_type_to_proto(self):
         """Test mixed dynamic/static shape serializes correctly"""
         t_type = Tensor[i32, DYN, 3]
         proto = t_type.to_proto()
 
-        assert list(proto.tensor.shape) == [-1, 3]
+        assert list(proto.shaped.shape) == [-1, 3]
 
 
 class TestDynamicTensorValidation:

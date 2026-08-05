@@ -230,15 +230,16 @@ class TestArray3DProtobufSerialization:
 
         assert pb.HasField("array")
         assert pb.array.HasField("literal")
-        # Check shape is [2, 2, 2] (uses new TypeSpec with memref field)
-        assert pb.array.literal.type.HasField("memref")
-        assert len(pb.array.literal.type.memref.shape) == 3
-        assert pb.array.literal.type.memref.shape[0] == 2
-        assert pb.array.literal.type.memref.shape[1] == 2
-        assert pb.array.literal.type.memref.shape[2] == 2
-        # Element type is nested: type.memref.element_type.scalar.kind
+        # Check shape is [2, 2, 2] (uses new TypeSpec with shared shaped field)
+        assert pb.array.literal.type.HasField("shaped")
         from mlir_edsl import ast_pb2
-        assert pb.array.literal.type.memref.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.I32
+        assert pb.array.literal.type.shaped.kind == ast_pb2.ShapedTypeSpec.MEMREF
+        assert len(pb.array.literal.type.shaped.shape) == 3
+        assert pb.array.literal.type.shaped.shape[0] == 2
+        assert pb.array.literal.type.shaped.shape[1] == 2
+        assert pb.array.literal.type.shaped.shape[2] == 2
+        # Element type is nested: type.shaped.element_type.scalar.kind
+        assert pb.array.literal.type.shaped.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.I32
         # Check flattened elements
         assert len(pb.array.literal.elements) == 8
 
