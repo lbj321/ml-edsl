@@ -201,6 +201,11 @@ class ShapedType(Type):
         _mlir_prefix   - MLIR type string prefix ("memref"/"tensor")
         _hash_tag      - extra discriminator mixed into __hash__, or None
         _dyn_in_repr   - if True, DYN dims render as "DYN" in __repr__
+        _article       - indefinite article for _noun ("an"/"a"), used by AST
+                         node error messages (see mlir_edsl/ast/nodes/shaped.py)
+        _var_name      - example variable name for AST usage hints ("arr"/"t")
+        _store_verb    - verb used in AST store/insert error messages
+                         ("store"/"insert")
     """
 
     _noun = ""
@@ -208,6 +213,9 @@ class ShapedType(Type):
     _mlir_prefix = ""
     _hash_tag = None
     _dyn_in_repr = False
+    _article = ""
+    _var_name = ""
+    _store_verb = ""
 
     def __init__(self, shape, element_type: ScalarType):
         """Initialize shaped type.
@@ -347,6 +355,9 @@ class ArrayType(ShapedType):
     _noun = "Array"
     _kind = ast_pb2.ShapedTypeSpec.MEMREF
     _mlir_prefix = "memref"
+    _article = "an"
+    _var_name = "arr"
+    _store_verb = "store"
 
     def __call__(self, elements: list):
         """Enable Array[i32, 4]([1, 2, 3, 4]) construction syntax."""
@@ -374,6 +385,9 @@ class TensorType(ShapedType):
     _mlir_prefix = "tensor"
     _hash_tag = "tensor"
     _dyn_in_repr = True
+    _article = "a"
+    _var_name = "t"
+    _store_verb = "insert"
 
     def __call__(self, elements: list):
         """Enable Tensor[f32, 4]([1.0, 2.0, 3.0, 4.0]) construction syntax."""

@@ -42,7 +42,7 @@ class ArrayLiteral(Value):
 
     def _validate_size(self):
         """Ensure number of elements matches declared shape and flatten nested lists."""
-        self.elements = _validate_and_flatten(self.elements, self.array_type.shape, "Array")
+        self.elements = _validate_and_flatten(self.elements, self.array_type.shape, self.array_type._noun)
 
     def _validate_element_types(self):
         """Ensure all elements match the declared element type (strict!)"""
@@ -56,7 +56,7 @@ class ArrayLiteral(Value):
             # Infer element type
             elem_type = elem_node.infer_type()
 
-            _validate_element_type(elem_type, expected_type, "Array", "an", i)
+            _validate_element_type(elem_type, expected_type, self.array_type, i)
 
     def infer_type(self) -> Type:
         """ArrayLiteral returns its full ArrayType"""
@@ -96,13 +96,13 @@ class ArrayAccess(Value):
         """Validate array access is type-safe"""
         # Check that we're indexing an array
         array_type = self.array.infer_type()
-        _require_container_type(array_type, ArrayType, "Array")
+        _require_container_type(array_type, ArrayType)
 
         # Check that number of indices matches array dimensions
-        _validate_index_count(self.indices, array_type, "Array", "arr")
+        _validate_index_count(self.indices, array_type)
 
         # Check that all indices are i32
-        _validate_indices_are_int(self.indices, "Array")
+        _validate_indices_are_int(self.indices, array_type)
 
         # Store the array type for infer_type()
         self._array_type = array_type
@@ -153,16 +153,16 @@ class ArrayStore(Value):
             )
 
         # Check that number of indices matches array dimensions
-        _validate_index_count(self.indices, array_type, "Array", "arr", is_store=True)
+        _validate_index_count(self.indices, array_type, is_store=True)
 
         # Check that all indices are i32
-        _validate_indices_are_int(self.indices, "Array")
+        _validate_indices_are_int(self.indices, array_type)
 
         # Check value type matches array element type (STRICT!)
         expected_type = array_type.element_type
         actual_type = self.value.infer_type()
 
-        _validate_store_value_type(actual_type, expected_type, "Array", "store")
+        _validate_store_value_type(actual_type, expected_type, array_type)
 
         # Store array type for later
         self._array_type = array_type

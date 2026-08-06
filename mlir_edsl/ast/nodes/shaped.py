@@ -71,13 +71,18 @@ def _validate_and_flatten(elements, shape, path=""):
     return flat
 
 
-def _validate_index_count(indices, container_type, noun, var_name, is_store=False):
+def _validate_index_count(indices, container_type, is_store=False):
     """Ensure the number of indices matches the container's dimensionality.
+
+    `container_type` is the resolved ArrayType/TensorType instance; its
+    `_noun`/`_var_name` class attributes (set in mlir_edsl/types.py) drive
+    the message text instead of the caller repeating them as strings.
 
     Used by ArrayAccess/TensorExtract (is_store=False) and ArrayStore/
     TensorInsert (is_store=True, different usage-hint style).
     """
     if len(indices) != container_type.ndim:
+        noun, var_name = container_type._noun, container_type._var_name
         if is_store:
             usage = (
                 f"{var_name}.at[i].set(v) for 1D, {var_name}.at[i,j].set(v) for 2D"
@@ -93,8 +98,9 @@ def _validate_index_count(indices, container_type, noun, var_name, is_store=Fals
         )
 
 
-def _validate_indices_are_int(indices, noun):
+def _validate_indices_are_int(indices, container_type):
     """Ensure every index is an integer scalar. Used by all 4 index-taking classes."""
+    noun = container_type._noun
     for i, idx in enumerate(indices):
         idx_type = idx.infer_type()
         if not (isinstance(idx_type, ScalarType) and idx_type.is_integer()):
@@ -104,20 +110,25 @@ def _validate_indices_are_int(indices, noun):
             )
 
 
-def _require_container_type(value_type, container_cls, noun):
-    """Ensure a container value has the expected shaped type. Used by
-    ArrayAccess/TensorExtract only — ArrayStore/TensorInsert keep their own
-    inline check since those messages already diverged in wording."""
+def _require_container_type(value_type, container_cls):
+    """Ensure a container value has the expected shaped type. `container_cls`
+    is the ArrayType/TensorType class itself (not yet known to be the right
+    one — that's what we're checking), so its `_noun` is read as a class
+    attribute. Used by ArrayAccess/TensorExtract only — ArrayStore/
+    TensorInsert keep their own inline check since those messages already
+    diverged in wording."""
     if not isinstance(value_type, container_cls):
+        noun = container_cls._noun
         raise TypeError(
             f"Cannot index into non-{noun.lower()} type. "
             f"Expected {noun.lower()}, got {value_type}"
         )
 
 
-def _validate_element_type(elem_type, expected_type, noun, article, index):
+def _validate_element_type(elem_type, expected_type, container_type, index):
     """Ensure a literal element matches the container's element type. Used by
     ArrayLiteral/TensorFromElements per element."""
+    noun, article = container_type._noun, container_type._article
     if isinstance(elem_type, ShapedType):
         raise TypeError(
             f"{noun} element at index {index} cannot be {article} {noun.lower()}. "
@@ -133,11 +144,13 @@ def _validate_element_type(elem_type, expected_type, noun, article, index):
         )
 
 
-def _validate_store_value_type(actual_type, expected_type, noun, verb):
+def _validate_store_value_type(actual_type, expected_type, container_type):
     """Ensure a value being stored matches the container's element type. Used
-    by ArrayStore (verb="store") and TensorInsert (verb="insert" — its
-    existing message uses "insert", not "store"; tests assert on that exact
-    wording, so the verb stays parameterized rather than unified)."""
+    by ArrayStore/TensorInsert. `container_type._store_verb` picks "store"
+    vs "insert" — TensorInsert's existing message uses "insert", not
+    "store"; tests assert on that exact wording, so the verb stays
+    per-type rather than unified to one word."""
+    noun, verb = container_type._noun, container_type._store_verb
     if isinstance(actual_type, ShapedType):
         raise TypeError(
             f"Cannot {verb} {noun.lower()} into {noun.lower()} element. "

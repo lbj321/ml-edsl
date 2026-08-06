@@ -46,7 +46,7 @@ class TensorFromElements(Value):
 
     def _validate_size(self):
         """Ensure element count matches tensor shape."""
-        self.elements = _validate_and_flatten(self.elements, self.tensor_type.shape, "Tensor")
+        self.elements = _validate_and_flatten(self.elements, self.tensor_type.shape, self.tensor_type._noun)
 
     def _validate_element_types(self):
         """Ensure all elements match the declared element type (strict!)."""
@@ -59,7 +59,7 @@ class TensorFromElements(Value):
             # Infer element type
             elem_type = elem_node.infer_type()
 
-            _validate_element_type(elem_type, expected_type, "Tensor", "a", i)
+            _validate_element_type(elem_type, expected_type, self.tensor_type, i)
 
     def infer_type(self) -> Type:
         """TensorFromElements returns its full TensorType."""
@@ -104,13 +104,13 @@ class TensorExtract(Value):
     def _validate_types(self):
         """Validate tensor extract is type-safe."""
         tensor_type = self.tensor.infer_type()
-        _require_container_type(tensor_type, TensorType, "Tensor")
+        _require_container_type(tensor_type, TensorType)
 
         # Check that number of indices matches tensor dimensions
-        _validate_index_count(self.indices, tensor_type, "Tensor", "t")
+        _validate_index_count(self.indices, tensor_type)
 
         # Check that all indices are i32
-        _validate_indices_are_int(self.indices, "Tensor")
+        _validate_indices_are_int(self.indices, tensor_type)
 
         # Store the tensor type for infer_type()
         self._tensor_type = tensor_type
@@ -170,16 +170,16 @@ class TensorInsert(Value):
             )
 
         # Check that number of indices matches tensor dimensions
-        _validate_index_count(self.indices, tensor_type, "Tensor", "t", is_store=True)
+        _validate_index_count(self.indices, tensor_type, is_store=True)
 
         # Check that all indices are i32
-        _validate_indices_are_int(self.indices, "Tensor")
+        _validate_indices_are_int(self.indices, tensor_type)
 
         # Check value type matches tensor element type (STRICT!)
         expected_type = tensor_type.element_type
         actual_type = self.value.infer_type()
 
-        _validate_store_value_type(actual_type, expected_type, "Tensor", "insert")
+        _validate_store_value_type(actual_type, expected_type, tensor_type)
 
         # Store tensor type for infer_type()
         self._tensor_type = tensor_type
