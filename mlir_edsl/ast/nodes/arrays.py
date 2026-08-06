@@ -1,7 +1,7 @@
 """Array AST nodes: ArrayLiteral, ArrayAccess, ArrayStore, ArrayBinaryOp"""
 
 from ..base import Value
-from ...types import Type, ScalarType, ArrayType, i32, f32, i1
+from ...types import Type, ArrayType
 
 # Import generated protobuf code
 try:
@@ -10,64 +10,16 @@ except ImportError:
     ast_pb2 = None
 
 from ..serialization import SerializationContext, OP_NAMES
-
-
-def _normalize_indices(index):
-    """Convert single index or tuple to list of AST nodes"""
-    from .scalars import IndexConstant
-
-    if not isinstance(index, tuple):
-        indices = (index,)
-    else:
-        indices = index
-
-    result = []
-    for idx in indices:
-        if isinstance(idx, int):
-            result.append(IndexConstant(idx))
-        elif isinstance(idx, Value):
-            result.append(idx)
-        else:
-            raise TypeError(f"Array index must be int or Value, got {type(idx)}")
-    return result
-
-
-def _to_scalar_node(value):
-    """Convert Python literal to Constant node if needed"""
-    if isinstance(value, Value):
-        return value
-
-    from .scalars import Constant
-
-    if isinstance(value, bool):
-        return Constant(value, i1)
-    elif isinstance(value, int):
-        return Constant(value, i32)
-    elif isinstance(value, float):
-        return Constant(value, f32)
-    else:
-        raise TypeError(f"Invalid value: {value}")
-
-
-def _validate_and_flatten(elements, shape, path=""):
-    """Recursively validate nested list structure and flatten to row-major order.
-
-    Works for any number of dimensions (1D, 2D, 3D, ...).
-    """
-    if len(shape) == 0:
-        return [elements]
-
-    expected = shape[0]
-    if not isinstance(elements, list) or len(elements) != expected:
-        actual = len(elements) if isinstance(elements, list) else "non-list"
-        raise TypeError(
-            f"{path or 'Array'}: expected {expected} elements, got {actual}"
-        )
-
-    flat = []
-    for i, elem in enumerate(elements):
-        flat.extend(_validate_and_flatten(elem, shape[1:], f"{path}[{i}]"))
-    return flat
+from .shaped import (
+    _normalize_indices,
+    _to_scalar_node,
+    _validate_and_flatten,
+    _validate_index_count,
+    _validate_indices_are_int,
+    _require_container_type,
+    _validate_element_type,
+    _validate_store_value_type,
+)
 
 
 class ArrayLiteral(Value):
@@ -90,7 +42,7 @@ class ArrayLiteral(Value):
 
     def _validate_size(self):
         """Ensure number of elements matches declared shape and flatten nested lists."""
-        self.elements = _validate_and_flatten(self.elements, self.array_type.shape)
+        self.elements = _validate_and_flatten(self.elements, self.array_type.shape, "Array")
 
     def _validate_element_types(self):
         """Ensure all elements match the declared element type (strict!)"""
@@ -104,20 +56,7 @@ class ArrayLiteral(Value):
             # Infer element type
             elem_type = elem_node.infer_type()
 
-            # Strict type checking - must be scalar and match exactly
-            if isinstance(elem_type, ArrayType):
-                raise TypeError(
-                    f"Array element at index {i} cannot be an array. "
-                    f"Nested arrays not supported yet."
-                )
-
-            if elem_type != expected_type:
-                raise TypeError(
-                    f"Array element type mismatch at index {i}: "
-                    f"expected {expected_type}, "
-                    f"got {elem_type}. "
-                    f"Use cast() for explicit type conversion."
-                )
+            _validate_element_type(elem_type, expected_type, "Array", "an", i)
 
     def infer_type(self) -> Type:
         """ArrayLiteral returns its full ArrayType"""
@@ -157,28 +96,13 @@ class ArrayAccess(Value):
         """Validate array access is type-safe"""
         # Check that we're indexing an array
         array_type = self.array.infer_type()
-        if not isinstance(array_type, ArrayType):
-            raise TypeError(
-                f"Cannot index into non-array type. "
-                f"Expected array, got {array_type}"
-            )
+        _require_container_type(array_type, ArrayType, "Array")
 
         # Check that number of indices matches array dimensions
-        if len(self.indices) != array_type.ndim:
-            raise TypeError(
-                f"Array dimension mismatch: {array_type.ndim}D array requires "
-                f"{array_type.ndim} indices, got {len(self.indices)}. "
-                f"Usage: arr[i] for 1D, arr[i,j] for 2D, arr[i,j,k] for 3D"
-            )
+        _validate_index_count(self.indices, array_type, "Array", "arr")
 
         # Check that all indices are i32
-        for i, idx in enumerate(self.indices):
-            idx_type = idx.infer_type()
-            if not (isinstance(idx_type, ScalarType) and idx_type.is_integer()):
-                raise TypeError(
-                    f"Array index {i} must be i32, got {idx_type}. "
-                    f"Use cast() to convert to i32."
-                )
+        _validate_indices_are_int(self.indices, "Array")
 
         # Store the array type for infer_type()
         self._array_type = array_type
@@ -229,37 +153,16 @@ class ArrayStore(Value):
             )
 
         # Check that number of indices matches array dimensions
-        if len(self.indices) != array_type.ndim:
-            raise TypeError(
-                f"Array dimension mismatch: {array_type.ndim}D array requires "
-                f"{array_type.ndim} indices, got {len(self.indices)}. "
-                f"Usage: arr.at[i].set(v) for 1D, arr.at[i,j].set(v) for 2D"
-            )
+        _validate_index_count(self.indices, array_type, "Array", "arr", is_store=True)
 
         # Check that all indices are i32
-        for i, idx in enumerate(self.indices):
-            idx_type = idx.infer_type()
-            if not (isinstance(idx_type, ScalarType) and idx_type.is_integer()):
-                raise TypeError(
-                    f"Array index {i} must be i32, got {idx_type}"
-                )
+        _validate_indices_are_int(self.indices, "Array")
 
         # Check value type matches array element type (STRICT!)
         expected_type = array_type.element_type
         actual_type = self.value.infer_type()
 
-        if isinstance(actual_type, ArrayType):
-            raise TypeError(
-                f"Cannot store array into array element. "
-                f"Expected {expected_type}, got {actual_type}"
-            )
-
-        if actual_type != expected_type:
-            raise TypeError(
-                f"Cannot store {actual_type} into "
-                f"Array[..., {expected_type}]. "
-                f"Use cast() for explicit conversion."
-            )
+        _validate_store_value_type(actual_type, expected_type, "Array", "store")
 
         # Store array type for later
         self._array_type = array_type

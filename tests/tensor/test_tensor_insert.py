@@ -91,6 +91,15 @@ class TestTensorInsertTypeChecking:
         with pytest.raises(TypeError, match="Cannot insert i32 into.*f32"):
             TensorInsert(t, 1, 99)  # int into f32 tensor
 
+    def test_tensor_insert_rejects_tensor_in_element(self):
+        """Test that inserting a tensor into a tensor element fails (mirrors
+        ArrayStore's guard against storing an array into an array element)"""
+        t = Tensor[i32, 2]([1, 2])
+        inner = Tensor[i32, 2]([3, 4])
+
+        with pytest.raises(TypeError, match="Cannot insert tensor into tensor element"):
+            TensorInsert(t, 0, inner)
+
 
 # ==================== TENSOR INSERT TYPE INFERENCE ====================
 

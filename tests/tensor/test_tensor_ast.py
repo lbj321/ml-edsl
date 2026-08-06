@@ -97,6 +97,13 @@ class TestTensorFromElementsTypeChecking:
         with pytest.raises(TypeError, match="expected 2 elements, got 1"):
             Tensor[i32, 2, 2, 2]([[[1, 2], [3, 4]]])  # 1 matrix, expected 2
 
+    def test_tensor_nested_tensors_rejected(self):
+        """Test that nested tensors are rejected (mirrors ArrayLiteral's guard)"""
+        inner = Tensor[i32, 2]([1, 2])
+
+        with pytest.raises(TypeError, match="cannot be a tensor"):
+            TensorFromElements([inner, inner], Tensor[i32, 2])
+
 
 # ==================== TENSOR FROM ELEMENTS TYPE INFERENCE ====================
 
