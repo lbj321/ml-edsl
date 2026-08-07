@@ -349,12 +349,20 @@ void MLIRLowering::addBufferizationPasses(mlir::PassManager &pm,
       mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
   pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
 
+  // CSE unifies structurally-identical subviews that one-shot-bufferize just
+  // produced (e.g. one from linalg.matmul's outs operand, one from the
+  // tensor.insert_slice it lowers to memref.copy) so canonicalize can fold
+  // the resulting self-copy instead of leaving it as a redundant copy. Doing
+  // this now, before the ownership-based dealloc pass, keeps its buffer-alias
+  // analysis working over already-deduped IR.
+  pm.addPass(mlir::createCSEPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
   if (withOutParams)
     pm.addPass(mlir::bufferization::createBufferResultsToOutParamsPass());
 
   pm.addPass(
       mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
-  pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(
       mlir::bufferization::createBufferDeallocationSimplificationPass());
   pm.addPass(mlir::bufferization::createLowerDeallocationsPass());
