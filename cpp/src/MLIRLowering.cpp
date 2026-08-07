@@ -410,6 +410,15 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
+  // Tile linalg.generic ops (elementwise, bias, relu, etc.) to strips of 8
+  // along the innermost dimension before vectorization, also on tensor
+  // semantics (pre-bufferize) — same TilingInterface-based pass, no memref
+  // dependency. Without this, the vectorizer sees the full tensor as a
+  // single vector<NxNxf32>, causing LLVM O3 to hang on large shapes (e.g.
+  // 512x512) due to combinatorial explosion in its analysis passes.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgGenericTilingPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
   // function boundaries, matching the memref descriptors Python passes in.
@@ -423,14 +432,6 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   pm.addPass(mlir::createForallToParallelLoopPass());
   pm.addPass(mlir::createConvertSCFToOpenMPPass());
 
-  // Tile linalg.generic ops (elementwise, bias, relu, etc.) to strips of 8
-  // along the innermost dimension before vectorization. Without this, the
-  // vectorizer sees the full tensor as a single vector<NxNxf32>, causing LLVM
-  // O3 to hang on large shapes (e.g. 512x512) due to combinatorial explosion
-  // in its analysis passes.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgGenericTilingPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-  
   // Lower static 8x8 linalg.matmul tiles to vector.contract with standard
   // 2D indexing maps (m,k)x(k,n)->(m,n). Must run before LinalgVectorizationPass
   // which skips matmul — linalg::vectorize always produces a 3D double-broadcast
