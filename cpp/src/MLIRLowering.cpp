@@ -379,17 +379,21 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // Fuse adjacent elementwise linalg ops (e.g. bias_add + relu → one generic).
   pm.addPass(mlir::createLinalgElementwiseOpFusionPass());
 
+  // Outer 64×64 parallel tiling, run on tensor semantics (pre-bufferize).
+  // LinalgMatmulTilingPass tiles via the generic TilingInterface and has no
+  // memref dependency, so it tiles tensors identically to buffers. Doing this
+  // before bufferization is what lets a future producer-fusion pass (see
+  // LinalgOuterTileAndFusePass) slot in at this exact position and fuse
+  // fill/matmul/bias/relu into the forall via tileConsumerAndFuseProducersUsingSCF
+  // — fusion legality is straightforward on tensor SSA values but hard to prove
+  // once operands are aliasing memrefs.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulParallelTilingPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
   // function boundaries, matching the memref descriptors Python passes in.
   addBufferizationPasses(pm, /*withOutParams=*/false);
-
-  // Outer 64×64 parallel tiling for functions where the transform strategy
-  // didn't fire (no relu, or multi-layer). When the strategy did fire, the
-  // matmul is already a ≤64×64 tile so this produces a trivial 1×1 forall
-  // that the subsequent canonicalizer folds away.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulParallelTilingPass());
-  pm.addPass(mlir::createCanonicalizerPass());
 
   // scf.forall → scf.parallel → omp.parallel.
   // OMP conversion must happen HERE while the body only contains linalg ops;
