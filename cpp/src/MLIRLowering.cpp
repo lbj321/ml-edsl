@@ -50,6 +50,8 @@
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVMPass.h"
 #include "mlir/Conversion/VectorToSCF/VectorToSCF.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Affine/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
@@ -290,6 +292,7 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::scf::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::tensor::registerValueBoundsOpInterfaceExternalModels(registry);
+  mlir::affine::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::bufferization::func_ext::registerBufferizableOpInterfaceExternalModels(
       registry);
   // Required by ownership-based-buffer-deallocation when scf.if (or other
@@ -398,24 +401,28 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulParallelTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
+  // Inner 8x8 serial tiling, also run on tensor semantics (pre-bufferize) for
+  // the same reason as the outer tiling above. Nesting inside the outer
+  // forall's boundary tile (e.g. the 32-wide remainder on a 96x96 matmul)
+  // requires ValueBoundsOpInterface support for affine ops — see the
+  // affine::registerValueBoundsOpInterfaceExternalModels registration in
+  // registerRequiredDialects.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulTilingPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
   // function boundaries, matching the memref descriptors Python passes in.
   addBufferizationPasses(pm, /*withOutParams=*/false);
 
-  // scf.forall → scf.parallel → omp.parallel.
-  // OMP conversion must happen HERE while the body only contains linalg ops;
-  // once inner tiling and vectorization run, the body has scf.for + alloca_scope
-  // and scf-to-control-flow would try to expand them inside omp.loop_nest,
-  // violating its single-block region constraint.
+  // scf.forall → scf.parallel → omp.parallel. Body already contains scf.for
+  // from the inner tiling above (it now runs pre-bufferize, unlike before),
+  // and that no longer breaks the downstream scf-to-control-flow pass in
+  // addSharedFinalLLVMLoweringPasses — confirmed by the full test suite,
+  // including the 96x96 boundary-tile case in test_multicore.py.
   pm.addPass(mlir::createForallToParallelLoopPass());
   pm.addPass(mlir::createConvertSCFToOpenMPPass());
 
-  // Inner 8x8 serial tiles for vectorization (runs inside omp.loop_nest body)
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulTilingPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-
-  
   // Tile linalg.generic ops (elementwise, bias, relu, etc.) to strips of 8
   // along the innermost dimension before vectorization. Without this, the
   // vectorizer sees the full tensor as a single vector<NxNxf32>, causing LLVM

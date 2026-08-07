@@ -155,8 +155,10 @@ class TestLinalgMatmulTilingPass:
         // CHECK: scf.for
         """, after="linalg-tile-matmul")
 
-    def test_large_matmul_produces_subviews(self, check_lowered_ir):
-        """Tiled matmul slices all three operands into 8x8 subviews (M, N, K all tiled)."""
+    def test_large_matmul_produces_extract_slices(self, check_lowered_ir):
+        """Tiled matmul slices all three operands into 8x8 tensor slices (M, N, K all
+        tiled). Runs pre-bufferize (tensor semantics), so slices are
+        tensor.extract_slice, not memref.subview."""
         @ml_function
         def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
             return matmul(A, B)
@@ -164,9 +166,9 @@ class TestLinalgMatmulTilingPass:
         mm_fn(np.ones((16, 16), dtype=np.float32),
               np.ones((16, 16), dtype=np.float32))
         check_lowered_ir("""
-        // CHECK: memref.subview {{.*}} [8, 8] [1, 1]
-        // CHECK: memref.subview {{.*}} [8, 8] [1, 1]
-        // CHECK: memref.subview {{.*}} [8, 8] [1, 1]
+        // CHECK: tensor.extract_slice {{.*}} [8, 8] [1, 1]
+        // CHECK: tensor.extract_slice {{.*}} [8, 8] [1, 1]
+        // CHECK: tensor.extract_slice {{.*}} [8, 8] [1, 1]
         """, after="linalg-tile-matmul")
 
     def test_boundary_8x8_matmul_tiled(self, check_lowered_ir):
