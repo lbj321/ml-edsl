@@ -35,6 +35,7 @@
 #endif
 
 #include "mlir/IR/OwningOpRef.h"
+#include "llvm/Support/FileSystem.h"
 
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -100,7 +101,11 @@ public:
   using SnapshotList = std::vector<std::pair<std::string, std::string>>;
 
   explicit IRSnapshotInstrumentation(SnapshotList *snapshots)
-      : snapshots(snapshots) {}
+      : snapshots(snapshots), flushDir(std::getenv("FLUSH_IR") ? "ir_flush" : ""),
+        flushCounter(0) {
+    if (!flushDir.empty())
+      llvm::sys::fs::create_directories(flushDir);
+  }
 
   void runAfterPass(mlir::Pass *pass, mlir::Operation *op) override {
     // OpToOpPassAdaptor is an internal MLIR wrapper for nested passes.
@@ -116,10 +121,11 @@ public:
     while (root->getParentOp())
       root = root->getParentOp();
     root->print(os);
-    // Prefer human-readable pass argument name, fall back to class name
     std::string passName = pass->getArgument().str();
     if (passName.empty())
       passName = pass->getName().str();
+    if (!flushDir.empty())
+      flushToDisk(passName, ir);
     snapshots->emplace_back(std::move(passName), std::move(ir));
   }
 
@@ -133,11 +139,30 @@ public:
     std::string passName = pass->getArgument().str();
     if (passName.empty())
       passName = pass->getName().str();
+    if (!flushDir.empty())
+      flushToDisk("[FAILED] " + passName, ir);
     snapshots->emplace_back("[FAILED] " + passName, std::move(ir));
   }
 
 private:
   SnapshotList *snapshots;
+  std::string flushDir;
+  int flushCounter;
+
+  void flushToDisk(const std::string &passName, const std::string &ir) {
+    // Sanitize pass name for use as filename
+    std::string safe = passName;
+    for (char &c : safe)
+      if (c == '/' || c == ' ' || c == '[' || c == ']')
+        c = '_';
+    std::string idx = std::to_string(flushCounter++);
+    idx = std::string(3 - std::min<int>(3, idx.size()), '0') + idx;
+    std::string path = flushDir + "/" + idx + "_" + safe + ".mlir";
+    std::error_code ec;
+    llvm::raw_fd_ostream f(path, ec);
+    if (!ec)
+      f << ir;
+  }
 };
 
 
@@ -314,16 +339,16 @@ bool MLIRLowering::runPipeline(mlir::PassManager &pm, mlir::ModuleOp module) {
 void MLIRLowering::addBufferizationPasses(mlir::PassManager &pm,
                                           bool withOutParams,
                                           bool withDealloc) {
+  // Fold tensor.empty ops that only serve as destinations into direct writes
+  // on the destination buffer. Must run before one-shot-bufferize.
+  pm.addPass(mlir::bufferization::createEmptyTensorEliminationPass());
+
   mlir::bufferization::OneShotBufferizePassOptions bufOpts;
   bufOpts.bufferizeFunctionBoundaries = true;
   bufOpts.functionBoundaryTypeConversion =
       mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
   pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
 
-  // Convert memref-returning functions to void + out-param before the
-  // ownership-based deallocation pass runs. Running it first lets the dealloc
-  // pass see a void function with a plain memref.copy and handle ownership
-  // correctly. (CPU path only — GPU params are passed as cuLaunchKernel void**.)
   if (withOutParams)
     pm.addPass(mlir::bufferization::createBufferResultsToOutParamsPass());
 
@@ -357,7 +382,7 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
   // function boundaries, matching the memref descriptors Python passes in.
-  addBufferizationPasses(pm, /*withOutParams=*/true);
+  addBufferizationPasses(pm, /*withOutParams=*/false);
 
   // Outer 64×64 parallel tiling for functions where the transform strategy
   // didn't fire (no relu, or multi-layer). When the strategy did fire, the
@@ -378,12 +403,7 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Lower static 8x8 linalg.matmul tiles to vector.contract with standard
-  // 2D indexing maps (m,k)x(k,n)->(m,n). Must run before LinalgVectorizationPass
-  // which skips matmul — linalg::vectorize always produces a 3D double-broadcast
-  // form that the OuterProduct lowering cannot decompose into vector.fma.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulToContractPass());
-
+  
   // Tile linalg.generic ops (elementwise, bias, relu, etc.) to strips of 8
   // along the innermost dimension before vectorization. Without this, the
   // vectorizer sees the full tensor as a single vector<NxNxf32>, causing LLVM
@@ -391,6 +411,12 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // in its analysis passes.
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgGenericTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
+  
+  // Lower static 8x8 linalg.matmul tiles to vector.contract with standard
+  // 2D indexing maps (m,k)x(k,n)->(m,n). Must run before LinalgVectorizationPass
+  // which skips matmul — linalg::vectorize always produces a 3D double-broadcast
+  // form that the OuterProduct lowering cannot decompose into vector.fma.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulToContractPass());
 
   // Vectorize remaining linalg structured ops → vector dialect
   // (linalg.matmul is already handled by LinalgMatmulToContractPass above)
@@ -557,6 +583,15 @@ void MLIRLowering::analyzeKernelLaunches(mlir::ModuleOp module,
     kernel.blockY = extractConstIndex(block.y);
     kernel.blockZ = extractConstIndex(block.z);
 
+    // Convention: void-returning host functions use the last block arg as the
+    // caller-allocated output out-param. Scalar-returning functions have no
+    // out-param (UINT_MAX = sentinel for "no output arg").
+    auto hostFunc = launchOp->getParentOfType<mlir::func::FuncOp>();
+    const unsigned numHostArgs = hostFunc ? hostFunc.getNumArguments() : 0;
+    const bool hasOutParam =
+        hostFunc && hostFunc.getResultTypes().empty() && numHostArgs > 0;
+    const unsigned outParamArgIdx = hasOutParam ? (numHostArgs - 1) : UINT_MAX;
+
     for (mlir::Value arg : launchOp.getKernelOperands()) {
       mlir::Type ty = arg.getType();
       GPUKernelArg ka;
@@ -564,12 +599,18 @@ void MLIRLowering::analyzeKernelLaunches(mlir::ModuleOp module,
       if (auto memTy = mlir::dyn_cast<mlir::MemRefType>(ty)) {
         auto shape = std::vector<int64_t>(memTy.getShape().begin(),
                                           memTy.getShape().end());
-        if (mlir::isa<mlir::BlockArgument>(arg)) {
-          ka.kind     = GPUKernelArg::Kind::InputMemRef;
-          ka.paramIdx = mlir::cast<mlir::BlockArgument>(arg).getArgNumber();
-          ka.shape    = shape;
+        if (auto blockArg = mlir::dyn_cast<mlir::BlockArgument>(arg)) {
+          if (blockArg.getArgNumber() == outParamArgIdx) {
+            ka.kind  = GPUKernelArg::Kind::OutputMemRef;
+            ka.shape = shape;
+          } else {
+            ka.kind     = GPUKernelArg::Kind::InputMemRef;
+            ka.paramIdx = blockArg.getArgNumber();
+            ka.shape    = shape;
+          }
         } else {
-          // Defined by memref.alloc — this is the function's output buffer.
+          // Non-block-arg memref — not expected with the new IR pattern but
+          // kept for robustness.
           ka.kind  = GPUKernelArg::Kind::OutputMemRef;
           ka.shape = shape;
         }

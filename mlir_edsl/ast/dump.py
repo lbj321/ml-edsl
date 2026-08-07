@@ -43,7 +43,7 @@ def _label(value) -> str:
     if isinstance(value, Parameter):
         return f'param "{value.name}" : {t}'
     if isinstance(value, BinaryOp):
-        return f"{OP_NAMES.get(value.op, value.op)} : {t}"
+        return f"BinaryOp ({OP_NAMES.get(value.op, value.op)}) : {t}"
     if isinstance(value, CompareOp):
         return f"cmp.{PREDICATE_NAMES.get(value.predicate, value.predicate)} : {t}"
     if isinstance(value, CastOp):

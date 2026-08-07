@@ -26,7 +26,7 @@ class TestLinalgDotIR:
         """)
 
     def test_dot_result_is_scalar(self, check_ir):
-        """Pre-lowering IR: tensor inputs used directly, dot extracts scalar"""
+        """Pre-lowering IR: memref args wrapped with to_tensor restrict, dot extracts scalar."""
         @ml_function
         def dot_fn(a: Tensor[f32, 4], b: Tensor[f32, 4]) -> f32:
             return dot(a, b)
@@ -34,8 +34,8 @@ class TestLinalgDotIR:
         dot_fn(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32),
                np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32))
         check_ir("""
-        // CHECK: func.func @dot_fn_{{[0-9]+}}(%arg0: tensor<4xf32>, %arg1: tensor<4xf32>)
-        // CHECK-NOT: bufferization.to_tensor
+        // CHECK: func.func @dot_fn_{{[0-9]+}}(%arg0: memref<4xf32>, %arg1: memref<4xf32>) -> f32
+        // CHECK: bufferization.to_tensor
         // CHECK: tensor.empty
         // CHECK: linalg.fill
         // CHECK: linalg.dot
@@ -62,11 +62,11 @@ class TestLinalgMatmulIR:
 
 
 class TestEmittedIR:
-    """Verify the pre-lowering IR emitted by MLIRBuilder — tensor-returning
-    form with tensor.empty init, before any lowering passes run."""
+    """Verify the pre-lowering IR emitted by MLIRBuilder — memref args with
+    to_tensor restrict preamble, materialize_in_destination sink, void return."""
 
-    def test_matmul_emits_tensor_return(self, check_ir):
-        """Frontend emits tensor-returning function (no out-param yet)."""
+    def test_matmul_emits_memref_args_and_out_param(self, check_ir):
+        """Frontend emits memref args + to_tensor + materialize_in_destination (void return)."""
         @ml_function
         def mm(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
             return matmul(A, B)
@@ -74,29 +74,34 @@ class TestEmittedIR:
         mm(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
            np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32))
         check_ir("""
-        // CHECK: func.func @mm_{{[0-9]+}}(%arg0: tensor<2x2xf32>, %arg1: tensor<2x2xf32>) -> tensor<2x2xf32>
+        // CHECK: func.func @mm_{{[0-9]+}}(%arg0: memref<2x2xf32>, %arg1: memref<2x2xf32>, %arg2: memref<2x2xf32>)
+        // CHECK: bufferization.to_tensor %arg0 restrict
+        // CHECK: bufferization.to_tensor %arg1 restrict
         // CHECK: tensor.empty
         // CHECK: linalg.fill
         // CHECK: linalg.matmul
-        // CHECK: return {{.*}} : tensor<2x2xf32>
+        // CHECK: bufferization.materialize_in_destination {{.*}} in restrict writable %arg2
+        // CHECK: return
         """)
 
-    def test_map_emits_tensor_return(self, check_ir):
-        """Frontend emits tensor-returning function with tensor.empty init."""
+    def test_map_emits_memref_args_and_out_param(self, check_ir):
+        """Frontend emits memref args + to_tensor + materialize_in_destination for linalg.map."""
         @ml_function
         def scale(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return tensor_map(a, lambda x: x * 2.0)
 
         scale(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
         check_ir("""
-        // CHECK: func.func @scale_{{[0-9]+}}(%arg0: tensor<4xf32>) -> tensor<4xf32>
+        // CHECK: func.func @scale_{{[0-9]+}}(%arg0: memref<4xf32>, %arg1: memref<4xf32>)
+        // CHECK: bufferization.to_tensor %arg0 restrict
         // CHECK: tensor.empty
         // CHECK: linalg.map
-        // CHECK: return {{.*}} : tensor<4xf32>
+        // CHECK: bufferization.materialize_in_destination {{.*}} in restrict writable %arg1
+        // CHECK: return
         """)
 
-    def test_emitted_ir_has_no_out_param(self, check_ir):
-        """Frontend does not emit an out-param — that is added by TensorReturnToOutParamPass."""
+    def test_emitted_ir_has_materialize_in_destination(self, check_ir):
+        """Frontend emits materialize_in_destination — the out-param is explicit from the start."""
         @ml_function
         def mm(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
             return matmul(A, B)
@@ -104,18 +109,18 @@ class TestEmittedIR:
         mm(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
            np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32))
         check_ir("""
-        // CHECK: func.func @mm_{{[0-9]+}}(%arg0: tensor<2x2xf32>, %arg1: tensor<2x2xf32>) -> tensor<2x2xf32>
+        // CHECK: bufferization.materialize_in_destination
         // CHECK-NOT: bufferization.writable
-        // CHECK-NOT: bufferization.materialize_in_destination
         """)
 
 
 class TestDirectOutputBuffer:
-    """IR tests for array-returning ops writing directly into the Python-allocated
-    out-param — no intermediate alloca+copy."""
+    """IR tests verifying that aggregate-returning ops write directly into the
+    Python-allocated out-param — zero allocs, zero copies."""
 
-    def test_map_writes_into_out_param(self, check_lowered_ir):
-        """After buffer-results-to-out-params: void + out-param appended, memref.copy into it."""
+    def test_map_bufferizes_to_direct_write(self, check_lowered_ir):
+        """After one-shot-bufferize: linalg.map writes directly into the out-param — no alloc.
+        A trivial self-copy (memref.copy %arg1, %arg1) may appear and is removed by canonicalize."""
         @ml_function
         def scale(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
             return tensor_map(a, lambda x: x * 2.0)
@@ -124,12 +129,12 @@ class TestDirectOutputBuffer:
         check_lowered_ir("""
         // CHECK: func.func @scale_{{[0-9]+}}(%arg0: memref<4xf32>, %arg1: memref<4xf32>)
         // CHECK: linalg.map
-        // CHECK: memref.copy
+        // CHECK-NOT: memref.alloc
         // CHECK-NOT: tensor<
-        """, after="buffer-results-to-out-params")
+        """, after="one-shot-bufferize")
 
-    def test_matmul_writes_into_out_param(self, check_lowered_ir):
-        """After buffer-results-to-out-params: void + out-param appended, memref.copy into it."""
+    def test_matmul_bufferizes_to_direct_write(self, check_lowered_ir):
+        """After one-shot-bufferize: linalg.matmul writes directly into the out-param — no alloc, no copy."""
         @ml_function
         def mm(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
             return matmul(A, B)
@@ -140,39 +145,8 @@ class TestDirectOutputBuffer:
         // CHECK: func.func @mm_{{[0-9]+}}(%arg0: memref<2x2xf32>, %arg1: memref<2x2xf32>, %arg2: memref<2x2xf32>)
         // CHECK: linalg.fill
         // CHECK: linalg.matmul
-        // CHECK: memref.copy
+        // CHECK-NOT: memref.alloc
         // CHECK-NOT: tensor<
-        """, after="buffer-results-to-out-params")
-
-    def test_map_bufferizes_to_single_alloc(self, check_lowered_ir):
-        """After one-shot-bufferize: linalg.map writes into an alloc; out-param not yet added
-        (buffer-results-to-out-params runs next and appends it with a memref.copy)."""
-        @ml_function
-        def scale(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
-            return tensor_map(a, lambda x: x * 2.0)
-
-        scale(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: func.func @scale_{{[0-9]+}}(%arg0: memref<4xf32>) -> memref<4xf32>
-        // CHECK: memref.alloc
-        // CHECK: linalg.map
-        // CHECK-NOT: memref.copy
-        """, after="one-shot-bufferize")
-
-    def test_matmul_bufferizes_to_single_alloc(self, check_lowered_ir):
-        """After one-shot-bufferize: linalg.matmul writes into an alloc; out-param not yet added."""
-        @ml_function
-        def mm(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
-            return matmul(A, B)
-
-        mm(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
-           np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: func.func @mm_{{[0-9]+}}(%arg0: memref<2x2xf32>, %arg1: memref<2x2xf32>) -> memref<2x2xf32>
-        // CHECK: memref.alloc
-        // CHECK: linalg.fill
-        // CHECK: linalg.matmul
-        // CHECK-NOT: memref.copy
         """, after="one-shot-bufferize")
 
     def test_bias_relu_fused_and_no_copy(self, check_lowered_ir):
@@ -191,7 +165,6 @@ class TestDirectOutputBuffer:
         // CHECK: linalg.matmul
         // CHECK: linalg.generic
         // CHECK-NOT: linalg.generic
-        // CHECK-NOT: memref.copy
         // CHECK: return
         """, after="one-shot-bufferize")
 

@@ -354,13 +354,14 @@ class TestArrayProtobufSerialization:
         assert pb.HasField("array")
         assert pb.array.HasField("literal")
 
-        # Check array type spec (uses new TypeSpec with memref field)
-        assert pb.array.literal.type.HasField("memref")
-        assert len(pb.array.literal.type.memref.shape) == 1  # 1D array
-        assert pb.array.literal.type.memref.shape[0] == 3    # size is 3
-        # Element type is nested: type.memref.element_type.scalar.kind
+        # Check array type spec (uses new TypeSpec with shared shaped field)
+        assert pb.array.literal.type.HasField("shaped")
         from mlir_edsl import ast_pb2
-        assert pb.array.literal.type.memref.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.I32
+        assert pb.array.literal.type.shaped.kind == ast_pb2.ShapedTypeSpec.MEMREF
+        assert len(pb.array.literal.type.shaped.shape) == 1  # 1D array
+        assert pb.array.literal.type.shaped.shape[0] == 3    # size is 3
+        # Element type is nested: type.shaped.element_type.scalar.kind
+        assert pb.array.literal.type.shaped.element_type.scalar.kind == ast_pb2.ScalarTypeSpec.I32
 
         # Check elements
         assert len(pb.array.literal.elements) == 3

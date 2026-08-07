@@ -30,6 +30,10 @@ PYBIND11_MODULE(_mlir_backend, m) {
            "List all compiled function names")
       .def("get_module_ir", &mlir_edsl::MLIRCompiler::getModuleIR,
            "Get current MLIR module IR as string")
+      .def("get_unopt_llvm_ir", &mlir_edsl::MLIRCompiler::getUnoptLLVMIR,
+           "Unoptimized LLVM IR captured during last compilation (SAVE_IR only)")
+      .def("get_opt_llvm_ir", &mlir_edsl::MLIRCompiler::getOptLLVMIR,
+           "Optimized LLVM IR captured during last compilation (SAVE_IR only)")
       .def("clear", &mlir_edsl::MLIRCompiler::clear,
            "Reset to Building state, clear all compiled functions")
       .def("get_lowering_snapshots",

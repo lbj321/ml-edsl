@@ -48,6 +48,8 @@ class MLFunction:
 
     def __call__(self, *args, **kwargs) -> Union[int, float, bool, Value]:
         """JIT compile and execute the function - returns numeric result OR AST node"""
+        # True only when this function is called from inside another @ml_function's
+        # symbolic execution — i.e. one compiled function referencing another.
         if in_symbolic_context():
             ast_args = list(args) + list(kwargs.values())
             return CallOp(self.signature.name, ast_args, self.signature.return_type)
@@ -105,13 +107,7 @@ class MLFunction:
                     b._func_sources[specialized_sig.name] = src
 
         variant = self._compiled_variants[shape_key]
-        variant.signature.validate_runtime_args(args, kwargs)
-        ordered = variant.signature.order_args(args, kwargs)
-        from ..backend import get_backend
-        backend = get_backend()
-        if self._target == "gpu":
-            return backend.execute_gpu_function(variant.name, *ordered)
-        return backend.execute_function(variant.name, *ordered)
+        return variant.call(ordered)
 
 
 def ml_function(func: Callable = None, *, target: str = "cpu"):

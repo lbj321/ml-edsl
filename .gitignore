@@ -90,7 +90,7 @@ coverage.xml
 # IR output from tests
 ir_output/
 ir_html/
-ir_html/
+ir_flush/
 
 # AST output
 ast_output

@@ -340,17 +340,22 @@ struct LinalgGenericTilingPass
     mlir::func::FuncOp func = getOperation();
     mlir::IRRewriter rewriter(func->getContext());
 
-    llvm::SmallVector<mlir::linalg::GenericOp> generics;
-    func.walk([&](mlir::linalg::GenericOp op) { generics.push_back(op); });
+    llvm::SmallVector<mlir::linalg::LinalgOp> ops;
+    func.walk([&](mlir::linalg::LinalgOp op) {
+      if (mlir::isa<mlir::linalg::GenericOp, mlir::linalg::FillOp>(op))
+        ops.push_back(op);
+    });
 
-    for (mlir::linalg::GenericOp op : generics) {
+    for (mlir::linalg::LinalgOp op : ops) {
       unsigned rank = op.getNumLoops();
       if (rank == 0)
         continue;
 
-      // Tile only the innermost loop; leave all outer loops untiled.
-      llvm::SmallVector<int64_t> sizes(rank, 0);
-      sizes.back() = tileSize;
+      // Tile all loops to tileSize. Tiling only the innermost loop leaves
+      // outer dims untiled (e.g. 1024x8 for a 1024x1024 op), which the
+      // vectorizer promotes to vector<1024x8xf32> — large enough to overflow
+      // OMP worker thread stacks at sizes >= 512.
+      llvm::SmallVector<int64_t> sizes(rank, tileSize);
 
       llvm::SmallVector<mlir::OpFoldResult> tileSizes =
           mlir::getAsIndexOpFoldResult(op->getContext(), sizes);

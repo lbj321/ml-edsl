@@ -6,13 +6,14 @@ Usage:
     python3 benchmarks/bench_dense_layer.py
 """
 
+import time
 import timeit
 import numpy as np
 
 from mlir_edsl import ml_function, Tensor, f32, relu
 from mlir_edsl.backend import get_backend
 
-SIZES = [2, 4, 8, 16, 32, 64, 128, 256]
+SIZES = [2, 4, 8, 16, 32, 64, 128, 256, 512]
 WARMUP = 5
 
 
@@ -28,53 +29,66 @@ def repeats_for(N: int) -> int:
 
 
 def make_edsl_dense(N: int):
-    """Compile a fixed-size NxN dense layer function. Returns the callable."""
-    backend = get_backend()
-    backend.clear_module()
-    backend.set_optimization_level(3)
-
+    """Compile a fixed-size NxN dense layer function. Returns (callable, compile_time_seconds)."""
     @ml_function
     def dense_fn(X: Tensor[f32, N, N], W: Tensor[f32, N, N], b: Tensor[f32, N]) -> Tensor[f32, N, N]:
         return relu(X @ W + b)
 
-    # Trigger JIT compilation
     X = np.ones((N, N), dtype=np.float32)
     W = np.ones((N, N), dtype=np.float32)
     b = np.zeros(N, dtype=np.float32)
+    t0 = time.perf_counter()
     dense_fn(X, W, b)
+    return dense_fn, time.perf_counter() - t0
 
-    return dense_fn
-
-
-def benchmark_size(N: int):
-    rng = np.random.default_rng(42)
-    X = rng.random((N, N), dtype=np.float32)
-    W = rng.random((N, N), dtype=np.float32)
-    b = rng.random(N, dtype=np.float32)
-
-    edsl_fn = make_edsl_dense(N)
-
-    # Warmup
-    for _ in range(WARMUP):
-        edsl_fn(X, W, b)
-        np.maximum(X @ W + b, 0.0)
-
-    n = repeats_for(N)
-
-    edsl_time = timeit.timeit(lambda: edsl_fn(X, W, b), number=n) / n
-    numpy_time = timeit.timeit(lambda: np.maximum(X @ W + b, 0.0), number=n) / n
-
-    return edsl_time, numpy_time
 
 
 def main():
-    print(f"{'Size':>6}  {'EDSL (µs)':>12}  {'NumPy (µs)':>12}  {'Ratio':>8}")
-    print("-" * 46)
+    rng = np.random.default_rng(42)
+
+    # Phase 1: all NumPy timings before any EDSL execution.
+    # MLIRExecutor::initialize() loads libomp with RTLD_GLOBAL on the first
+    # EDSL call, which can interfere with OpenBLAS threading.
+    print("Phase 1: NumPy...")
+    inputs = {}
+    numpy_times = {}
 
     for N in SIZES:
-        edsl_t, numpy_t = benchmark_size(N)
-        ratio = edsl_t / numpy_t
-        print(f"{N:>4}x{N:<2}  {edsl_t * 1e6:>12.2f}  {numpy_t * 1e6:>12.2f}  {ratio:>7.2f}x")
+        X = rng.random((N, N), dtype=np.float32)
+        W = rng.random((N, N), dtype=np.float32)
+        b = rng.random(N, dtype=np.float32)
+        inputs[N] = (X, W, b)
+        n = repeats_for(N)
+
+        for _ in range(WARMUP):
+            np.maximum(X @ W + b, 0.0)
+
+        numpy_times[N] = timeit.timeit(lambda: np.maximum(X @ W + b, 0.0), number=n) / n
+        print(f"  numpy {N:>3}x{N}: {numpy_times[N] * 1e6:.2f} µs")
+
+    # Phase 2: EDSL benchmarks (triggers libomp RTLD_GLOBAL on first call).
+    backend = get_backend()
+    backend.set_optimization_level(3)
+    print("\nPhase 2: EDSL...")
+    edsl_times = {}
+    compile_times = {}
+
+    for N in SIZES:
+        X, W, b = inputs[N]
+        n = repeats_for(N)
+
+        edsl_fn, compile_times[N] = make_edsl_dense(N)
+        for _ in range(WARMUP):
+            edsl_fn(X, W, b)
+
+        edsl_times[N] = timeit.timeit(lambda: edsl_fn(X, W, b), number=n) / n
+        print(f"  edsl  {N:>3}x{N}: call={edsl_times[N] * 1e6:.2f} µs  compile={compile_times[N] * 1e3:.1f} ms")
+
+    print(f"\n{'Size':>6}  {'Call (µs)':>12}  {'NumPy (µs)':>12}  {'Ratio':>8}  {'Compile (ms)':>14}")
+    print("-" * 62)
+    for N in SIZES:
+        ratio = edsl_times[N] / numpy_times[N]
+        print(f"{N:>4}x{N:<2}  {edsl_times[N] * 1e6:>12.2f}  {numpy_times[N] * 1e6:>12.2f}  {ratio:>7.2f}x  {compile_times[N] * 1e3:>14.1f}")
 
 
 if __name__ == "__main__":

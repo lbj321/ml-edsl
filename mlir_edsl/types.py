@@ -186,23 +186,39 @@ PYTHON_TO_MLIR = {
 
 
 # ============================================================================
-# ARRAY TYPE (MemRef)
+# SHAPED TYPE (shared base for ArrayType/TensorType)
 # ============================================================================
 
-class ArrayType(Type):
-    """Fixed-size array type: memref<NxT> (1D), memref<MxNxT> (2D), memref<MxNxPxT> (3D)
+class ShapedType(Type):
+    """Shared base for shaped (memref/tensor) types.
 
-    Used for type hints in function signatures and array construction.
-
-    Examples:
-        def foo(arr: Array[i32, 10]) -> i32:  # 1D array parameter
-            ...
-
-        arr = Array[f32, 2, 3]([...])  # 2D array literal
+    Hoists everything ArrayType and TensorType have in common: shape
+    normalization/validation, the numeric/integer/float/boolean delegation
+    to element_type, serialization, and equality/hashing/repr. Subclasses
+    customize behavior purely via class attributes:
+        _noun          - display name for error messages ("Array"/"Tensor")
+        _kind          - ast_pb2.ShapedTypeSpec.MEMREF / .TENSOR
+        _mlir_prefix   - MLIR type string prefix ("memref"/"tensor")
+        _hash_tag      - extra discriminator mixed into __hash__, or None
+        _dyn_in_repr   - if True, DYN dims render as "DYN" in __repr__
+        _article       - indefinite article for _noun ("an"/"a"), used by AST
+                         node error messages (see mlir_edsl/ast/nodes/shaped.py)
+        _var_name      - example variable name for AST usage hints ("arr"/"t")
+        _store_verb    - verb used in AST store/insert error messages
+                         ("store"/"insert")
     """
 
+    _noun = ""
+    _kind = None
+    _mlir_prefix = ""
+    _hash_tag = None
+    _dyn_in_repr = False
+    _article = ""
+    _var_name = ""
+    _store_verb = ""
+
     def __init__(self, shape, element_type: ScalarType):
-        """Initialize array type.
+        """Initialize shaped type.
 
         Args:
             shape: int for 1D, tuple for 2D/3D
@@ -214,7 +230,7 @@ class ArrayType(Type):
         elif isinstance(shape, tuple):
             self.shape = tuple(shape)
         else:
-            raise TypeError(f"Array shape must be int or tuple, got {type(shape).__name__}")
+            raise TypeError(f"{self._noun} shape must be int or tuple, got {type(shape).__name__}")
 
         # Validate dimensions
         if not all(isinstance(d, int) and (d > 0 or d == DYN) for d in self.shape):
@@ -222,7 +238,7 @@ class ArrayType(Type):
 
         # Validate dimensionality (1D, 2D, 3D only)
         if len(self.shape) == 0 or len(self.shape) > 3:
-            raise TypeError(f"Only 1D, 2D, and 3D arrays supported, got {len(self.shape)}D")
+            raise TypeError(f"Only 1D, 2D, and 3D {self._noun.lower()}s supported, got {len(self.shape)}D")
 
         # Validate element type
         if not isinstance(element_type, ScalarType):
@@ -232,14 +248,14 @@ class ArrayType(Type):
 
     @property
     def size(self) -> int:
-        """For 1D arrays only: returns the size.
+        """For 1D shapes only: returns the size.
 
-        Raises AttributeError for multi-dimensional arrays.
+        Raises AttributeError for multi-dimensional shapes.
         """
         if len(self.shape) != 1:
             raise AttributeError(
-                f"'.size' only available for 1D arrays. "
-                f"This is a {len(self.shape)}D array with shape {self.shape}. "
+                f"'.size' only available for 1D {self._noun.lower()}s. "
+                f"This is a {len(self.shape)}D {self._noun.lower()} with shape {self.shape}. "
                 f"Use '.shape' instead."
             )
         return self.shape[0]
@@ -258,7 +274,7 @@ class ArrayType(Type):
     def total_elements(self) -> int:
         """Total number of elements (product of all dimensions)"""
         if self.is_dynamic:
-            raise ValueError("Cannot compute total_elements for dynamic array")
+            raise ValueError(f"Cannot compute total_elements for dynamic {self._noun.lower()}")
         result = 1
         for dim in self.shape:
             result *= dim
@@ -285,33 +301,63 @@ class ArrayType(Type):
         return self.element_type.is_boolean()
 
     def can_cast_to(self, target: Type) -> bool:
-        """Arrays cannot be cast"""
+        """Shaped types cannot be cast"""
         return False
 
     # Serialization
     def to_proto(self) -> ast_pb2.TypeSpec: # pyright: ignore[reportInvalidTypeForm]
         ts = ast_pb2.TypeSpec()
-        ts.memref.shape.extend(self.shape)
-        ts.memref.element_type.CopyFrom(self.element_type.to_proto())
+        ts.shaped.kind = self._kind
+        ts.shaped.shape.extend(self.shape)
+        ts.shaped.element_type.CopyFrom(self.element_type.to_proto())
         return ts
 
     def to_mlir_string(self) -> str:
-        """Convert to MLIR type string: memref<10xi32>, memref<2x3xf32>, etc."""
+        """Convert to MLIR type string: memref<10xi32>, tensor<4xf32>, etc."""
         dims = 'x'.join('?' if d == DYN else str(d) for d in self.shape)
-        return f"memref<{dims}x{self.element_type.name}>"
+        return f"{self._mlir_prefix}<{dims}x{self.element_type.name}>"
 
     # Equality and hashing
     def __eq__(self, other) -> bool:
-        if not isinstance(other, ArrayType):
+        if not isinstance(other, type(self)):
             return False
         return self.shape == other.shape and self.element_type == other.element_type
 
     def __hash__(self) -> int:
+        if self._hash_tag is not None:
+            return hash((self._hash_tag, self.shape, self.element_type))
         return hash((self.shape, self.element_type))
 
     def __repr__(self) -> str:
-        dims = ', '.join(str(d) for d in self.shape)
-        return f"Array[{self.element_type.name}, {dims}]"
+        if self._dyn_in_repr:
+            dims = ', '.join('DYN' if d == DYN else str(d) for d in self.shape)
+        else:
+            dims = ', '.join(str(d) for d in self.shape)
+        return f"{self._noun}[{self.element_type.name}, {dims}]"
+
+
+# ============================================================================
+# ARRAY TYPE (MemRef)
+# ============================================================================
+
+class ArrayType(ShapedType):
+    """Fixed-size array type: memref<NxT> (1D), memref<MxNxT> (2D), memref<MxNxPxT> (3D)
+
+    Used for type hints in function signatures and array construction.
+
+    Examples:
+        def foo(arr: Array[i32, 10]) -> i32:  # 1D array parameter
+            ...
+
+        arr = Array[f32, 2, 3]([...])  # 2D array literal
+    """
+
+    _noun = "Array"
+    _kind = ast_pb2.ShapedTypeSpec.MEMREF
+    _mlir_prefix = "memref"
+    _article = "an"
+    _var_name = "arr"
+    _store_verb = "store"
 
     def __call__(self, elements: list):
         """Enable Array[i32, 4]([1, 2, 3, 4]) construction syntax."""
@@ -323,7 +369,7 @@ class ArrayType(Type):
 # TENSOR TYPE (Value-semantic)
 # ============================================================================
 
-class TensorType(Type):
+class TensorType(ShapedType):
     """Value-semantic tensor type: tensor<NxT> (1D), tensor<MxNxT> (2D), tensor<MxNxPxT> (3D)
 
     Unlike ArrayType (memref), tensors are immutable. Operations produce
@@ -334,114 +380,14 @@ class TensorType(Type):
         val = t[2]  # Extract element
     """
 
-    def __init__(self, shape, element_type: ScalarType):
-        """Initialize tensor type.
-
-        Args:
-            shape: int for 1D, tuple for 2D/3D
-            element_type: ScalarType instance (i32, f32, i1)
-        """
-        # Normalize shape to tuple
-        if isinstance(shape, int):
-            self.shape = (shape,)
-        elif isinstance(shape, tuple):
-            self.shape = tuple(shape)
-        else:
-            raise TypeError(f"Tensor shape must be int or tuple, got {type(shape).__name__}")
-
-        # Validate dimensions
-        if not all(isinstance(d, int) and (d > 0 or d == DYN) for d in self.shape):
-            raise TypeError(f"All dimensions must be positive integers or DYN, got {self.shape}")
-
-        # Validate dimensionality (1D, 2D, 3D only)
-        if len(self.shape) == 0 or len(self.shape) > 3:
-            raise TypeError(f"Only 1D, 2D, and 3D tensors supported, got {len(self.shape)}D")
-
-        # Validate element type
-        if not isinstance(element_type, ScalarType):
-            raise TypeError(f"element_type must be ScalarType (i32, f32, i1), got {element_type}")
-
-        self.element_type = element_type
-
-    @property
-    def size(self) -> int:
-        """For 1D tensors only: returns the size."""
-        if len(self.shape) != 1:
-            raise AttributeError(
-                f"'.size' only available for 1D tensors. "
-                f"This is a {len(self.shape)}D tensor with shape {self.shape}. "
-                f"Use '.shape' instead."
-            )
-        return self.shape[0]
-
-    @property
-    def ndim(self) -> int:
-        """Number of dimensions (1, 2, or 3)."""
-        return len(self.shape)
-
-    @property
-    def is_dynamic(self) -> bool:
-        """True if any dimension is dynamic."""
-        return DYN in self.shape
-
-    @property
-    def total_elements(self) -> int:
-        """Total number of elements (product of all dimensions)."""
-        if self.is_dynamic:
-            raise ValueError("Cannot compute total_elements for dynamic tensor")
-        result = 1
-        for dim in self.shape:
-            result *= dim
-        return result
-
-    # Category predicates
-    def is_scalar(self) -> bool:
-        return False
-
-    def is_aggregate(self) -> bool:
-        return True
-
-    # Property predicates (delegate to element type)
-    def is_numeric(self) -> bool:
-        return self.element_type.is_numeric()
-
-    def is_integer(self) -> bool:
-        return self.element_type.is_integer()
-
-    def is_float(self) -> bool:
-        return self.element_type.is_float()
-
-    def is_boolean(self) -> bool:
-        return self.element_type.is_boolean()
-
-    def can_cast_to(self, target: Type) -> bool:
-        """Tensors cannot be cast."""
-        return False
-
-    # Serialization
-    def to_proto(self) -> ast_pb2.TypeSpec: # pyright: ignore[reportInvalidTypeForm]
-        ts = ast_pb2.TypeSpec()
-        ts.tensor.shape.extend(self.shape)
-        ts.tensor.element_type.CopyFrom(self.element_type.to_proto())
-        return ts
-
-    def to_mlir_string(self) -> str:
-        """Convert to MLIR type string: tensor<4xf32>, tensor<2x3xi32>, etc."""
-        dims = 'x'.join('?' if d == DYN else str(d) for d in self.shape)
-        return f"tensor<{dims}x{self.element_type.name}>"
-
-    # Equality and hashing
-    def __eq__(self, other) -> bool:
-        if not isinstance(other, TensorType):
-            return False
-        return self.shape == other.shape and self.element_type == other.element_type
-
-    def __hash__(self) -> int:
-        return hash(('tensor', self.shape, self.element_type))
-
-    def __repr__(self) -> str:
-        dims = ', '.join('DYN' if d == DYN else str(d) for d in self.shape)
-        return f"Tensor[{self.element_type.name}, {dims}]"
+    _noun = "Tensor"
+    _kind = ast_pb2.ShapedTypeSpec.TENSOR
+    _mlir_prefix = "tensor"
+    _hash_tag = "tensor"
+    _dyn_in_repr = True
+    _article = "a"
+    _var_name = "t"
+    _store_verb = "insert"
 
     def __call__(self, elements: list):
         """Enable Tensor[f32, 4]([1.0, 2.0, 3.0, 4.0]) construction syntax."""
@@ -450,30 +396,38 @@ class TensorType(Type):
 
 
 # ============================================================================
-# ARRAY SUBSCRIPT SYNTAX (Array[dtype, N] or Array[dtype, M, N])
+# SHAPED SUBSCRIPT SYNTAX (Array[dtype, N] / Tensor[dtype, N] / [dtype, M, N])
 # ============================================================================
 
-class ArrayMeta(type):
-    """Metaclass to enable Array[dtype, size] subscript syntax."""
+class _ShapedMeta(type):
+    """Shared metaclass for Array[...]/Tensor[...] subscript syntax.
+
+    Subclasses set _type_cls (ArrayType/TensorType), _noun ("Array"/"Tensor"),
+    and _example (the example shown in the parameter-count error message).
+    """
+
+    _type_cls = None
+    _noun = ""
+    _example = ""
 
     def __getitem__(cls, params):
-        """Handle Array[dtype, size] or Array[dtype, M, N] syntax.
+        """Handle Array[dtype, size] / Array[dtype, M, N] (and Tensor equivalents).
 
         Args:
             params: Tuple where first element is dtype, rest are dimensions
 
         Returns:
-            ArrayType instance
+            ArrayType or TensorType instance
         """
         if not isinstance(params, tuple):
             raise TypeError(
-                f"Array requires parameters: Array[dtype, size] or Array[dtype, M, N]. "
-                f"Example: Array[i32, 10]"
+                f"{cls._noun} requires parameters: {cls._noun}[dtype, size] or {cls._noun}[dtype, M, N]. "
+                f"Example: {cls._example}"
             )
 
         if len(params) < 2:
             raise TypeError(
-                f"Array requires at least 2 parameters (dtype + dimensions), got {len(params)}"
+                f"{cls._noun} requires at least 2 parameters (dtype + dimensions), got {len(params)}"
             )
 
         # First parameter is dtype, rest are dimensions
@@ -489,7 +443,7 @@ class ArrayMeta(type):
         # Validate dimensionality
         if len(dims) > 3:
             raise TypeError(
-                f"Only 1D, 2D, and 3D arrays supported, got {len(dims)}D"
+                f"Only 1D, 2D, and 3D {cls._noun.lower()}s supported, got {len(dims)}D"
             )
 
         # Validate dimensions are positive integers or DYN
@@ -497,11 +451,19 @@ class ArrayMeta(type):
             if not isinstance(dim, int) or (dim <= 0 and dim != DYN):
                 raise TypeError(f"Dimension {i} must be positive integer or DYN, got {dim!r}")
 
-        # Create ArrayType
+        # Create the shaped type
         if len(dims) == 1:
-            return ArrayType(dims[0], dtype)
+            return cls._type_cls(dims[0], dtype)
         else:
-            return ArrayType(dims, dtype)
+            return cls._type_cls(dims, dtype)
+
+
+class ArrayMeta(_ShapedMeta):
+    """Metaclass to enable Array[dtype, size] subscript syntax."""
+
+    _type_cls = ArrayType
+    _noun = "Array"
+    _example = "Array[i32, 10]"
 
 
 class Array(metaclass=ArrayMeta):
@@ -517,59 +479,12 @@ class Array(metaclass=ArrayMeta):
     pass
 
 
-# ============================================================================
-# TENSOR SUBSCRIPT SYNTAX (Tensor[dtype, N] or Tensor[dtype, M, N])
-# ============================================================================
-
-class TensorMeta(type):
+class TensorMeta(_ShapedMeta):
     """Metaclass to enable Tensor[dtype, size] subscript syntax."""
 
-    def __getitem__(cls, params):
-        """Handle Tensor[dtype, size] or Tensor[dtype, M, N] syntax.
-
-        Args:
-            params: Tuple where first element is dtype, rest are dimensions
-
-        Returns:
-            TensorType instance
-        """
-        if not isinstance(params, tuple):
-            raise TypeError(
-                f"Tensor requires parameters: Tensor[dtype, size] or Tensor[dtype, M, N]. "
-                f"Example: Tensor[f32, 4]"
-            )
-
-        if len(params) < 2:
-            raise TypeError(
-                f"Tensor requires at least 2 parameters (dtype + dimensions), got {len(params)}"
-            )
-
-        # First parameter is dtype, rest are dimensions
-        dtype = params[0]
-        dims = params[1:]
-
-        # Validate dtype
-        if not isinstance(dtype, ScalarType):
-            raise TypeError(
-                f"First parameter must be element type (i32, f32, i1), got {dtype!r}"
-            )
-
-        # Validate dimensionality
-        if len(dims) > 3:
-            raise TypeError(
-                f"Only 1D, 2D, and 3D tensors supported, got {len(dims)}D"
-            )
-
-        # Validate dimensions are positive integers or DYN
-        for i, dim in enumerate(dims):
-            if not isinstance(dim, int) or (dim <= 0 and dim != DYN):
-                raise TypeError(f"Dimension {i} must be positive integer or DYN, got {dim!r}")
-
-        # Create TensorType
-        if len(dims) == 1:
-            return TensorType(dims[0], dtype)
-        else:
-            return TensorType(dims, dtype)
+    _type_cls = TensorType
+    _noun = "Tensor"
+    _example = "Tensor[f32, 4]"
 
 
 class Tensor(metaclass=TensorMeta):

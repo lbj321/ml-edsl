@@ -21,8 +21,8 @@ public:
                 MLIRBuilder *parent, ArithBuilder *arithBuilder,
                 SCFBuilder *scfBuilder);
 
-  /// Build memref type from protobuf MemRefTypeSpec (new type system)
-  mlir::MemRefType buildMemRefType(const MemRefTypeSpec &spec);
+  /// Build memref type from protobuf ShapedTypeSpec (kind=MEMREF)
+  mlir::MemRefType buildMemRefType(const ShapedTypeSpec &spec);
 
   /// Build array literal: allocate + initialize
   mlir::Value buildArrayLiteral(const ArrayLiteral &arrayLit,

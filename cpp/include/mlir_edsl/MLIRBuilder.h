@@ -43,6 +43,8 @@ public:
 
   // ==================== PUBLIC UTILITIES (for dialect builders) ====================
   mlir::Type convertType(const mlir_edsl::TypeSpec &typeSpec) const;
+  mlir::Type convertMemRefType(const mlir_edsl::ShapedTypeSpec &shapedSpec) const;
+  mlir::Type convertTensorType(const mlir_edsl::ShapedTypeSpec &shapedSpec) const;
   mlir::Value buildIndexConstant(int64_t value);
   mlir::Value castToIndexType(mlir::Value value);
   void setValueCacheEntry(int64_t nodeId, mlir::Value value);
@@ -72,8 +74,6 @@ private:
 
   // Type conversion helpers
   mlir::Type convertScalarType(const mlir_edsl::ScalarTypeSpec &scalarSpec) const;
-  mlir::Type convertMemRefType(const mlir_edsl::MemRefTypeSpec &memrefSpec) const;
-  mlir::Type convertTensorType(const mlir_edsl::TensorTypeSpec &tensorSpec) const;
 
   // Type promotion helper
   std::pair<mlir::Value, mlir::Value>

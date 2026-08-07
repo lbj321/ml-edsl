@@ -12,7 +12,7 @@ class TestParameterFunctionality:
         """Test function with two integer parameters"""
         @ml_function
         def add_params(a: int, b: int) -> int:
-            return add(a, b)
+            return a + b
 
         # Test with first set of parameters
         result1 = add_params(2, 3)

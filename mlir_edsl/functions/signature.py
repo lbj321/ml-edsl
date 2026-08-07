@@ -52,6 +52,8 @@ class FunctionSignature:
 
     def order_args(self, args: tuple, kwargs: dict) -> List[Any]:
         """Convert args/kwargs to ordered list matching param_names."""
+        if not kwargs:
+            return list(args)
         combined = {}
         for i, val in enumerate(args):
             if i < len(self.param_names):
