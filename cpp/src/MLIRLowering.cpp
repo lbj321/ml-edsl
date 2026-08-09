@@ -84,7 +84,9 @@
 #include "mlir/Dialect/Linalg/TransformOps/DialectExtension.h"
 #include "mlir/Dialect/SCF/TransformOps/SCFTransformOps.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/Dialect/Vector/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Vector/Transforms/Passes.h"
+#include "mlir/Dialect/Vector/Transforms/SubsetOpInterfaceImpl.h"
 #include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassInstrumentation.h"
@@ -288,6 +290,8 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   mlir::tensor::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::scf::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::linalg::registerBufferizableOpInterfaceExternalModels(registry);
+  mlir::vector::registerBufferizableOpInterfaceExternalModels(registry);
+  mlir::vector::registerSubsetOpInterfaceExternalModels(registry);
   mlir::linalg::registerTilingInterfaceExternalModels(registry);
   mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::scf::registerValueBoundsOpInterfaceExternalModels(registry);
@@ -419,6 +423,19 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgGenericTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
+  // Lower static 8x8 linalg.matmul tiles to vector.contract with standard
+  // 2D indexing maps (m,k)x(k,n)->(m,n), on tensor semantics (pre-bufferize).
+  // Must run before LinalgVectorizationPass (which stays post-bufferize
+  // below) — linalg::vectorize always produces a 3D double-broadcast form
+  // that the OuterProduct lowering cannot decompose into vector.fma, so
+  // matmul must never reach it. Running this pass earlier still guarantees
+  // that ordering since it consumes/erases every linalg.matmul it touches.
+  // Bufferizing the vector.transfer_read/write this produces requires
+  // vector::registerBufferizableOpInterfaceExternalModels (see
+  // registerRequiredDialects).
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulToContractPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
   // function boundaries, matching the memref descriptors Python passes in.
@@ -431,12 +448,6 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // including the 96x96 boundary-tile case in test_multicore.py.
   pm.addPass(mlir::createForallToParallelLoopPass());
   pm.addPass(mlir::createConvertSCFToOpenMPPass());
-
-  // Lower static 8x8 linalg.matmul tiles to vector.contract with standard
-  // 2D indexing maps (m,k)x(k,n)->(m,n). Must run before LinalgVectorizationPass
-  // which skips matmul — linalg::vectorize always produces a 3D double-broadcast
-  // form that the OuterProduct lowering cannot decompose into vector.fma.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulToContractPass());
 
   // Vectorize remaining linalg structured ops → vector dialect
   // (linalg.matmul is already handled by LinalgMatmulToContractPass above)

@@ -100,6 +100,11 @@ struct LinalgOuterTileAndFusePass
 // linalg vectorizer which always produces a 3D double-broadcast form
 // {(d0,d1,d2),(d0,d1,d2),(d0,d1)} that the OuterProduct lowering strategy
 // cannot decompose into vector.outerproduct → vector.fma.
+//
+// Runs pre-bufferize (tensor semantics), so operands are tensor<8x8xf32>, not
+// memref. vector.transfer_write on a tensor is functional — it returns a new
+// tensor rather than mutating C in place — so the matmul's tensor result is
+// replaced with that value instead of being erased as a pure side effect.
 struct LinalgMatmulToContractPass
     : public mlir::PassWrapper<LinalgMatmulToContractPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
@@ -124,9 +129,9 @@ struct LinalgMatmulToContractPass
       mlir::Value B = matmul.getInputs()[1];
       mlir::Value C = matmul.getOutputs()[0];
 
-      auto aType = mlir::dyn_cast<mlir::MemRefType>(A.getType());
-      auto bType = mlir::dyn_cast<mlir::MemRefType>(B.getType());
-      auto cType = mlir::dyn_cast<mlir::MemRefType>(C.getType());
+      auto aType = mlir::dyn_cast<mlir::RankedTensorType>(A.getType());
+      auto bType = mlir::dyn_cast<mlir::RankedTensorType>(B.getType());
+      auto cType = mlir::dyn_cast<mlir::RankedTensorType>(C.getType());
       if (!aType || !bType || !cType)
         continue;
 
@@ -176,10 +181,10 @@ struct LinalgMatmulToContractPass
       mlir::Value result = rewriter.create<mlir::vector::ContractionOp>(
           loc, vA, vB, vC, indexingMaps, iterTypes);
 
-      rewriter.create<mlir::vector::TransferWriteOp>(
+      auto newC = rewriter.create<mlir::vector::TransferWriteOp>(
           loc, result, C, mlir::ValueRange{zero, zero}, inBounds);
 
-      rewriter.eraseOp(matmul);
+      rewriter.replaceOp(matmul, newC.getResult());
     }
   }
 };
