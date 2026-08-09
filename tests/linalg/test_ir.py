@@ -119,7 +119,8 @@ class TestDirectOutputBuffer:
     Python-allocated out-param — zero allocs, zero copies."""
 
     def test_map_bufferizes_to_direct_write(self, check_lowered_ir):
-        """After one-shot-bufferize: linalg.map writes directly into the out-param — no alloc.
+        """After one-shot-bufferize: linalg.map is vectorized (vectorization now runs
+        pre-bufferize) and writes directly into the out-param — no alloc.
         A trivial self-copy (memref.copy %arg1, %arg1) may appear and is removed by canonicalize."""
         @ml_function
         def scale(a: Tensor[f32, 4]) -> Tensor[f32, 4]:
@@ -128,13 +129,16 @@ class TestDirectOutputBuffer:
         scale(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
         check_lowered_ir("""
         // CHECK: func.func @scale_{{[0-9]+}}(%arg0: memref<4xf32>, %arg1: memref<4xf32>)
-        // CHECK: linalg.map
+        // CHECK-NOT: linalg.map
+        // CHECK: vector.transfer_write {{.*}}, %arg1
         // CHECK-NOT: memref.alloc
         // CHECK-NOT: tensor<
         """, after="one-shot-bufferize")
 
     def test_matmul_bufferizes_to_direct_write(self, check_lowered_ir):
-        """After one-shot-bufferize: linalg.matmul writes directly into the out-param — no alloc, no copy."""
+        """After one-shot-bufferize: linalg.matmul is vectorized into vector.contract
+        (vectorization now runs pre-bufferize) and writes directly into the out-param —
+        no alloc, no copy."""
         @ml_function
         def mm(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
             return matmul(A, B)
@@ -143,14 +147,17 @@ class TestDirectOutputBuffer:
            np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32))
         check_lowered_ir("""
         // CHECK: func.func @mm_{{[0-9]+}}(%arg0: memref<2x2xf32>, %arg1: memref<2x2xf32>, %arg2: memref<2x2xf32>)
-        // CHECK: linalg.fill
-        // CHECK: linalg.matmul
+        // CHECK-NOT: linalg.matmul
+        // CHECK: vector.contract
+        // CHECK: vector.transfer_write {{.*}}, %arg2
         // CHECK-NOT: memref.alloc
         // CHECK-NOT: tensor<
         """, after="one-shot-bufferize")
 
     def test_bias_relu_fused_and_no_copy(self, check_lowered_ir):
-        """bias+relu generics are fused into one linalg.generic that writes directly into out-param."""
+        """bias+relu is fused with the matmul and vectorized into straight-line vector/arith
+        ops (vectorization now runs pre-bufferize) — no linalg.generic survives, and the
+        result writes directly into the out-param."""
         @ml_function
         def dense_relu(W: Tensor[f32, 2, 4], x: Tensor[f32, 4, 3], b: Tensor[f32, 3]) -> Tensor[f32, 2, 3]:
             return relu(matmul(W, x) + b)
@@ -162,9 +169,12 @@ class TestDirectOutputBuffer:
 
         check_lowered_ir("""
         // CHECK: func.func @dense_relu
-        // CHECK: linalg.matmul
-        // CHECK: linalg.generic
         // CHECK-NOT: linalg.generic
+        // CHECK: vector.contract
+        // CHECK: arith.addf
+        // CHECK: arith.maximumf
+        // CHECK: vector.transfer_write {{.*}}, %arg3
+        // CHECK-NOT: memref.alloc
         // CHECK: return
         """, after="one-shot-bufferize")
 

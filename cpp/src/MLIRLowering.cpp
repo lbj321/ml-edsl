@@ -436,6 +436,18 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulToContractPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
+  // Vectorize remaining linalg structured ops → vector dialect, on tensor
+  // semantics (pre-bufferize). linalg::vectorize is dialect-agnostic
+  // upstream (the standard "vectorize before bufferize" pattern), so no
+  // rewrite was needed here, unlike LinalgMatmulToContractPass above.
+  // (linalg.matmul is already handled by LinalgMatmulToContractPass above,
+  // so this only ever sees generic/fill ops.)
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgVectorizationPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  // Fuse mulf + multi_reduction → vector.contract for better LLVM codegen
+  pm.addNestedPass<mlir::func::FuncOp>(createVectorCleanupPass());
+
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
   // function boundaries, matching the memref descriptors Python passes in.
@@ -448,14 +460,12 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // including the 96x96 boundary-tile case in test_multicore.py.
   pm.addPass(mlir::createForallToParallelLoopPass());
   pm.addPass(mlir::createConvertSCFToOpenMPPass());
-
-  // Vectorize remaining linalg structured ops → vector dialect
-  // (linalg.matmul is already handled by LinalgMatmulToContractPass above)
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgVectorizationPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-
-  // Fuse mulf + multi_reduction → vector.contract for better LLVM codegen
-  pm.addNestedPass<mlir::func::FuncOp>(createVectorCleanupPass());
+  // ConvertSCFToOpenMPPass always wraps the loop body in a memref.alloca_scope
+  // for stack-scoping, whether or not anything inside needs it. If nothing
+  // does (no memref.alloca), it must be inlined away here, before scf-to-cf:
+  // AllocaScopeOp requires a single-block body, and scf-to-cf introduces
+  // branches for any scf.for still inside it. See AllocaScopeCleanupPass.
+  pm.addNestedPass<mlir::func::FuncOp>(createAllocaScopeCleanupPass());
 
   // Lower vector.contract → vector.outerproduct on rank-1 slices.
   // Must happen before convert-vector-to-scf: if a rank-3 contract is still

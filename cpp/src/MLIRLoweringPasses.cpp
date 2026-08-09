@@ -5,6 +5,7 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/TilingInterfaceImpl.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -240,6 +241,35 @@ struct VectorCleanupPass
   }
 };
 
+// Inlines memref.alloca_scope ops whose body contains no memref.alloca —
+// i.e. scopes wrapped by ConvertSCFToOpenMPPass "just in case" that never
+// actually need stack scoping. Must run before scf-to-cf: AllocaScopeOp
+// requires a single-block body, and scf-to-cf introduces branches for any
+// scf.for still inside it. Deliberately narrow (only AllocaScopeOp's own
+// canonicalization patterns) instead of a blanket canonicalizer pass, so
+// this can't be silently defeated by unrelated pattern/pass changes
+// elsewhere in the pipeline — see addCPUPasses call site for the incident
+// that motivated this.
+struct AllocaScopeCleanupPass
+    : public mlir::PassWrapper<AllocaScopeCleanupPass,
+                                mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(AllocaScopeCleanupPass)
+  llvm::StringRef getArgument() const override {
+    return "alloca-scope-cleanup";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Inline memref.alloca_scope ops that contain no memref.alloca";
+  }
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::RewritePatternSet patterns(func->getContext());
+    mlir::memref::AllocaScopeOp::getCanonicalizationPatterns(
+        patterns, func->getContext());
+    if (mlir::failed(mlir::applyPatternsGreedily(func, std::move(patterns))))
+      signalPassFailure();
+  }
+};
+
 // Lowers vector.contract to vector.outerproduct on rank-1 vector slices.
 // Must run before convert-vector-to-scf so that the 3D transfer_reads
 // produced by linalg-vectorize are not expanded into broadcast+transpose+alloca
@@ -467,6 +497,9 @@ std::unique_ptr<mlir::Pass> createLinalgVectorizationPass() {
 }
 std::unique_ptr<mlir::Pass> createVectorCleanupPass() {
   return std::make_unique<VectorCleanupPass>();
+}
+std::unique_ptr<mlir::Pass> createAllocaScopeCleanupPass() {
+  return std::make_unique<AllocaScopeCleanupPass>();
 }
 std::unique_ptr<mlir::Pass> createVectorContractToOuterProductPass() {
   return std::make_unique<VectorContractToOuterProductPass>();
