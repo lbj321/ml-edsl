@@ -458,6 +458,13 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // vectorization entirely.
   pm.addNestedPass<mlir::func::FuncOp>(createVectorContractToOuterProductPass());
 
+  // Lower vector.multi_reduction (produced by linalg.reduce vectorization),
+  // on tensor semantics (pre-bufferize). Pure vector.*-to-vector.* rewrite —
+  // no tensor or memref operands involved — so, like the two passes above,
+  // bufferization state is irrelevant to it.
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::vector::createLowerVectorMultiReductionPass());
+
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
   // function boundaries, matching the memref descriptors Python passes in.
@@ -479,10 +486,6 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
 
   // Fallback: lower any remaining (un-vectorized) linalg ops to scf.for loops
   pm.addPass(mlir::createConvertLinalgToLoopsPass());
-
-  // Lower vector.multi_reduction (produced by linalg.reduce vectorization)
-  pm.addNestedPass<mlir::func::FuncOp>(
-      mlir::vector::createLowerVectorMultiReductionPass());
 
   // Lower complex vector.transfer_read/write (permutation maps, broadcasts)
   // to scalar SCF loops before LLVM conversion
