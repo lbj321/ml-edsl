@@ -448,6 +448,16 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // Fuse mulf + multi_reduction → vector.contract for better LLVM codegen
   pm.addNestedPass<mlir::func::FuncOp>(createVectorCleanupPass());
 
+  // Lower vector.contract → vector.outerproduct on rank-1 slices, on tensor
+  // semantics (pre-bufferize). Pure vector.*-to-vector.* rewrite — no tensor
+  // or memref operands involved (vector.contract/outerproduct/fma only ever
+  // touch vector<> values fed by vector.transfer_read/write), so bufferization
+  // state is irrelevant to it. Must happen before convert-vector-to-scf: if a
+  // rank-3 contract is still present at that pass, it expands the 3D
+  // transfer_reads into broadcast+transpose+alloca loops, defeating
+  // vectorization entirely.
+  pm.addNestedPass<mlir::func::FuncOp>(createVectorContractToOuterProductPass());
+
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
   // function boundaries, matching the memref descriptors Python passes in.
@@ -466,12 +476,6 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // AllocaScopeOp requires a single-block body, and scf-to-cf introduces
   // branches for any scf.for still inside it. See AllocaScopeCleanupPass.
   pm.addNestedPass<mlir::func::FuncOp>(createAllocaScopeCleanupPass());
-
-  // Lower vector.contract → vector.outerproduct on rank-1 slices.
-  // Must happen before convert-vector-to-scf: if a rank-3 contract is still
-  // present at that pass, it expands the 3D transfer_reads into
-  // broadcast+transpose+alloca loops, defeating vectorization entirely.
-  pm.addNestedPass<mlir::func::FuncOp>(createVectorContractToOuterProductPass());
 
   // Fallback: lower any remaining (un-vectorized) linalg ops to scf.for loops
   pm.addPass(mlir::createConvertLinalgToLoopsPass());

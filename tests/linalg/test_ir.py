@@ -136,9 +136,11 @@ class TestDirectOutputBuffer:
         """, after="one-shot-bufferize")
 
     def test_matmul_bufferizes_to_direct_write(self, check_lowered_ir):
-        """After one-shot-bufferize: linalg.matmul is vectorized into vector.contract
-        (vectorization now runs pre-bufferize) and writes directly into the out-param —
-        no alloc, no copy."""
+        """After one-shot-bufferize: linalg.matmul is fully vectorized — vectorization
+        and vector.contract → outerproduct lowering both now run pre-bufferize, so
+        vector.contract is consumed before this checkpoint too (this 2x2 shape isn't
+        8x8-aligned, so it decomposes to scalar extract/mulf/reduction/insert rather
+        than vector.fma) — and writes directly into the out-param, no alloc, no copy."""
         @ml_function
         def mm(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
             return matmul(A, B)
@@ -148,15 +150,16 @@ class TestDirectOutputBuffer:
         check_lowered_ir("""
         // CHECK: func.func @mm_{{[0-9]+}}(%arg0: memref<2x2xf32>, %arg1: memref<2x2xf32>, %arg2: memref<2x2xf32>)
         // CHECK-NOT: linalg.matmul
-        // CHECK: vector.contract
+        // CHECK-NOT: vector.contract
         // CHECK: vector.transfer_write {{.*}}, %arg2
         // CHECK-NOT: memref.alloc
         // CHECK-NOT: tensor<
         """, after="one-shot-bufferize")
 
     def test_bias_relu_fused_and_no_copy(self, check_lowered_ir):
-        """bias+relu is fused with the matmul and vectorized into straight-line vector/arith
-        ops (vectorization now runs pre-bufferize) — no linalg.generic survives, and the
+        """bias+relu is fused with the matmul and fully vectorized into straight-line
+        vector/arith ops (vectorization and contract-to-outerproduct lowering both now
+        run pre-bufferize) — no linalg.generic or vector.contract survives, and the
         result writes directly into the out-param."""
         @ml_function
         def dense_relu(W: Tensor[f32, 2, 4], x: Tensor[f32, 4, 3], b: Tensor[f32, 3]) -> Tensor[f32, 2, 3]:
@@ -170,7 +173,7 @@ class TestDirectOutputBuffer:
         check_lowered_ir("""
         // CHECK: func.func @dense_relu
         // CHECK-NOT: linalg.generic
-        // CHECK: vector.contract
+        // CHECK-NOT: vector.contract
         // CHECK: arith.addf
         // CHECK: arith.maximumf
         // CHECK: vector.transfer_write {{.*}}, %arg3
