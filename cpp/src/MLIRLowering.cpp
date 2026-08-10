@@ -547,12 +547,23 @@ void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &pm) {
   // Fuse adjacent elementwise linalg ops (bias_add + relu → one generic).
   pm.addPass(mlir::createLinalgElementwiseOpFusionPass());
 
+  // Tile matmul into 32x32 scf.forall blocks for GPU block mapping, on tensor
+  // semantics (pre-bufferize) — same TilingInterface-based pass (and same
+  // no-memref-dependency reasoning) as the CPU outer 64x64 tiling. Doing this
+  // before bufferization is what would let a future producer-fusion pass (see
+  // kGPUTileAndFuseStrategy above) fuse fill/matmul/bias/relu into the forall
+  // — fusion legality is straightforward on tensor SSA values but hard to
+  // prove once operands are aliasing memrefs.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgGPUMatmulTilingPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
   addBufferizationPasses(pm, /*withOutParams=*/false, /*withDealloc=*/false);
 
-  // Tile matmul into 32x32 scf.forall blocks for GPU block mapping.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgGPUMatmulTilingPass());
   // Convert scf.forall (tile loops, with GPU mapping) → scf.parallel so
-  // gpu-map-parallel-loops can annotate them for blockIdx mapping.
+  // gpu-map-parallel-loops can annotate them for blockIdx mapping. Must stay
+  // post-bufferize: scf.parallel has no results (side-effecting only), so it
+  // can't represent the tensor-SSA form scf.forall has pre-bufferize — same
+  // hard gate as the CPU forall-to-parallel/convert-scf-to-openmp passes.
   pm.addPass(mlir::createForallToParallelLoopPass());
 
   pm.addPass(mlir::createConvertLinalgToParallelLoopsPass());
