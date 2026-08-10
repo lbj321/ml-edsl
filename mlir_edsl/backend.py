@@ -34,32 +34,51 @@ _global_backend = None
 
 
 
+# MLIR lowers a rank-N memref to individual flat LLVM scalar args, in this
+# fixed order: alloc_ptr, aligned_ptr, offset, size_0..size_{N-1}, stride_0..
+# stride_{N-1}. Every descriptor built in this module must follow this exact
+# layout — defined once here so the ABI shape only needs to change in one
+# place if it ever does.
+_MEMREF_DESCRIPTOR_PREFIX_C_TYPES = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
+
+
+def _memref_descriptor_c_types(ndim: int) -> list:
+    """ctypes types for a rank-`ndim` MLIR memref descriptor's flat scalar args."""
+    return _MEMREF_DESCRIPTOR_PREFIX_C_TYPES + [ctypes.c_int64] * (2 * ndim)
+
+
+def _memref_descriptor_tail(shape, strides) -> list:
+    """The [sizes..., strides...] portion of a descriptor's c_vals — i.e.
+    everything after the [alloc_ptr, aligned_ptr, offset] prefix."""
+    return list(shape) + list(strides)
+
+
+def _memref_descriptor_c_vals(ptr, tail: list, offset: int = 0) -> list:
+    """Full c_vals for a memref descriptor: [alloc_ptr, aligned_ptr, offset]
+    followed by `tail` (sizes + strides, see _memref_descriptor_tail)."""
+    return [ptr, ptr, offset] + tail
+
+
+def _row_major_strides(shape: tuple) -> list:
+    """Row-major strides: shape (2,3,4) -> strides (12, 4, 1)."""
+    ndim = len(shape)
+    strides = [1] * ndim
+    for i in range(ndim - 2, -1, -1):
+        strides[i] = strides[i + 1] * shape[i + 1]
+    return strides
+
+
 def _build_c_types_for_type(t: "Type") -> list:
     """Return the flat ctypes list for a single parameter or return type.
 
     Scalar → [c_int32 | c_float | c_bool]
-    Aggregate (ndim N) → [c_void_p, c_void_p, c_int64] + [c_int64]*N + [c_int64]*N
+    Aggregate → memref descriptor c_types, see _memref_descriptor_c_types.
     """
     if isinstance(t, ScalarType):
         return [TYPE_TO_CTYPES[t.kind]]
     if t.is_aggregate():
-        ndim = len(t.shape)
-        return (
-            [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
-            + [ctypes.c_int64] * ndim
-            + [ctypes.c_int64] * ndim
-        )
+        return _memref_descriptor_c_types(len(t.shape))
     raise RuntimeError(f"_build_c_types_for_type: unsupported type {t}")
-
-
-def _build_flat_args_for_param(val, t: "Type") -> tuple:
-    """Return (c_vals_list, live_buf_or_None) for a single param at call time."""
-    if isinstance(t, ScalarType):
-        return [val], None
-    if t.is_aggregate():
-        _c_types, c_vals, buf = _make_memref_descriptor(val, t)
-        return c_vals, buf
-    raise RuntimeError(f"_build_flat_args_for_param: unsupported type {t}")
 
 
 def _make_output_descriptor(array_type) -> tuple:
@@ -70,29 +89,59 @@ def _make_output_descriptor(array_type) -> tuple:
     the ctypes call.
     """
     shape = array_type.shape
-    ndim = len(shape)
-
-    # Row-major strides: shape (2,3,4) → strides (12, 4, 1)
-    strides = [1] * ndim
-    for i in range(ndim - 2, -1, -1):
-        strides[i] = strides[i + 1] * shape[i + 1]
+    strides = _row_major_strides(shape)
 
     dtype = SCALAR_TYPE_TO_NUMPY_DTYPE[array_type.element_type.kind]
     buf = np.empty(shape, dtype=dtype)
     ptr = buf.ctypes.data_as(ctypes.c_void_p)
 
-    c_types = (
-        [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
-        + [ctypes.c_int64] * ndim
-        + [ctypes.c_int64] * ndim
-    )
     assert not any(d == -1 for d in shape), (
         f"Internal error: DYN return type reached output descriptor for {array_type}. "
         "Abstract evaluation should have resolved concrete shapes before compilation."
     )
-    c_vals = [ptr, ptr, 0] + list(shape) + strides
+    c_types = _memref_descriptor_c_types(len(shape))
+    tail = _memref_descriptor_tail(shape, strides)
+    c_vals = _memref_descriptor_c_vals(ptr, tail)
 
     return c_types, c_vals, buf
+
+
+def _precompute_layout(array_type) -> tuple:
+    """Precompute the shape/dtype/descriptor-tail for a shape-specialized
+    compiled variant. Shape and strides are compile-time constants once a
+    function has been specialized to concrete argument shapes, so this only
+    needs to run once per CompiledFunction rather than on every call."""
+    shape = tuple(array_type.shape)
+    strides = _row_major_strides(shape)
+    dtype = SCALAR_TYPE_TO_NUMPY_DTYPE[array_type.element_type.kind]
+    tail = _memref_descriptor_tail(shape, strides)
+    return shape, dtype, tail
+
+
+def _build_flat_args_for_param_fast(val, layout) -> tuple:
+    """Hot-path version of _build_flat_args_for_param using a precomputed
+    layout (shape, dtype, tail) from _precompute_layout. layout is None for
+    scalar parameters."""
+    if layout is None:
+        return [val], None
+    shape, dtype, tail = layout
+    if val.dtype != dtype:
+        raise TypeError(
+            f"ndarray dtype {val.dtype} does not match expected {dtype}"
+        )
+    if not val.flags['C_CONTIGUOUS']:
+        val = np.ascontiguousarray(val)
+    ptr = val.ctypes.data_as(ctypes.c_void_p)
+    return _memref_descriptor_c_vals(ptr, tail), val
+
+
+def _make_output_descriptor_fast(layout) -> tuple:
+    """Hot-path version of _make_output_descriptor using a precomputed
+    layout (shape, dtype, tail) from _precompute_layout."""
+    shape, dtype, tail = layout
+    buf = np.empty(shape, dtype=dtype)
+    ptr = buf.ctypes.data_as(ctypes.c_void_p)
+    return _memref_descriptor_c_vals(ptr, tail), buf
 
 
 def _make_memref_descriptor(data, array_type) -> tuple:
@@ -105,7 +154,6 @@ def _make_memref_descriptor(data, array_type) -> tuple:
     The buffer must be kept alive by the caller until after the ctypes call.
     """
     shape = array_type.shape
-    ndim = len(shape)
 
     expected_dtype = SCALAR_TYPE_TO_NUMPY_DTYPE[array_type.element_type.kind]
     if data.dtype != expected_dtype:
@@ -118,14 +166,11 @@ def _make_memref_descriptor(data, array_type) -> tuple:
     ptr = data.ctypes.data_as(ctypes.c_void_p)
     strides = [s // data.itemsize for s in data.strides]
 
-    c_types = (
-        [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
-        + [ctypes.c_int64] * ndim
-        + [ctypes.c_int64] * ndim
-    )
+    c_types = _memref_descriptor_c_types(len(shape))
     # Use data.shape for size fields — array_type.shape contains -1 for DYN
     # dimensions, but MLIR needs the actual runtime sizes in the descriptor.
-    c_vals = [ptr, ptr, 0] + list(data.shape) + strides
+    tail = _memref_descriptor_tail(data.shape, strides)
+    c_vals = _memref_descriptor_c_vals(ptr, tail)
 
     return c_types, c_vals, data
 

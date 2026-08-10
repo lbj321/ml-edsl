@@ -7,8 +7,9 @@ from ..ast import Value
 from ..backend import (
     get_backend,
     _build_c_types_for_type,
-    _build_flat_args_for_param,
-    _make_output_descriptor,
+    _build_flat_args_for_param_fast,
+    _make_output_descriptor_fast,
+    _precompute_layout,
     TYPE_TO_CTYPES,
 )
 from ..types import ScalarType
@@ -65,6 +66,16 @@ class CompiledFunction:
             self._cfunc = None
             self._ret_is_aggregate = None
 
+        # Shape/strides/dtype are compile-time constants for a shape-specialized
+        # variant — precompute once instead of rebuilding them on every call.
+        self._param_layouts = [
+            None if isinstance(pt, ScalarType) else _precompute_layout(pt)
+            for pt in self._param_types
+        ]
+        self._out_layout = (
+            _precompute_layout(signature.return_type) if self._ret_is_aggregate else None
+        )
+
     def call(self, ordered_args: list) -> Union[int, float, bool]:
         """Hot path: build flat_args only, invoke cached cfunc."""
         if self._target == "gpu":
@@ -73,16 +84,14 @@ class CompiledFunction:
         flat_args = []
         live_buffers = []
 
-        for pt, val in zip(self._param_types, ordered_args):
-            c_vals, buf = _build_flat_args_for_param(val, pt)
+        for layout, val in zip(self._param_layouts, ordered_args):
+            c_vals, buf = _build_flat_args_for_param_fast(val, layout)
             flat_args.extend(c_vals)
             if buf is not None:
                 live_buffers.append(buf)
 
         if self._ret_is_aggregate:
-            _out_c_types, out_c_vals, out_buf = _make_output_descriptor(
-                self.signature.return_type
-            )
+            out_c_vals, out_buf = _make_output_descriptor_fast(self._out_layout)
             flat_args.extend(out_c_vals)
             live_buffers.append(out_buf)
             self._cfunc(*flat_args)
