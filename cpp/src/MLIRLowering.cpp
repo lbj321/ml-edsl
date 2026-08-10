@@ -324,6 +324,18 @@ void MLIRLowering::attachInstrumentation(mlir::PassManager &pm) {
 
 bool MLIRLowering::runPipeline(mlir::PassManager &pm, mlir::ModuleOp module) {
   pm.enableVerifier(true);
+  // IRSnapshotInstrumentation (attached below whenever snapshotsEnabled) mutates
+  // a plain std::vector from PassInstrumentation callbacks, which the pass
+  // manager invokes from worker threads whenever it runs nested per-FuncOp
+  // passes (pm.addNestedPass<FuncOp>, used throughout this pipeline) on a
+  // module with more than one function concurrently. Multithreading must be
+  // off whenever that instrumentation is attached, or those callbacks race on
+  // the unsynchronized vector — silent heap corruption, surfacing later as an
+  // unrelated-looking segfault (e.g. auto-invalidate compiling a second
+  // function into the same module after a DYN shape change).
+  if (snapshotsEnabled) {
+    pm.getContext()->disableMultithreading();
+  }
   if (std::getenv("TRACE_PASSES")) {
     pm.getContext()->disableMultithreading();
     pm.enableIRPrinting(
