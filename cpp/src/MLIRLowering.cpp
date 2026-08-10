@@ -311,16 +311,6 @@ bool MLIRLowering::runPipeline(mlir::PassManager &pm, mlir::ModuleOp module) {
   if (snapshotsEnabled) {
     pm.getContext()->disableMultithreading();
   }
-  if (std::getenv("TRACE_PASSES")) {
-    pm.getContext()->disableMultithreading();
-    pm.enableIRPrinting(
-        /*shouldPrintBeforePass=*/[](mlir::Pass *,
-                                     mlir::Operation *) { return true; },
-        /*shouldPrintAfterPass=*/nullptr,
-        /*printModuleScope=*/true,
-        /*printAfterOnlyOnChange=*/false,
-        /*printAfterOnlyOnFailure=*/false, llvm::errs());
-  }
   if (mlir::succeeded(pm.run(module)))
     return true;
   llvm::raw_string_ostream os(failureIR_);
