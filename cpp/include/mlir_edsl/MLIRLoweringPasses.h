@@ -14,7 +14,8 @@ namespace mlir_edsl {
 std::unique_ptr<mlir::Pass> createTransformStrategyPass(
     mlir::MLIRContext *ctx, llvm::StringRef strategy,
     llvm::StringRef guardLibraryCall = "");
-std::unique_ptr<mlir::Pass> createLinalgOuterTileAndFusePass();
+std::unique_ptr<mlir::Pass> createLinalgOuterTileAndFusePass(
+    int64_t tileM = 64, int64_t tileN = 64);
 std::unique_ptr<mlir::Pass> createLinalgMatmulToContractPass();
 std::unique_ptr<mlir::Pass> createLinalgVectorizationPass();
 std::unique_ptr<mlir::Pass> createVectorCleanupPass();

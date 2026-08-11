@@ -149,8 +149,9 @@ class TestGPUMatmulTiled:
 class TestGPUDenseLayerTiled:
     """Correctness tests for matmul + bias + relu on GPU.
 
-    These tests run against the current 3-kernel path (fill + matmul + bias+relu)
-    and serve as the regression baseline for the upcoming tile-and-fuse optimization.
+    These tests exercise the fused single-kernel path: fill/matmul/bias_add/relu
+    are tiled and fused into one gpu.func (block 32x32, one thread per output
+    element), instead of separate kernels per op.
     """
 
     def test_dense_relu_32x32(self, gpu_backend):

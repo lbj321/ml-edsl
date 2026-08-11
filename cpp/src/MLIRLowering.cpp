@@ -67,6 +67,7 @@
 #include "mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Linalg/Transforms/TilingInterfaceImpl.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/MemRef/Transforms/AllocationOpInterfaceImpl.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -190,6 +191,9 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   mlir::arith::registerBufferDeallocationOpInterfaceExternalModels(registry);
   mlir::scf::registerBufferDeallocationOpInterfaceExternalModels(registry);
   mlir::cf::registerBufferDeallocationOpInterfaceExternalModels(registry);
+  // Required by PromoteBuffersToStackPass (GPU epilogue fusion pipeline) to
+  // query whether a memref.alloc can be replaced with memref.alloca.
+  mlir::memref::registerAllocationOpInterfaceExternalModels(registry);
 
   context->appendDialectRegistry(registry);
 
@@ -442,16 +446,27 @@ void MLIRLowering::registerGPUDialects(mlir::MLIRContext *ctx) {
 // Phase 1: fuse + bufferize + linalg→parallel→gpu + kernel outlining.
 // After this runs, gpu.launch_func ops are present and can be analyzed.
 void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &pm) {
-  // Fuse adjacent elementwise linalg ops (bias_add + relu → one generic).
-  pm.addPass(mlir::createLinalgElementwiseOpFusionPass());
+  // Two-level epilogue fusion (tensor semantics, pre-bufferize): tile the
+  // relu (found by its "relu" library_call attribute) to a 32x32 block-level
+  // scf.forall and fuse bias_add/matmul/fill producers into it, then tile
+  // the resulting nested relu again to a 1x1 thread-level scf.forall and
+  // fuse the block-level ops into that. Reuses the CPU epilogue fusion pass
+  // unchanged (it already finds ops purely by library_call, with no
+  // CPU/GPU-specific assumptions) — tiling clones op attributes, so the
+  // library_call survives onto the nested relu that the second call finds.
+  // No-ops cleanly (existing guard) when there's no relu, e.g. a bare
+  // matmul or a bias-only epilogue, falling through to the fallback below.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgOuterTileAndFusePass(32, 32));
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgOuterTileAndFusePass(1, 1));
+  pm.addPass(mlir::createCanonicalizerPass());
 
-  // Tile matmul into 32x32 scf.forall blocks for GPU block mapping, on tensor
-  // semantics (pre-bufferize) — same TilingInterface-based pass (and same
-  // no-memref-dependency reasoning) as the CPU outer 64x64 tiling. Doing this
-  // before bufferization is what would let a future producer-fusion pass
-  // fuse fill/matmul/bias/relu into the forall — fusion legality is
-  // straightforward on tensor SSA values but hard to prove once operands
-  // are aliasing memrefs.
+  // Fallback: tile any matmul the fusion above didn't reach (bare matmul, or
+  // an epilogue without relu) into 32x32 scf.forall blocks for GPU block
+  // mapping, on tensor semantics (pre-bufferize) — same TilingInterface-based
+  // pass (and same no-memref-dependency reasoning) as the CPU outer 64x64
+  // tiling. Matmuls already nested inside the fused forall(s) above are
+  // skipped by this pass's existing guard, so this never double-tiles.
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgGPUMatmulTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
@@ -472,6 +487,20 @@ void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &pm) {
   // this now, before the ownership-based dealloc pass, keeps its buffer-alias
   // analysis working over already-deduped IR.
   pm.addPass(mlir::createCSEPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  // Promote small per-tile scratch allocations (the fill/bias_add
+  // intermediate results inside the fused thread tile, e.g. a 1x1xf32 alloc
+  // per thread) from heap memref.alloc to stack memref.alloca. This is
+  // mandatory for GPU, not just an optimization: memref.alloc lowers to
+  // llvm.call @malloc, and a malloc call left inside gpu.module has no
+  // resolvable symbol on the device — it assembles to PTX "successfully"
+  // but the kernel is broken. alloca lowers to ordinary local/register
+  // storage instead, which the NVPTX backend handles fine. The default
+  // size threshold (1024 bytes) leaves the actual output buffer, which
+  // isn't a per-tile scratch alloc, on the heap as before.
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::bufferization::createPromoteBuffersToStackPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
   pm.addPass(

@@ -115,8 +115,9 @@ class TestGPUMatmulBenchmark:
 class TestGPUDenseLayerBenchmark:
     """GPU benchmark for matmul + bias + relu (dense layer).
 
-    Exercises the full 3-kernel path: fill + matmul + bias+relu.
-    Sizes match TestGPUMatmulBenchmark so timings can be compared directly.
+    Exercises the fused single-kernel path: fill/matmul/bias_add/relu tiled
+    and fused into one gpu.func. Sizes match TestGPUMatmulBenchmark so
+    timings can be compared directly.
     """
 
     def test_dense_256x256(self, gpu_backend):

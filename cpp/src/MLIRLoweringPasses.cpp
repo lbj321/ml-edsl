@@ -500,8 +500,9 @@ std::unique_ptr<mlir::Pass> createTransformStrategyPass(mlir::MLIRContext *ctx,
   return std::make_unique<TransformStrategyPass>(std::move(strategyMod),
                                                  guardLibraryCall);
 }
-std::unique_ptr<mlir::Pass> createLinalgOuterTileAndFusePass() {
-  return std::make_unique<LinalgOuterTileAndFusePass>(64, 64);
+std::unique_ptr<mlir::Pass> createLinalgOuterTileAndFusePass(int64_t tileM,
+                                                              int64_t tileN) {
+  return std::make_unique<LinalgOuterTileAndFusePass>(tileM, tileN);
 }
 std::unique_ptr<mlir::Pass> createLinalgMatmulToContractPass() {
   return std::make_unique<LinalgMatmulToContractPass>();
