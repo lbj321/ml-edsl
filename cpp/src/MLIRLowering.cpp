@@ -368,17 +368,20 @@ void MLIRLowering::addSharedFinalLLVMLoweringPasses(mlir::PassManager &pm) {
 }
 
 void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
-  // Fuse adjacent elementwise linalg ops (e.g. bias_add + relu → one generic).
-  pm.addPass(mlir::createLinalgElementwiseOpFusionPass());
+  // Outer 64×64 tile-and-fuse epilogue fusion, run on tensor semantics
+  // (pre-bufferize). LinalgOuterTileAndFusePass tiles the relu generic (when
+  // present) via the TilingInterface and fuses bias_add/matmul/fill into the
+  // resulting scf.forall via tileConsumerAndFuseProducersUsingSCF — fusion
+  // legality is straightforward on tensor SSA values but hard to prove once
+  // operands are aliasing memrefs, hence doing this before bufferization.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgOuterTileAndFusePass());
+  pm.addPass(mlir::createCanonicalizerPass());
 
-  // Outer 64×64 parallel tiling, run on tensor semantics (pre-bufferize).
-  // LinalgMatmulTilingPass tiles via the generic TilingInterface and has no
-  // memref dependency, so it tiles tensors identically to buffers. Doing this
-  // before bufferization is what lets a future producer-fusion pass (see
-  // LinalgOuterTileAndFusePass) slot in at this exact position and fuse
-  // fill/matmul/bias/relu into the forall via tileConsumerAndFuseProducersUsingSCF
-  // — fusion legality is straightforward on tensor SSA values but hard to prove
-  // once operands are aliasing memrefs.
+  // Outer 64×64 parallel tiling for any matmul not already covered by the
+  // fusion above (e.g. a bare matmul with no relu epilogue). Matmuls already
+  // nested inside the scf.forall the fusion pass produced are skipped — see
+  // the guard in LinalgMatmulTilingPass — so this never double-tiles a
+  // fused matmul.
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulParallelTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 

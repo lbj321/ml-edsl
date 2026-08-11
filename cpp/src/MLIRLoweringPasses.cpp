@@ -24,12 +24,15 @@
 
 namespace {
 
-// Tiles the outermost elementwise linalg.generic (the bias+relu epilogue
-// produced by --linalg-fuse-elementwise-ops) and greedily fuses its linalg
-// producers (matmul, fill) upward into the generated scf.forall loops.
+// Tiles the relu linalg.generic (found via its "relu" library_call attribute,
+// see LinalgBuilder.cpp) and greedily fuses its linalg producers (bias_add,
+// matmul, fill) upward into the generated scf.forall loops. tileConsumerAnd-
+// FuseProducersUsingSCF walks the use-def chain transitively, so this pulls
+// in the whole bias_add → matmul → fill chain in one call without needing
+// them pre-merged into a single generic.
 //
 // Running in tensor land (before bufferization) enables epilogue fusion:
-// fill → matmul → bias+relu all execute on the same [tileM×tileN] tile,
+// fill → matmul → bias_add → relu all execute on the same [tileM×tileN] tile,
 // keeping the matmul output in L2 cache instead of writing it to DRAM first.
 //
 // After this pass the body of the scf.forall contains:
@@ -57,12 +60,12 @@ struct LinalgOuterTileAndFusePass
     mlir::func::FuncOp func = getOperation();
     mlir::IRRewriter rewriter(func->getContext());
 
-    // Find the merged bias+relu generic: its first ins operand is a matmul
-    // result (guaranteed by --linalg-fuse-elementwise-ops running first).
+    // Find the relu generic by its library_call attribute (set in
+    // LinalgBuilder.cpp). Producer fusion below walks backward from here.
     mlir::linalg::GenericOp consumer;
     func.walk([&](mlir::linalg::GenericOp op) {
-      if (!op.getInputs().empty() &&
-          op.getInputs()[0].getDefiningOp<mlir::linalg::MatmulOp>())
+      auto libCall = op->getAttrOfType<mlir::StringAttr>("library_call");
+      if (libCall && libCall.getValue() == "relu")
         consumer = op;
     });
     if (!consumer)
@@ -329,7 +332,18 @@ struct LinalgMatmulTilingPass
     mlir::IRRewriter rewriter(func->getContext());
 
     llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
-    func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
+    func.walk([&](mlir::linalg::MatmulOp op) {
+      // In the ForallOp (outer parallel) configuration, skip matmuls already
+      // nested inside an scf.forall: those were placed and correctly sized
+      // (tileM x tileN, full K) by LinalgOuterTileAndFusePass's producer
+      // fusion, and retiling them here would double-tile a already-tiled op.
+      // The ForOp (inner K-tiling) configuration deliberately runs on such
+      // nested matmuls, so this guard only applies to the ForallOp case.
+      if (loopType == LoopType::ForallOp &&
+          op->getParentOfType<mlir::scf::ForallOp>())
+        return;
+      matmuls.push_back(op);
+    });
 
     for (mlir::linalg::MatmulOp op : matmuls) {
       // Named variable required — setTileSizes captures a non-owning ArrayRef.
