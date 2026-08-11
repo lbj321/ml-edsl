@@ -18,7 +18,6 @@
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/GPU/Transforms/Passes.h"
-#include "mlir/Dialect/GPU/TransformOps/GPUTransformOps.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
@@ -79,10 +78,6 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tensor/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
-#include "mlir/Dialect/Transform/IR/TransformDialect.h"
-#include "mlir/Dialect/Transform/Transforms/Passes.h"
-#include "mlir/Dialect/Linalg/TransformOps/DialectExtension.h"
-#include "mlir/Dialect/SCF/TransformOps/SCFTransformOps.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Vector/Transforms/Passes.h"
@@ -147,89 +142,6 @@ private:
 
 } // anonymous namespace
 
-namespace {
-
-// Two-level GPU tile-and-fuse strategy (tensor land, pre-bufferize):
-//
-//   Level 1 — block: tile relu [32×32] → one scf.forall per thread block,
-//             fuse bias_add → matmul → fill into that forall.
-//   Level 2 — thread: tile the block-level relu [1×1] → one scf.forall per
-//             output element (= one thread), fuse block-level ops inward.
-//
-// After bufferize + scf-forall-to-parallel on both levels:
-//   scf.parallel [4,4]   → blockIdx   (grid 4×4 for 128×128 output)
-//   scf.parallel [32,32] → threadIdx  (1024 threads per block)
-//     scf.for [128]      → sequential K reduction, one per thread
-//
-// Each thread computes one output element: fill → matmul K-reduction →
-// bias_add → relu. No __syncthreads needed between epilogue ops since
-// each thread owns its element from start to finish.
-//
-// Verified via experiments/tile_fuse_gpu_pipeline.sh Variant D.
-static constexpr llvm::StringLiteral kGPUTileAndFuseStrategy = R"mlir(
-module attributes {transform.with_named_sequence} {
-  transform.named_sequence @__transform_main(%root : !transform.any_op {transform.readonly}) {
-    %relu   = transform.structured.match attributes {library_call = "relu"} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %bias   = transform.structured.match attributes {library_call = "bias_add"} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %matmul = transform.structured.match ops{["linalg.matmul"]} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %fill   = transform.structured.match ops{["linalg.fill"]} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %tiled_relu, %block_forall =
-        transform.structured.tile_using_forall %relu tile_sizes [32, 32]
-            : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
-    %block_bias, %block_forall2 =
-        transform.structured.fuse_into_containing_op %bias into %block_forall
-            : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    %block_matmul, %block_forall3 =
-        transform.structured.fuse_into_containing_op %matmul into %block_forall2
-            : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    %block_fill, %block_forall4 =
-        transform.structured.fuse_into_containing_op %fill into %block_forall3
-            : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    %thread_relu, %thread_forall =
-        transform.structured.tile_using_forall %tiled_relu tile_sizes [1, 1]
-            : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.structured.fuse_into_containing_op %block_bias into %thread_forall
-        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.structured.fuse_into_containing_op %block_matmul into %thread_forall
-        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.structured.fuse_into_containing_op %block_fill into %thread_forall
-        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.yield
-  }
-}
-)mlir";
-
-static constexpr llvm::StringLiteral kCPUTileAndFuseStrategy = R"mlir(
-module attributes {transform.with_named_sequence} {
-  transform.named_sequence @__transform_main(%root : !transform.any_op {transform.readonly}) {
-    %relu   = transform.structured.match attributes {library_call = "relu"} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %bias   = transform.structured.match attributes {library_call = "bias_add"} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %matmul = transform.structured.match ops{["linalg.matmul"]} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %fill   = transform.structured.match ops{["linalg.fill"]} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %tiled_relu, %forall =
-        transform.structured.tile_using_forall %relu tile_sizes [64, 64]
-            : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.structured.fuse_into_containing_op %bias into %forall
-        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.structured.fuse_into_containing_op %matmul into %forall
-        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.structured.fuse_into_containing_op %fill into %forall
-        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.yield
-  }
-}
-)mlir";
-
-} // namespace
-
 namespace mlir_edsl {
 
 MLIRLowering::MLIRLowering()
@@ -256,7 +168,6 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   context->getOrLoadDialect<mlir::bufferization::BufferizationDialect>();
   context->getOrLoadDialect<mlir::omp::OpenMPDialect>();
   context->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-  context->getOrLoadDialect<mlir::transform::TransformDialect>();
 
   // Register bufferizable op interfaces (tells one-shot-bufferize how to
   // convert each op)
@@ -279,10 +190,7 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   mlir::arith::registerBufferDeallocationOpInterfaceExternalModels(registry);
   mlir::scf::registerBufferDeallocationOpInterfaceExternalModels(registry);
   mlir::cf::registerBufferDeallocationOpInterfaceExternalModels(registry);
-  
-  mlir::linalg::registerTransformDialectExtension(registry);
-  mlir::scf::registerTransformDialectExtension(registry);
-  // Register transform dialect extensions (linalg + SCF transform ops)
+
   context->appendDialectRegistry(registry);
 
   // Register LLVM translation interfaces
@@ -527,7 +435,6 @@ void MLIRLowering::registerGPUDialects(mlir::MLIRContext *ctx) {
   // dialects. Vector dialect is loaded (via linalg setup) but its LLVM
   // conversion extension isn't registered by default — register it here.
   mlir::DialectRegistry reg;
-  mlir::gpu::registerTransformDialectExtension(reg);
   mlir::arith::registerConvertArithToLLVMInterface(reg);
   mlir::registerConvertComplexToLLVMInterface(reg);
   mlir::cf::registerConvertControlFlowToLLVMInterface(reg);
@@ -553,10 +460,10 @@ void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &pm) {
   // Tile matmul into 32x32 scf.forall blocks for GPU block mapping, on tensor
   // semantics (pre-bufferize) — same TilingInterface-based pass (and same
   // no-memref-dependency reasoning) as the CPU outer 64x64 tiling. Doing this
-  // before bufferization is what would let a future producer-fusion pass (see
-  // kGPUTileAndFuseStrategy above) fuse fill/matmul/bias/relu into the forall
-  // — fusion legality is straightforward on tensor SSA values but hard to
-  // prove once operands are aliasing memrefs.
+  // before bufferization is what would let a future producer-fusion pass
+  // fuse fill/matmul/bias/relu into the forall — fusion legality is
+  // straightforward on tensor SSA values but hard to prove once operands
+  // are aliasing memrefs.
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgGPUMatmulTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
