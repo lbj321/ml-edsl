@@ -228,53 +228,6 @@ bool MLIRLowering::runPipeline(mlir::PassManager &pm, mlir::ModuleOp module) {
   return false;
 }
 
-void MLIRLowering::addBufferizationPasses(mlir::PassManager &pm,
-                                          bool withOutParams,
-                                          bool withDealloc) {
-  // Fold tensor.empty ops that only serve as destinations into direct writes
-  // on the destination buffer. Must run before one-shot-bufferize.
-  pm.addPass(mlir::bufferization::createEmptyTensorEliminationPass());
-
-  mlir::bufferization::OneShotBufferizePassOptions bufOpts;
-  bufOpts.bufferizeFunctionBoundaries = true;
-  bufOpts.functionBoundaryTypeConversion =
-      mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
-  pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
-
-  // CSE unifies structurally-identical subviews that one-shot-bufferize just
-  // produced (e.g. one from linalg.matmul's outs operand, one from the
-  // tensor.insert_slice it lowers to memref.copy) so canonicalize can fold
-  // the resulting self-copy instead of leaving it as a redundant copy. Doing
-  // this now, before the ownership-based dealloc pass, keeps its buffer-alias
-  // analysis working over already-deduped IR.
-  pm.addPass(mlir::createCSEPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-
-  if (withOutParams)
-    pm.addPass(mlir::bufferization::createBufferResultsToOutParamsPass());
-
-  pm.addPass(
-      mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
-  pm.addPass(
-      mlir::bufferization::createBufferDeallocationSimplificationPass());
-  pm.addPass(mlir::bufferization::createLowerDeallocationsPass());
-}
-
-void MLIRLowering::addSharedFinalLLVMLoweringPasses(mlir::PassManager &pm) {
-  // Lower inner scf.for loops → CF (scf.parallel/forall already converted).
-  pm.addPass(mlir::createSCFToControlFlowPass());
-  // Expand memref.subview with dynamic offsets (produced by tiling) into
-  // explicit arith/affine pointer arithmetic — must run before lower-affine
-  // and finalize-memref-to-llvm.
-  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
-  // Lower affine.apply (produced by expand-strided-metadata) to arith ops.
-  pm.addPass(mlir::createLowerAffinePass());
-  // Lower arith ops → LLVM (after affine is gone).
-  pm.addPass(mlir::createArithToLLVMConversionPass());
-  pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
-  pm.addPass(mlir::createConvertControlFlowToLLVMPass());
-}
-
 void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // Outer 64×64 tile-and-fuse epilogue fusion, run on tensor semantics
   // (pre-bufferize). LinalgOuterTileAndFusePass tiles the relu generic (when
@@ -356,13 +309,37 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // Bufferize tensor ops to memref ops, including function boundaries.
   // identity-layout-map produces plain memref<NxT> (no strided layout) at
   // function boundaries, matching the memref descriptors Python passes in.
-  addBufferizationPasses(pm, /*withOutParams=*/false);
+  //
+  // Fold tensor.empty ops that only serve as destinations into direct writes
+  // on the destination buffer. Must run before one-shot-bufferize.
+  pm.addPass(mlir::bufferization::createEmptyTensorEliminationPass());
+
+  mlir::bufferization::OneShotBufferizePassOptions bufOpts;
+  bufOpts.bufferizeFunctionBoundaries = true;
+  bufOpts.functionBoundaryTypeConversion =
+      mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
+  pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
+
+  // CSE unifies structurally-identical subviews that one-shot-bufferize just
+  // produced (e.g. one from linalg.matmul's outs operand, one from the
+  // tensor.insert_slice it lowers to memref.copy) so canonicalize can fold
+  // the resulting self-copy instead of leaving it as a redundant copy. Doing
+  // this now, before the ownership-based dealloc pass, keeps its buffer-alias
+  // analysis working over already-deduped IR.
+  pm.addPass(mlir::createCSEPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  pm.addPass(
+      mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
+  pm.addPass(
+      mlir::bufferization::createBufferDeallocationSimplificationPass());
+  pm.addPass(mlir::bufferization::createLowerDeallocationsPass());
 
   // scf.forall → scf.parallel → omp.parallel. Body already contains scf.for
   // from the inner tiling above (it now runs pre-bufferize, unlike before),
-  // and that no longer breaks the downstream scf-to-control-flow pass in
-  // addSharedFinalLLVMLoweringPasses — confirmed by the full test suite,
-  // including the 96x96 boundary-tile case in test_multicore.py.
+  // and that no longer breaks the downstream scf-to-control-flow pass below
+  // — confirmed by the full test suite, including the 96x96 boundary-tile
+  // case in test_multicore.py.
   pm.addPass(mlir::createForallToParallelLoopPass());
   pm.addPass(mlir::createConvertSCFToOpenMPPass());
   // ConvertSCFToOpenMPPass always wraps the loop body in a memref.alloca_scope
@@ -388,7 +365,18 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // Lower ub.poison (generated by VectorToSCF for out-of-bounds positions)
   pm.addPass(mlir::createUBToLLVMConversionPass());
 
-  addSharedFinalLLVMLoweringPasses(pm);
+  // Lower inner scf.for loops → CF (scf.parallel/forall already converted).
+  pm.addPass(mlir::createSCFToControlFlowPass());
+  // Expand memref.subview with dynamic offsets (produced by tiling) into
+  // explicit arith/affine pointer arithmetic — must run before lower-affine
+  // and finalize-memref-to-llvm.
+  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
+  // Lower affine.apply (produced by expand-strided-metadata) to arith ops.
+  pm.addPass(mlir::createLowerAffinePass());
+  // Lower arith ops → LLVM (after affine is gone).
+  pm.addPass(mlir::createArithToLLVMConversionPass());
+  pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+  pm.addPass(mlir::createConvertControlFlowToLLVMPass());
 
   pm.addPass(mlir::createConvertFuncToLLVMPass());
   pm.addPass(mlir::createConvertOpenMPToLLVMPass());
@@ -467,7 +455,30 @@ void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgGPUMatmulTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  addBufferizationPasses(pm, /*withOutParams=*/false, /*withDealloc=*/false);
+  // Fold tensor.empty ops that only serve as destinations into direct writes
+  // on the destination buffer. Must run before one-shot-bufferize.
+  pm.addPass(mlir::bufferization::createEmptyTensorEliminationPass());
+
+  mlir::bufferization::OneShotBufferizePassOptions bufOpts;
+  bufOpts.bufferizeFunctionBoundaries = true;
+  bufOpts.functionBoundaryTypeConversion =
+      mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
+  pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
+
+  // CSE unifies structurally-identical subviews that one-shot-bufferize just
+  // produced (e.g. one from linalg.matmul's outs operand, one from the
+  // tensor.insert_slice it lowers to memref.copy) so canonicalize can fold
+  // the resulting self-copy instead of leaving it as a redundant copy. Doing
+  // this now, before the ownership-based dealloc pass, keeps its buffer-alias
+  // analysis working over already-deduped IR.
+  pm.addPass(mlir::createCSEPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  pm.addPass(
+      mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
+  pm.addPass(
+      mlir::bufferization::createBufferDeallocationSimplificationPass());
+  pm.addPass(mlir::bufferization::createLowerDeallocationsPass());
 
   // Convert scf.forall (tile loops, with GPU mapping) → scf.parallel so
   // gpu-map-parallel-loops can annotate them for blockIdx mapping. Must stay
@@ -496,7 +507,18 @@ void MLIRLowering::addGPUNVVMPasses(mlir::PassManager &pm) {
   auto &gpuPm = pm.nest<mlir::gpu::GPUModuleOp>();
   gpuPm.addPass(mlir::createConvertGpuOpsToNVVMOps());
 
-  addSharedFinalLLVMLoweringPasses(pm);
+  // Lower inner scf.for loops → CF (scf.parallel/forall already converted).
+  pm.addPass(mlir::createSCFToControlFlowPass());
+  // Expand memref.subview with dynamic offsets (produced by tiling) into
+  // explicit arith/affine pointer arithmetic — must run before lower-affine
+  // and finalize-memref-to-llvm.
+  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
+  // Lower affine.apply (produced by expand-strided-metadata) to arith ops.
+  pm.addPass(mlir::createLowerAffinePass());
+  // Lower arith ops → LLVM (after affine is gone).
+  pm.addPass(mlir::createArithToLLVMConversionPass());
+  pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+  pm.addPass(mlir::createConvertControlFlowToLLVMPass());
 
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
 }
