@@ -81,11 +81,6 @@ private:
   // CPU pipeline passes
   void addCPUPasses(mlir::PassManager &pm);
 
-  // Shared pass-sequence building blocks
-  void addBufferizationPasses(mlir::PassManager &pm, bool withOutParams,
-                              bool withDealloc = true);
-  void addSharedFinalLLVMLoweringPasses(mlir::PassManager &pm);
-
   // GPU-path helpers
   void registerGPUDialects(mlir::MLIRContext *ctx);
   void addGPUPreOutliningPasses(mlir::PassManager &pm);

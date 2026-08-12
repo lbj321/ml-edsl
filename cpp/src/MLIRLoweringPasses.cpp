@@ -5,6 +5,7 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/TilingInterfaceImpl.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -23,12 +24,15 @@
 
 namespace {
 
-// Tiles the outermost elementwise linalg.generic (the bias+relu epilogue
-// produced by --linalg-fuse-elementwise-ops) and greedily fuses its linalg
-// producers (matmul, fill) upward into the generated scf.forall loops.
+// Tiles the relu linalg.generic (found via its "relu" library_call attribute,
+// see LinalgBuilder.cpp) and greedily fuses its linalg producers (bias_add,
+// matmul, fill) upward into the generated scf.forall loops. tileConsumerAnd-
+// FuseProducersUsingSCF walks the use-def chain transitively, so this pulls
+// in the whole bias_add → matmul → fill chain in one call without needing
+// them pre-merged into a single generic.
 //
 // Running in tensor land (before bufferization) enables epilogue fusion:
-// fill → matmul → bias+relu all execute on the same [tileM×tileN] tile,
+// fill → matmul → bias_add → relu all execute on the same [tileM×tileN] tile,
 // keeping the matmul output in L2 cache instead of writing it to DRAM first.
 //
 // After this pass the body of the scf.forall contains:
@@ -56,12 +60,12 @@ struct LinalgOuterTileAndFusePass
     mlir::func::FuncOp func = getOperation();
     mlir::IRRewriter rewriter(func->getContext());
 
-    // Find the merged bias+relu generic: its first ins operand is a matmul
-    // result (guaranteed by --linalg-fuse-elementwise-ops running first).
+    // Find the relu generic by its library_call attribute (set in
+    // LinalgBuilder.cpp). Producer fusion below walks backward from here.
     mlir::linalg::GenericOp consumer;
     func.walk([&](mlir::linalg::GenericOp op) {
-      if (!op.getInputs().empty() &&
-          op.getInputs()[0].getDefiningOp<mlir::linalg::MatmulOp>())
+      auto libCall = op->getAttrOfType<mlir::StringAttr>("library_call");
+      if (libCall && libCall.getValue() == "relu")
         consumer = op;
     });
     if (!consumer)
@@ -100,6 +104,11 @@ struct LinalgOuterTileAndFusePass
 // linalg vectorizer which always produces a 3D double-broadcast form
 // {(d0,d1,d2),(d0,d1,d2),(d0,d1)} that the OuterProduct lowering strategy
 // cannot decompose into vector.outerproduct → vector.fma.
+//
+// Runs pre-bufferize (tensor semantics), so operands are tensor<8x8xf32>, not
+// memref. vector.transfer_write on a tensor is functional — it returns a new
+// tensor rather than mutating C in place — so the matmul's tensor result is
+// replaced with that value instead of being erased as a pure side effect.
 struct LinalgMatmulToContractPass
     : public mlir::PassWrapper<LinalgMatmulToContractPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
@@ -124,9 +133,9 @@ struct LinalgMatmulToContractPass
       mlir::Value B = matmul.getInputs()[1];
       mlir::Value C = matmul.getOutputs()[0];
 
-      auto aType = mlir::dyn_cast<mlir::MemRefType>(A.getType());
-      auto bType = mlir::dyn_cast<mlir::MemRefType>(B.getType());
-      auto cType = mlir::dyn_cast<mlir::MemRefType>(C.getType());
+      auto aType = mlir::dyn_cast<mlir::RankedTensorType>(A.getType());
+      auto bType = mlir::dyn_cast<mlir::RankedTensorType>(B.getType());
+      auto cType = mlir::dyn_cast<mlir::RankedTensorType>(C.getType());
       if (!aType || !bType || !cType)
         continue;
 
@@ -176,10 +185,10 @@ struct LinalgMatmulToContractPass
       mlir::Value result = rewriter.create<mlir::vector::ContractionOp>(
           loc, vA, vB, vC, indexingMaps, iterTypes);
 
-      rewriter.create<mlir::vector::TransferWriteOp>(
+      auto newC = rewriter.create<mlir::vector::TransferWriteOp>(
           loc, result, C, mlir::ValueRange{zero, zero}, inBounds);
 
-      rewriter.eraseOp(matmul);
+      rewriter.replaceOp(matmul, newC.getResult());
     }
   }
 };
@@ -230,6 +239,35 @@ struct VectorCleanupPass
     mlir::func::FuncOp func = getOperation();
     mlir::RewritePatternSet patterns(func->getContext());
     mlir::vector::populateVectorReductionToContractPatterns(patterns);
+    if (mlir::failed(mlir::applyPatternsGreedily(func, std::move(patterns))))
+      signalPassFailure();
+  }
+};
+
+// Inlines memref.alloca_scope ops whose body contains no memref.alloca —
+// i.e. scopes wrapped by ConvertSCFToOpenMPPass "just in case" that never
+// actually need stack scoping. Must run before scf-to-cf: AllocaScopeOp
+// requires a single-block body, and scf-to-cf introduces branches for any
+// scf.for still inside it. Deliberately narrow (only AllocaScopeOp's own
+// canonicalization patterns) instead of a blanket canonicalizer pass, so
+// this can't be silently defeated by unrelated pattern/pass changes
+// elsewhere in the pipeline — see addCPUPasses call site for the incident
+// that motivated this.
+struct AllocaScopeCleanupPass
+    : public mlir::PassWrapper<AllocaScopeCleanupPass,
+                                mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(AllocaScopeCleanupPass)
+  llvm::StringRef getArgument() const override {
+    return "alloca-scope-cleanup";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Inline memref.alloca_scope ops that contain no memref.alloca";
+  }
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::RewritePatternSet patterns(func->getContext());
+    mlir::memref::AllocaScopeOp::getCanonicalizationPatterns(
+        patterns, func->getContext());
     if (mlir::failed(mlir::applyPatternsGreedily(func, std::move(patterns))))
       signalPassFailure();
   }
@@ -294,7 +332,18 @@ struct LinalgMatmulTilingPass
     mlir::IRRewriter rewriter(func->getContext());
 
     llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
-    func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
+    func.walk([&](mlir::linalg::MatmulOp op) {
+      // In the ForallOp (outer parallel) configuration, skip matmuls already
+      // nested inside an scf.forall: those were placed and correctly sized
+      // (tileM x tileN, full K) by LinalgOuterTileAndFusePass's producer
+      // fusion, and retiling them here would double-tile a already-tiled op.
+      // The ForOp (inner K-tiling) configuration deliberately runs on such
+      // nested matmuls, so this guard only applies to the ForallOp case.
+      if (loopType == LoopType::ForallOp &&
+          op->getParentOfType<mlir::scf::ForallOp>())
+        return;
+      matmuls.push_back(op);
+    });
 
     for (mlir::linalg::MatmulOp op : matmuls) {
       // Named variable required — setTileSizes captures a non-owning ArrayRef.
@@ -451,8 +500,9 @@ std::unique_ptr<mlir::Pass> createTransformStrategyPass(mlir::MLIRContext *ctx,
   return std::make_unique<TransformStrategyPass>(std::move(strategyMod),
                                                  guardLibraryCall);
 }
-std::unique_ptr<mlir::Pass> createLinalgOuterTileAndFusePass() {
-  return std::make_unique<LinalgOuterTileAndFusePass>(64, 64);
+std::unique_ptr<mlir::Pass> createLinalgOuterTileAndFusePass(int64_t tileM,
+                                                              int64_t tileN) {
+  return std::make_unique<LinalgOuterTileAndFusePass>(tileM, tileN);
 }
 std::unique_ptr<mlir::Pass> createLinalgMatmulToContractPass() {
   return std::make_unique<LinalgMatmulToContractPass>();
@@ -462,6 +512,9 @@ std::unique_ptr<mlir::Pass> createLinalgVectorizationPass() {
 }
 std::unique_ptr<mlir::Pass> createVectorCleanupPass() {
   return std::make_unique<VectorCleanupPass>();
+}
+std::unique_ptr<mlir::Pass> createAllocaScopeCleanupPass() {
+  return std::make_unique<AllocaScopeCleanupPass>();
 }
 std::unique_ptr<mlir::Pass> createVectorContractToOuterProductPass() {
   return std::make_unique<VectorContractToOuterProductPass>();

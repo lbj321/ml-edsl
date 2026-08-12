@@ -256,8 +256,7 @@ void MLIRCompiler::ensureFinalized() {
   }
 
   const bool saveIR = std::getenv("SAVE_IR") != nullptr;
-  const bool flushIR = std::getenv("FLUSH_IR") != nullptr;
-  const bool doCapture = saveIR || flushIR || captureSnapshots;
+  const bool doCapture = saveIR || captureSnapshots;
   MLIRLowering lowering(mlirContext.get(), /*captureSnapshots=*/doCapture);
 
 #ifdef MLIR_EDSL_CUDA_ENABLED

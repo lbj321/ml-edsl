@@ -155,8 +155,10 @@ class TestLinalgMatmulTilingPass:
         // CHECK: scf.for
         """, after="linalg-tile-matmul")
 
-    def test_large_matmul_produces_subviews(self, check_lowered_ir):
-        """Tiled matmul slices all three operands into 8x8 subviews (M, N, K all tiled)."""
+    def test_large_matmul_produces_extract_slices(self, check_lowered_ir):
+        """Tiled matmul slices all three operands into 8x8 tensor slices (M, N, K all
+        tiled). Runs pre-bufferize (tensor semantics), so slices are
+        tensor.extract_slice, not memref.subview."""
         @ml_function
         def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
             return matmul(A, B)
@@ -164,9 +166,9 @@ class TestLinalgMatmulTilingPass:
         mm_fn(np.ones((16, 16), dtype=np.float32),
               np.ones((16, 16), dtype=np.float32))
         check_lowered_ir("""
-        // CHECK: memref.subview {{.*}} [8, 8] [1, 1]
-        // CHECK: memref.subview {{.*}} [8, 8] [1, 1]
-        // CHECK: memref.subview {{.*}} [8, 8] [1, 1]
+        // CHECK: tensor.extract_slice {{.*}} [8, 8] [1, 1]
+        // CHECK: tensor.extract_slice {{.*}} [8, 8] [1, 1]
+        // CHECK: tensor.extract_slice {{.*}} [8, 8] [1, 1]
         """, after="linalg-tile-matmul")
 
     def test_boundary_8x8_matmul_tiled(self, check_lowered_ir):
@@ -327,6 +329,34 @@ class TestVectorContractToOuterProductPass:
         // CHECK: vector.fma
         // CHECK-NOT: vector.contract
         """, after="vector-contract-to-outerproduct")
+
+
+class TestAllocaScopeCleanupPass:
+    """IR tests for AllocaScopeCleanupPass (alloca-scope-cleanup).
+
+    ConvertSCFToOpenMPPass unconditionally wraps the omp.parallel loop body in a
+    memref.alloca_scope. This pass inlines that scope away when it contains no
+    memref.alloca, since it must be gone before scf-to-cf runs: AllocaScopeOp
+    requires a single-block body, and scf-to-cf introduces branches for any
+    scf.for still inside it. Left un-inlined, this crashes on large matmuls
+    (e.g. 1024x1024) with 'expects region #0 to have 0 or 1 blocks'.
+    """
+
+    def test_omp_loop_body_has_no_alloca_scope(self, check_lowered_ir):
+        """128x128 matmul fires the outer parallel tile as a real multi-iteration
+        omp.parallel (a 2x2 tile grid — a single-iteration 64x64 tile gets
+        canonicalized away before this checkpoint). Its loop body must not
+        retain the vacuous memref.alloca_scope ConvertSCFToOpenMPPass wraps it in."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128]) -> Tensor[f32, 128, 128]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((128, 128), dtype=np.float32),
+              np.ones((128, 128), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: omp.parallel
+        // CHECK-NOT: memref.alloca_scope
+        """, after="alloca-scope-cleanup")
 
 
 class TestLinalgGenericTilingPass:

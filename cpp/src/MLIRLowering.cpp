@@ -18,7 +18,6 @@
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/GPU/Transforms/Passes.h"
-#include "mlir/Dialect/GPU/TransformOps/GPUTransformOps.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
@@ -50,6 +49,8 @@
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVMPass.h"
 #include "mlir/Conversion/VectorToSCF/VectorToSCF.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Affine/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
@@ -66,6 +67,7 @@
 #include "mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Linalg/Transforms/TilingInterfaceImpl.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/MemRef/Transforms/AllocationOpInterfaceImpl.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -77,12 +79,10 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tensor/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
-#include "mlir/Dialect/Transform/IR/TransformDialect.h"
-#include "mlir/Dialect/Transform/Transforms/Passes.h"
-#include "mlir/Dialect/Linalg/TransformOps/DialectExtension.h"
-#include "mlir/Dialect/SCF/TransformOps/SCFTransformOps.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/Dialect/Vector/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Vector/Transforms/Passes.h"
+#include "mlir/Dialect/Vector/Transforms/SubsetOpInterfaceImpl.h"
 #include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassInstrumentation.h"
@@ -101,11 +101,7 @@ public:
   using SnapshotList = std::vector<std::pair<std::string, std::string>>;
 
   explicit IRSnapshotInstrumentation(SnapshotList *snapshots)
-      : snapshots(snapshots), flushDir(std::getenv("FLUSH_IR") ? "ir_flush" : ""),
-        flushCounter(0) {
-    if (!flushDir.empty())
-      llvm::sys::fs::create_directories(flushDir);
-  }
+      : snapshots(snapshots) {}
 
   void runAfterPass(mlir::Pass *pass, mlir::Operation *op) override {
     // OpToOpPassAdaptor is an internal MLIR wrapper for nested passes.
@@ -124,8 +120,6 @@ public:
     std::string passName = pass->getArgument().str();
     if (passName.empty())
       passName = pass->getName().str();
-    if (!flushDir.empty())
-      flushToDisk(passName, ir);
     snapshots->emplace_back(std::move(passName), std::move(ir));
   }
 
@@ -139,117 +133,15 @@ public:
     std::string passName = pass->getArgument().str();
     if (passName.empty())
       passName = pass->getName().str();
-    if (!flushDir.empty())
-      flushToDisk("[FAILED] " + passName, ir);
     snapshots->emplace_back("[FAILED] " + passName, std::move(ir));
   }
 
 private:
   SnapshotList *snapshots;
-  std::string flushDir;
-  int flushCounter;
-
-  void flushToDisk(const std::string &passName, const std::string &ir) {
-    // Sanitize pass name for use as filename
-    std::string safe = passName;
-    for (char &c : safe)
-      if (c == '/' || c == ' ' || c == '[' || c == ']')
-        c = '_';
-    std::string idx = std::to_string(flushCounter++);
-    idx = std::string(3 - std::min<int>(3, idx.size()), '0') + idx;
-    std::string path = flushDir + "/" + idx + "_" + safe + ".mlir";
-    std::error_code ec;
-    llvm::raw_fd_ostream f(path, ec);
-    if (!ec)
-      f << ir;
-  }
 };
 
 
 } // anonymous namespace
-
-namespace {
-
-// Two-level GPU tile-and-fuse strategy (tensor land, pre-bufferize):
-//
-//   Level 1 — block: tile relu [32×32] → one scf.forall per thread block,
-//             fuse bias_add → matmul → fill into that forall.
-//   Level 2 — thread: tile the block-level relu [1×1] → one scf.forall per
-//             output element (= one thread), fuse block-level ops inward.
-//
-// After bufferize + scf-forall-to-parallel on both levels:
-//   scf.parallel [4,4]   → blockIdx   (grid 4×4 for 128×128 output)
-//   scf.parallel [32,32] → threadIdx  (1024 threads per block)
-//     scf.for [128]      → sequential K reduction, one per thread
-//
-// Each thread computes one output element: fill → matmul K-reduction →
-// bias_add → relu. No __syncthreads needed between epilogue ops since
-// each thread owns its element from start to finish.
-//
-// Verified via experiments/tile_fuse_gpu_pipeline.sh Variant D.
-static constexpr llvm::StringLiteral kGPUTileAndFuseStrategy = R"mlir(
-module attributes {transform.with_named_sequence} {
-  transform.named_sequence @__transform_main(%root : !transform.any_op {transform.readonly}) {
-    %relu   = transform.structured.match attributes {library_call = "relu"} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %bias   = transform.structured.match attributes {library_call = "bias_add"} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %matmul = transform.structured.match ops{["linalg.matmul"]} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %fill   = transform.structured.match ops{["linalg.fill"]} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %tiled_relu, %block_forall =
-        transform.structured.tile_using_forall %relu tile_sizes [32, 32]
-            : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
-    %block_bias, %block_forall2 =
-        transform.structured.fuse_into_containing_op %bias into %block_forall
-            : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    %block_matmul, %block_forall3 =
-        transform.structured.fuse_into_containing_op %matmul into %block_forall2
-            : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    %block_fill, %block_forall4 =
-        transform.structured.fuse_into_containing_op %fill into %block_forall3
-            : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    %thread_relu, %thread_forall =
-        transform.structured.tile_using_forall %tiled_relu tile_sizes [1, 1]
-            : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.structured.fuse_into_containing_op %block_bias into %thread_forall
-        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.structured.fuse_into_containing_op %block_matmul into %thread_forall
-        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.structured.fuse_into_containing_op %block_fill into %thread_forall
-        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.yield
-  }
-}
-)mlir";
-
-static constexpr llvm::StringLiteral kCPUTileAndFuseStrategy = R"mlir(
-module attributes {transform.with_named_sequence} {
-  transform.named_sequence @__transform_main(%root : !transform.any_op {transform.readonly}) {
-    %relu   = transform.structured.match attributes {library_call = "relu"} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %bias   = transform.structured.match attributes {library_call = "bias_add"} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %matmul = transform.structured.match ops{["linalg.matmul"]} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %fill   = transform.structured.match ops{["linalg.fill"]} in %root
-                : (!transform.any_op) -> !transform.any_op
-    %tiled_relu, %forall =
-        transform.structured.tile_using_forall %relu tile_sizes [64, 64]
-            : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.structured.fuse_into_containing_op %bias into %forall
-        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.structured.fuse_into_containing_op %matmul into %forall
-        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.structured.fuse_into_containing_op %fill into %forall
-        : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
-    transform.yield
-  }
-}
-)mlir";
-
-} // namespace
 
 namespace mlir_edsl {
 
@@ -277,7 +169,6 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   context->getOrLoadDialect<mlir::bufferization::BufferizationDialect>();
   context->getOrLoadDialect<mlir::omp::OpenMPDialect>();
   context->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-  context->getOrLoadDialect<mlir::transform::TransformDialect>();
 
   // Register bufferizable op interfaces (tells one-shot-bufferize how to
   // convert each op)
@@ -286,10 +177,13 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   mlir::tensor::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::scf::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::linalg::registerBufferizableOpInterfaceExternalModels(registry);
+  mlir::vector::registerBufferizableOpInterfaceExternalModels(registry);
+  mlir::vector::registerSubsetOpInterfaceExternalModels(registry);
   mlir::linalg::registerTilingInterfaceExternalModels(registry);
   mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::scf::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::tensor::registerValueBoundsOpInterfaceExternalModels(registry);
+  mlir::affine::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::bufferization::func_ext::registerBufferizableOpInterfaceExternalModels(
       registry);
   // Required by ownership-based-buffer-deallocation when scf.if (or other
@@ -297,10 +191,10 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   mlir::arith::registerBufferDeallocationOpInterfaceExternalModels(registry);
   mlir::scf::registerBufferDeallocationOpInterfaceExternalModels(registry);
   mlir::cf::registerBufferDeallocationOpInterfaceExternalModels(registry);
-  
-  mlir::linalg::registerTransformDialectExtension(registry);
-  mlir::scf::registerTransformDialectExtension(registry);
-  // Register transform dialect extensions (linalg + SCF transform ops)
+  // Required by PromoteBuffersToStackPass (GPU epilogue fusion pipeline) to
+  // query whether a memref.alloc can be replaced with memref.alloca.
+  mlir::memref::registerAllocationOpInterfaceExternalModels(registry);
+
   context->appendDialectRegistry(registry);
 
   // Register LLVM translation interfaces
@@ -317,15 +211,17 @@ void MLIRLowering::attachInstrumentation(mlir::PassManager &pm) {
 
 bool MLIRLowering::runPipeline(mlir::PassManager &pm, mlir::ModuleOp module) {
   pm.enableVerifier(true);
-  if (std::getenv("TRACE_PASSES")) {
+  // IRSnapshotInstrumentation (attached below whenever snapshotsEnabled) mutates
+  // a plain std::vector from PassInstrumentation callbacks, which the pass
+  // manager invokes from worker threads whenever it runs nested per-FuncOp
+  // passes (pm.addNestedPass<FuncOp>, used throughout this pipeline) on a
+  // module with more than one function concurrently. Multithreading must be
+  // off whenever that instrumentation is attached, or those callbacks race on
+  // the unsynchronized vector — silent heap corruption, surfacing later as an
+  // unrelated-looking segfault (e.g. auto-invalidate compiling a second
+  // function into the same module after a DYN shape change).
+  if (snapshotsEnabled) {
     pm.getContext()->disableMultithreading();
-    pm.enableIRPrinting(
-        /*shouldPrintBeforePass=*/[](mlir::Pass *,
-                                     mlir::Operation *) { return true; },
-        /*shouldPrintAfterPass=*/nullptr,
-        /*printModuleScope=*/true,
-        /*printAfterOnlyOnChange=*/false,
-        /*printAfterOnlyOnFailure=*/false, llvm::errs());
   }
   if (mlir::succeeded(pm.run(module)))
     return true;
@@ -336,9 +232,88 @@ bool MLIRLowering::runPipeline(mlir::PassManager &pm, mlir::ModuleOp module) {
   return false;
 }
 
-void MLIRLowering::addBufferizationPasses(mlir::PassManager &pm,
-                                          bool withOutParams,
-                                          bool withDealloc) {
+void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
+  // Outer 64×64 tile-and-fuse epilogue fusion, run on tensor semantics
+  // (pre-bufferize). LinalgOuterTileAndFusePass tiles the relu generic (when
+  // present) via the TilingInterface and fuses bias_add/matmul/fill into the
+  // resulting scf.forall via tileConsumerAndFuseProducersUsingSCF — fusion
+  // legality is straightforward on tensor SSA values but hard to prove once
+  // operands are aliasing memrefs, hence doing this before bufferization.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgOuterTileAndFusePass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  // Outer 64×64 parallel tiling for any matmul not already covered by the
+  // fusion above (e.g. a bare matmul with no relu epilogue). Matmuls already
+  // nested inside the scf.forall the fusion pass produced are skipped — see
+  // the guard in LinalgMatmulTilingPass — so this never double-tiles a
+  // fused matmul.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulParallelTilingPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  // Inner 8x8 serial tiling, also run on tensor semantics (pre-bufferize) for
+  // the same reason as the outer tiling above. Nesting inside the outer
+  // forall's boundary tile (e.g. the 32-wide remainder on a 96x96 matmul)
+  // requires ValueBoundsOpInterface support for affine ops — see the
+  // affine::registerValueBoundsOpInterfaceExternalModels registration in
+  // registerRequiredDialects.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulTilingPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  // Tile linalg.generic ops (elementwise, bias, relu, etc.) to strips of 8
+  // along the innermost dimension before vectorization, also on tensor
+  // semantics (pre-bufferize) — same TilingInterface-based pass, no memref
+  // dependency. Without this, the vectorizer sees the full tensor as a
+  // single vector<NxNxf32>, causing LLVM O3 to hang on large shapes (e.g.
+  // 512x512) due to combinatorial explosion in its analysis passes.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgGenericTilingPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  // Lower static 8x8 linalg.matmul tiles to vector.contract with standard
+  // 2D indexing maps (m,k)x(k,n)->(m,n), on tensor semantics (pre-bufferize).
+  // Must run before LinalgVectorizationPass (which stays post-bufferize
+  // below) — linalg::vectorize always produces a 3D double-broadcast form
+  // that the OuterProduct lowering cannot decompose into vector.fma, so
+  // matmul must never reach it. Running this pass earlier still guarantees
+  // that ordering since it consumes/erases every linalg.matmul it touches.
+  // Bufferizing the vector.transfer_read/write this produces requires
+  // vector::registerBufferizableOpInterfaceExternalModels (see
+  // registerRequiredDialects).
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulToContractPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  // Vectorize remaining linalg structured ops → vector dialect, on tensor
+  // semantics (pre-bufferize). linalg::vectorize is dialect-agnostic
+  // upstream (the standard "vectorize before bufferize" pattern), so no
+  // rewrite was needed here, unlike LinalgMatmulToContractPass above.
+  // (linalg.matmul is already handled by LinalgMatmulToContractPass above,
+  // so this only ever sees generic/fill ops.)
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgVectorizationPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  // Fuse mulf + multi_reduction → vector.contract for better LLVM codegen
+  pm.addNestedPass<mlir::func::FuncOp>(createVectorCleanupPass());
+
+  // Lower vector.contract → vector.outerproduct on rank-1 slices, on tensor
+  // semantics (pre-bufferize). Pure vector.*-to-vector.* rewrite — no tensor
+  // or memref operands involved (vector.contract/outerproduct/fma only ever
+  // touch vector<> values fed by vector.transfer_read/write), so bufferization
+  // state is irrelevant to it. Must happen before convert-vector-to-scf: if a
+  // rank-3 contract is still present at that pass, it expands the 3D
+  // transfer_reads into broadcast+transpose+alloca loops, defeating
+  // vectorization entirely.
+  pm.addNestedPass<mlir::func::FuncOp>(createVectorContractToOuterProductPass());
+
+  // Lower vector.multi_reduction (produced by linalg.reduce vectorization),
+  // on tensor semantics (pre-bufferize). Pure vector.*-to-vector.* rewrite —
+  // no tensor or memref operands involved — so, like the two passes above,
+  // bufferization state is irrelevant to it.
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::vector::createLowerVectorMultiReductionPass());
+
+  // Bufferize tensor ops to memref ops, including function boundaries.
+  // identity-layout-map produces plain memref<NxT> (no strided layout) at
+  // function boundaries, matching the memref descriptors Python passes in.
+  //
   // Fold tensor.empty ops that only serve as destinations into direct writes
   // on the destination buffer. Must run before one-shot-bufferize.
   pm.addPass(mlir::bufferization::createEmptyTensorEliminationPass());
@@ -349,95 +324,37 @@ void MLIRLowering::addBufferizationPasses(mlir::PassManager &pm,
       mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
   pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
 
-  if (withOutParams)
-    pm.addPass(mlir::bufferization::createBufferResultsToOutParamsPass());
+  // CSE unifies structurally-identical subviews that one-shot-bufferize just
+  // produced (e.g. one from linalg.matmul's outs operand, one from the
+  // tensor.insert_slice it lowers to memref.copy) so canonicalize can fold
+  // the resulting self-copy instead of leaving it as a redundant copy. Doing
+  // this now, before the ownership-based dealloc pass, keeps its buffer-alias
+  // analysis working over already-deduped IR.
+  pm.addPass(mlir::createCSEPass());
+  pm.addPass(mlir::createCanonicalizerPass());
 
   pm.addPass(
       mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
-  pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(
       mlir::bufferization::createBufferDeallocationSimplificationPass());
   pm.addPass(mlir::bufferization::createLowerDeallocationsPass());
-}
 
-void MLIRLowering::addSharedFinalLLVMLoweringPasses(mlir::PassManager &pm) {
-  // Lower inner scf.for loops → CF (scf.parallel/forall already converted).
-  pm.addPass(mlir::createSCFToControlFlowPass());
-  // Expand memref.subview with dynamic offsets (produced by tiling) into
-  // explicit arith/affine pointer arithmetic — must run before lower-affine
-  // and finalize-memref-to-llvm.
-  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
-  // Lower affine.apply (produced by expand-strided-metadata) to arith ops.
-  pm.addPass(mlir::createLowerAffinePass());
-  // Lower arith ops → LLVM (after affine is gone).
-  pm.addPass(mlir::createArithToLLVMConversionPass());
-  pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
-  pm.addPass(mlir::createConvertControlFlowToLLVMPass());
-}
-
-void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
-  // Fuse adjacent elementwise linalg ops (e.g. bias_add + relu → one generic).
-  pm.addPass(mlir::createLinalgElementwiseOpFusionPass());
-
-  // Bufferize tensor ops to memref ops, including function boundaries.
-  // identity-layout-map produces plain memref<NxT> (no strided layout) at
-  // function boundaries, matching the memref descriptors Python passes in.
-  addBufferizationPasses(pm, /*withOutParams=*/false);
-
-  // Outer 64×64 parallel tiling for functions where the transform strategy
-  // didn't fire (no relu, or multi-layer). When the strategy did fire, the
-  // matmul is already a ≤64×64 tile so this produces a trivial 1×1 forall
-  // that the subsequent canonicalizer folds away.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulParallelTilingPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-
-  // scf.forall → scf.parallel → omp.parallel.
-  // OMP conversion must happen HERE while the body only contains linalg ops;
-  // once inner tiling and vectorization run, the body has scf.for + alloca_scope
-  // and scf-to-control-flow would try to expand them inside omp.loop_nest,
-  // violating its single-block region constraint.
+  // scf.forall → scf.parallel → omp.parallel. Body already contains scf.for
+  // from the inner tiling above (it now runs pre-bufferize, unlike before),
+  // and that no longer breaks the downstream scf-to-control-flow pass below
+  // — confirmed by the full test suite, including the 96x96 boundary-tile
+  // case in test_multicore.py.
   pm.addPass(mlir::createForallToParallelLoopPass());
   pm.addPass(mlir::createConvertSCFToOpenMPPass());
-
-  // Inner 8x8 serial tiles for vectorization (runs inside omp.loop_nest body)
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulTilingPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-
-  
-  // Tile linalg.generic ops (elementwise, bias, relu, etc.) to strips of 8
-  // along the innermost dimension before vectorization. Without this, the
-  // vectorizer sees the full tensor as a single vector<NxNxf32>, causing LLVM
-  // O3 to hang on large shapes (e.g. 512x512) due to combinatorial explosion
-  // in its analysis passes.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgGenericTilingPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-  
-  // Lower static 8x8 linalg.matmul tiles to vector.contract with standard
-  // 2D indexing maps (m,k)x(k,n)->(m,n). Must run before LinalgVectorizationPass
-  // which skips matmul — linalg::vectorize always produces a 3D double-broadcast
-  // form that the OuterProduct lowering cannot decompose into vector.fma.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulToContractPass());
-
-  // Vectorize remaining linalg structured ops → vector dialect
-  // (linalg.matmul is already handled by LinalgMatmulToContractPass above)
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgVectorizationPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-
-  // Fuse mulf + multi_reduction → vector.contract for better LLVM codegen
-  pm.addNestedPass<mlir::func::FuncOp>(createVectorCleanupPass());
-
-  // Lower vector.contract → vector.outerproduct on rank-1 slices.
-  // Must happen before convert-vector-to-scf: if a rank-3 contract is still
-  // present at that pass, it expands the 3D transfer_reads into
-  // broadcast+transpose+alloca loops, defeating vectorization entirely.
-  pm.addNestedPass<mlir::func::FuncOp>(createVectorContractToOuterProductPass());
+  // ConvertSCFToOpenMPPass always wraps the loop body in a memref.alloca_scope
+  // for stack-scoping, whether or not anything inside needs it. If nothing
+  // does (no memref.alloca), it must be inlined away here, before scf-to-cf:
+  // AllocaScopeOp requires a single-block body, and scf-to-cf introduces
+  // branches for any scf.for still inside it. See AllocaScopeCleanupPass.
+  pm.addNestedPass<mlir::func::FuncOp>(createAllocaScopeCleanupPass());
 
   // Fallback: lower any remaining (un-vectorized) linalg ops to scf.for loops
   pm.addPass(mlir::createConvertLinalgToLoopsPass());
-
-  // Lower vector.multi_reduction (produced by linalg.reduce vectorization)
-  pm.addNestedPass<mlir::func::FuncOp>(
-      mlir::vector::createLowerVectorMultiReductionPass());
 
   // Lower complex vector.transfer_read/write (permutation maps, broadcasts)
   // to scalar SCF loops before LLVM conversion
@@ -452,7 +369,18 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   // Lower ub.poison (generated by VectorToSCF for out-of-bounds positions)
   pm.addPass(mlir::createUBToLLVMConversionPass());
 
-  addSharedFinalLLVMLoweringPasses(pm);
+  // Lower inner scf.for loops → CF (scf.parallel/forall already converted).
+  pm.addPass(mlir::createSCFToControlFlowPass());
+  // Expand memref.subview with dynamic offsets (produced by tiling) into
+  // explicit arith/affine pointer arithmetic — must run before lower-affine
+  // and finalize-memref-to-llvm.
+  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
+  // Lower affine.apply (produced by expand-strided-metadata) to arith ops.
+  pm.addPass(mlir::createLowerAffinePass());
+  // Lower arith ops → LLVM (after affine is gone).
+  pm.addPass(mlir::createArithToLLVMConversionPass());
+  pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+  pm.addPass(mlir::createConvertControlFlowToLLVMPass());
 
   pm.addPass(mlir::createConvertFuncToLLVMPass());
   pm.addPass(mlir::createConvertOpenMPToLLVMPass());
@@ -499,7 +427,6 @@ void MLIRLowering::registerGPUDialects(mlir::MLIRContext *ctx) {
   // dialects. Vector dialect is loaded (via linalg setup) but its LLVM
   // conversion extension isn't registered by default — register it here.
   mlir::DialectRegistry reg;
-  mlir::gpu::registerTransformDialectExtension(reg);
   mlir::arith::registerConvertArithToLLVMInterface(reg);
   mlir::registerConvertComplexToLLVMInterface(reg);
   mlir::cf::registerConvertControlFlowToLLVMInterface(reg);
@@ -519,15 +446,74 @@ void MLIRLowering::registerGPUDialects(mlir::MLIRContext *ctx) {
 // Phase 1: fuse + bufferize + linalg→parallel→gpu + kernel outlining.
 // After this runs, gpu.launch_func ops are present and can be analyzed.
 void MLIRLowering::addGPUPreOutliningPasses(mlir::PassManager &pm) {
-  // Fuse adjacent elementwise linalg ops (bias_add + relu → one generic).
-  pm.addPass(mlir::createLinalgElementwiseOpFusionPass());
+  // Two-level epilogue fusion (tensor semantics, pre-bufferize): tile the
+  // relu (found by its "relu" library_call attribute) to a 32x32 block-level
+  // scf.forall and fuse bias_add/matmul/fill producers into it, then tile
+  // the resulting nested relu again to a 1x1 thread-level scf.forall and
+  // fuse the block-level ops into that. Reuses the CPU epilogue fusion pass
+  // unchanged (it already finds ops purely by library_call, with no
+  // CPU/GPU-specific assumptions) — tiling clones op attributes, so the
+  // library_call survives onto the nested relu that the second call finds.
+  // No-ops cleanly (existing guard) when there's no relu, e.g. a bare
+  // matmul or a bias-only epilogue, falling through to the fallback below.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgOuterTileAndFusePass(32, 32));
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgOuterTileAndFusePass(1, 1));
+  pm.addPass(mlir::createCanonicalizerPass());
 
-  addBufferizationPasses(pm, /*withOutParams=*/false, /*withDealloc=*/false);
-
-  // Tile matmul into 32x32 scf.forall blocks for GPU block mapping.
+  // Fallback: tile any matmul the fusion above didn't reach (bare matmul, or
+  // an epilogue without relu) into 32x32 scf.forall blocks for GPU block
+  // mapping, on tensor semantics (pre-bufferize) — same TilingInterface-based
+  // pass (and same no-memref-dependency reasoning) as the CPU outer 64x64
+  // tiling. Matmuls already nested inside the fused forall(s) above are
+  // skipped by this pass's existing guard, so this never double-tiles.
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgGPUMatmulTilingPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  // Fold tensor.empty ops that only serve as destinations into direct writes
+  // on the destination buffer. Must run before one-shot-bufferize.
+  pm.addPass(mlir::bufferization::createEmptyTensorEliminationPass());
+
+  mlir::bufferization::OneShotBufferizePassOptions bufOpts;
+  bufOpts.bufferizeFunctionBoundaries = true;
+  bufOpts.functionBoundaryTypeConversion =
+      mlir::bufferization::LayoutMapOption::IdentityLayoutMap;
+  pm.addPass(mlir::bufferization::createOneShotBufferizePass(bufOpts));
+
+  // CSE unifies structurally-identical subviews that one-shot-bufferize just
+  // produced (e.g. one from linalg.matmul's outs operand, one from the
+  // tensor.insert_slice it lowers to memref.copy) so canonicalize can fold
+  // the resulting self-copy instead of leaving it as a redundant copy. Doing
+  // this now, before the ownership-based dealloc pass, keeps its buffer-alias
+  // analysis working over already-deduped IR.
+  pm.addPass(mlir::createCSEPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  // Promote small per-tile scratch allocations (the fill/bias_add
+  // intermediate results inside the fused thread tile, e.g. a 1x1xf32 alloc
+  // per thread) from heap memref.alloc to stack memref.alloca. This is
+  // mandatory for GPU, not just an optimization: memref.alloc lowers to
+  // llvm.call @malloc, and a malloc call left inside gpu.module has no
+  // resolvable symbol on the device — it assembles to PTX "successfully"
+  // but the kernel is broken. alloca lowers to ordinary local/register
+  // storage instead, which the NVPTX backend handles fine. The default
+  // size threshold (1024 bytes) leaves the actual output buffer, which
+  // isn't a per-tile scratch alloc, on the heap as before.
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::bufferization::createPromoteBuffersToStackPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  pm.addPass(
+      mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
+  pm.addPass(
+      mlir::bufferization::createBufferDeallocationSimplificationPass());
+  pm.addPass(mlir::bufferization::createLowerDeallocationsPass());
+
   // Convert scf.forall (tile loops, with GPU mapping) → scf.parallel so
-  // gpu-map-parallel-loops can annotate them for blockIdx mapping.
+  // gpu-map-parallel-loops can annotate them for blockIdx mapping. Must stay
+  // post-bufferize: scf.parallel has no results (side-effecting only), so it
+  // can't represent the tensor-SSA form scf.forall has pre-bufferize — same
+  // hard gate as the CPU forall-to-parallel/convert-scf-to-openmp passes.
   pm.addPass(mlir::createForallToParallelLoopPass());
 
   pm.addPass(mlir::createConvertLinalgToParallelLoopsPass());
@@ -550,7 +536,18 @@ void MLIRLowering::addGPUNVVMPasses(mlir::PassManager &pm) {
   auto &gpuPm = pm.nest<mlir::gpu::GPUModuleOp>();
   gpuPm.addPass(mlir::createConvertGpuOpsToNVVMOps());
 
-  addSharedFinalLLVMLoweringPasses(pm);
+  // Lower inner scf.for loops → CF (scf.parallel/forall already converted).
+  pm.addPass(mlir::createSCFToControlFlowPass());
+  // Expand memref.subview with dynamic offsets (produced by tiling) into
+  // explicit arith/affine pointer arithmetic — must run before lower-affine
+  // and finalize-memref-to-llvm.
+  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
+  // Lower affine.apply (produced by expand-strided-metadata) to arith ops.
+  pm.addPass(mlir::createLowerAffinePass());
+  // Lower arith ops → LLVM (after affine is gone).
+  pm.addPass(mlir::createArithToLLVMConversionPass());
+  pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+  pm.addPass(mlir::createConvertControlFlowToLLVMPass());
 
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
 }
