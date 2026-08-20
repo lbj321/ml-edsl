@@ -7,13 +7,6 @@
 
 namespace mlir_edsl {
 
-// Parse `strategy` eagerly using `ctx` (which must already have transform
-// dialect extensions registered) and return a pass that applies it.
-// If `guardLibraryCall` is non-empty, the pass is a no-op on modules that
-// don't contain a linalg.generic with that library_call attribute.
-std::unique_ptr<mlir::Pass> createTransformStrategyPass(
-    mlir::MLIRContext *ctx, llvm::StringRef strategy,
-    llvm::StringRef guardLibraryCall = "");
 std::unique_ptr<mlir::Pass> createLinalgOuterTileAndFusePass(
     int64_t tileM = 64, int64_t tileN = 64);
 std::unique_ptr<mlir::Pass> createLinalgMatmulToContractPass();
