@@ -250,6 +250,14 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulParallelTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
+  // Cache-block K into serial 256-wide chunks for matmuls whose K is large
+  // (a no-op below that threshold). Targets both the epilogue-fusion path and
+  // the fallback above, since both leave the matmul's K full-length inside
+  // the outer forall. See LinalgMatmulKTilingPass for why this matters — CPU
+  // cache sizes, not correctness.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulKTilingPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
   // Inner 8x8 serial tiling, also run on tensor semantics (pre-bufferize) for
   // the same reason as the outer tiling above. Nesting inside the outer
   // forall's boundary tile (e.g. the 32-wide remainder on a 96x96 matmul)

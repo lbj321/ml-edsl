@@ -20,6 +20,14 @@ SIZES = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
 WARMUP = 5
 
 
+def best_of(fn, n: int) -> float:
+    """Minimum single-call time over `n` samples. More robust than a mean
+    (timeit.timeit(...)/n): an averaged measurement gets dragged up by any
+    scheduling hiccup among the n calls, while the minimum is only ever
+    pulled toward the true best-case cost."""
+    return min(timeit.repeat(fn, number=1, repeat=n))
+
+
 def repeats_for(N: int) -> int:
     """Scale repeat count down for large N to keep benchmark runtime reasonable."""
     if N <= 8:
@@ -107,9 +115,9 @@ def main():
             np.add(A, b)
             np.maximum(A, 0.0)
 
-        np_matmul_t[N] = timeit.timeit(lambda: np.matmul(A, B), number=n) / n
-        np_bias_t[N]   = timeit.timeit(lambda: np.add(A, b),    number=n) / n
-        np_relu_t[N]   = timeit.timeit(lambda: np.maximum(A, 0.0), number=n) / n
+        np_matmul_t[N] = best_of(lambda: np.matmul(A, B), n)
+        np_bias_t[N]   = best_of(lambda: np.add(A, b), n)
+        np_relu_t[N]   = best_of(lambda: np.maximum(A, 0.0), n)
         print(f"  numpy {N:>3}x{N}: matmul={np_matmul_t[N]*1e6:.2f} µs  bias={np_bias_t[N]*1e6:.2f} µs  relu={np_relu_t[N]*1e6:.2f} µs")
 
     # Phase 2: EDSL benchmarks (triggers libomp RTLD_GLOBAL on first call).
@@ -128,19 +136,19 @@ def main():
         edsl_fn, matmul_compile = make_edsl_matmul(N)
         for _ in range(WARMUP):
             edsl_fn(A, B)
-        matmul_t = timeit.timeit(lambda: edsl_fn(A, B), number=n) / n
+        matmul_t = best_of(lambda: edsl_fn(A, B), n)
         matmul_rows.append((label, matmul_t, np_matmul_t[N], matmul_compile))
 
         edsl_fn, bias_compile = make_edsl_bias_add(N)
         for _ in range(WARMUP):
             edsl_fn(A, b)
-        bias_t = timeit.timeit(lambda: edsl_fn(A, b), number=n) / n
+        bias_t = best_of(lambda: edsl_fn(A, b), n)
         bias_rows.append((label, bias_t, np_bias_t[N], bias_compile))
 
         edsl_fn, relu_compile = make_edsl_relu(N)
         for _ in range(WARMUP):
             edsl_fn(A)
-        relu_t = timeit.timeit(lambda: edsl_fn(A), number=n) / n
+        relu_t = best_of(lambda: edsl_fn(A), n)
         relu_rows.append((label, relu_t, np_relu_t[N], relu_compile))
 
         print(f"  edsl  {N:>3}x{N}: matmul={matmul_t*1e6:.2f} µs (compile={matmul_compile*1e3:.1f} ms)  bias={bias_t*1e6:.2f} µs  relu={relu_t*1e6:.2f} µs")

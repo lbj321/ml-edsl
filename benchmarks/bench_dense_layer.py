@@ -13,8 +13,16 @@ import numpy as np
 from mlir_edsl import ml_function, Tensor, f32, relu
 from mlir_edsl.backend import get_backend
 
-SIZES = [2, 4, 8, 16, 32, 64, 128, 256, 512]
+SIZES = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
 WARMUP = 5
+
+
+def best_of(fn, n: int) -> float:
+    """Minimum single-call time over `n` samples. More robust than a mean
+    (timeit.timeit(...)/n): an averaged measurement gets dragged up by any
+    scheduling hiccup among the n calls, while the minimum is only ever
+    pulled toward the true best-case cost."""
+    return min(timeit.repeat(fn, number=1, repeat=n))
 
 
 def repeats_for(N: int) -> int:
@@ -25,7 +33,9 @@ def repeats_for(N: int) -> int:
         return 1_000
     if N <= 128:
         return 200
-    return 50
+    if N <= 512:
+        return 50
+    return 5
 
 
 def make_edsl_dense(N: int):
@@ -63,7 +73,7 @@ def main():
         for _ in range(WARMUP):
             np.maximum(X @ W + b, 0.0)
 
-        numpy_times[N] = timeit.timeit(lambda: np.maximum(X @ W + b, 0.0), number=n) / n
+        numpy_times[N] = best_of(lambda: np.maximum(X @ W + b, 0.0), n)
         print(f"  numpy {N:>3}x{N}: {numpy_times[N] * 1e6:.2f} µs")
 
     # Phase 2: EDSL benchmarks (triggers libomp RTLD_GLOBAL on first call).
@@ -81,7 +91,7 @@ def main():
         for _ in range(WARMUP):
             edsl_fn(X, W, b)
 
-        edsl_times[N] = timeit.timeit(lambda: edsl_fn(X, W, b), number=n) / n
+        edsl_times[N] = best_of(lambda: edsl_fn(X, W, b), n)
         print(f"  edsl  {N:>3}x{N}: call={edsl_times[N] * 1e6:.2f} µs  compile={compile_times[N] * 1e3:.1f} ms")
 
     print(f"\n{'Size':>6}  {'Call (µs)':>12}  {'NumPy (µs)':>12}  {'Ratio':>8}  {'Compile (ms)':>14}")

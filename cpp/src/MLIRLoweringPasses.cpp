@@ -367,6 +367,80 @@ struct LinalgMatmulTilingPass
   }
 };
 
+// Cache-blocks the K (reduction) dimension of linalg.matmul ops whose K is
+// large. Runs after the outer 64x64 parallel tiling (LinalgOuterTileAndFuse-
+// Pass's fusion path and LinalgMatmulTilingPass's ForallOp fallback both
+// leave K untiled/full-length on the matmul they place inside the
+// scf.forall, to avoid reduction races) and before the 8x8x8 inner
+// vectorization tiling. Without this, the inner loop streams the *entire*
+// K-length A-row-panel and B-column-panel through every 64x64 output tile;
+// once K is large those panels no longer fit L1/L2, and each tile re-fetches
+// from L3/memory on every pass instead of reusing cache — this is what turns
+// into a >400ms 2048x2048 matmul (17x slower than a naive NumPy baseline)
+// despite the vectorized inner kernel.
+//
+// kKcTileSize=256 comes directly from this project's dev-machine cache sizes
+// (32KiB L1d / core): with the existing 8-wide (Mr=Nr=8) register tile, a
+// Kc x 8 panel of each operand is (Kc*8 + Kc*8)*4 bytes, which stays within
+// half of L1d up to Kc=256.
+struct LinalgMatmulKTilingPass
+    : public mlir::PassWrapper<LinalgMatmulKTilingPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulKTilingPass)
+
+  static constexpr int64_t kKcTileSize = 256;
+
+  llvm::StringRef getArgument() const override {
+    return "linalg-tile-matmul-k";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Cache-block the K reduction dimension of large-K linalg.matmul ops";
+  }
+
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
+    func.walk([&](mlir::linalg::MatmulOp op) {
+      // Only touch matmuls already placed inside an outer parallel tile (by
+      // the epilogue-fusion pass or the parallel-tiling fallback) — those
+      // are exactly the ones left with full-length K. A matmul with no
+      // forall parent hasn't reached outer tiling yet and will shortly, so
+      // skip it here rather than cache-block a shape that's about to change.
+      if (!op->getParentOfType<mlir::scf::ForallOp>())
+        return;
+
+      auto lhsType = llvm::cast<mlir::ShapedType>(op.getInputs()[0].getType());
+      int64_t k = lhsType.getShape().back();
+      if (mlir::ShapedType::isDynamic(k) || k <= kKcTileSize)
+        return;
+
+      matmuls.push_back(op);
+    });
+
+    for (mlir::linalg::MatmulOp op : matmuls) {
+      // Named variable required — setTileSizes captures a non-owning ArrayRef.
+      llvm::SmallVector<mlir::OpFoldResult> tileSizes =
+          mlir::getAsIndexOpFoldResult(op->getContext(), {0, 0, kKcTileSize});
+      mlir::scf::SCFTilingOptions opts;
+      opts.setTileSizes(tileSizes);
+      opts.setLoopType(mlir::scf::SCFTilingOptions::LoopType::ForOp);
+      rewriter.setInsertionPoint(op);
+      auto result = mlir::scf::tileUsingSCF(
+          rewriter, llvm::cast<mlir::TilingInterface>(op.getOperation()), opts);
+      if (mlir::failed(result)) {
+        op->emitWarning("linalg-tile-matmul-k: tiling failed, skipping op");
+        continue;
+      }
+      if (op->getNumResults() == 0)
+        rewriter.eraseOp(op);
+      else
+        rewriter.replaceOp(op, result->mergeResult.replacements);
+    }
+  }
+};
+
 // Tiles linalg.generic ops along the innermost loop dimension to `tileSize`.
 // All outer dims are left untiled (size 0). This keeps vectorization from
 // seeing the full tensor as a single vector (e.g. vector<512x512xf32>), which
@@ -528,6 +602,9 @@ std::unique_ptr<mlir::Pass> createLinalgMatmulTilingPass() {
 std::unique_ptr<mlir::Pass> createLinalgMatmulParallelTilingPass() {
   using LoopType = mlir::scf::SCFTilingOptions::LoopType;
   return std::make_unique<LinalgMatmulTilingPass>(64, 64, 0, LoopType::ForallOp);
+}
+std::unique_ptr<mlir::Pass> createLinalgMatmulKTilingPass() {
+  return std::make_unique<LinalgMatmulKTilingPass>();
 }
 
 #ifdef MLIR_EDSL_CUDA_ENABLED
