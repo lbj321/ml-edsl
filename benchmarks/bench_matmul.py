@@ -9,30 +9,13 @@ to get stable measurements even for small matrices.
 """
 
 import time
-import timeit
 
 import numpy as np
 
 from mlir_edsl import ml_function, Tensor, f32, matmul, relu
 from mlir_edsl.backend import get_backend
 
-SIZES = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
-WARMUP = 5
-
-
-def repeats_for(N: int) -> int:
-    """Scale repeat count down for large N to keep benchmark runtime reasonable."""
-    if N <= 8:
-        return 10_000
-    if N <= 32:
-        return 1_000
-    if N <= 128:
-        return 200
-    if N <= 256:
-        return 200
-    if N <= 512:
-        return 150
-    return 5
+from common import SIZES, WARMUP, best_of, repeats_for, print_section
 
 
 def make_edsl_matmul(N: int):
@@ -73,15 +56,6 @@ def make_edsl_relu(N: int):
     return relu_fn, time.perf_counter() - t0
 
 
-def print_section(title: str, rows: list):
-    print(f"\n=== {title} ===")
-    print(f"{'Size':>6}  {'Call (µs)':>12}  {'NumPy (µs)':>12}  {'Ratio':>8}  {'Compile (ms)':>14}")
-    print("-" * 62)
-    for size_label, edsl_t, numpy_t, compile_t in rows:
-        ratio = edsl_t / numpy_t
-        print(f"{size_label:>6}  {edsl_t * 1e6:>12.2f}  {numpy_t * 1e6:>12.2f}  {ratio:>7.2f}x  {compile_t * 1e3:>14.1f}")
-
-
 def main():
     rng = np.random.default_rng(42)
 
@@ -107,9 +81,9 @@ def main():
             np.add(A, b)
             np.maximum(A, 0.0)
 
-        np_matmul_t[N] = timeit.timeit(lambda: np.matmul(A, B), number=n) / n
-        np_bias_t[N]   = timeit.timeit(lambda: np.add(A, b),    number=n) / n
-        np_relu_t[N]   = timeit.timeit(lambda: np.maximum(A, 0.0), number=n) / n
+        np_matmul_t[N] = best_of(lambda: np.matmul(A, B), n)
+        np_bias_t[N]   = best_of(lambda: np.add(A, b), n)
+        np_relu_t[N]   = best_of(lambda: np.maximum(A, 0.0), n)
         print(f"  numpy {N:>3}x{N}: matmul={np_matmul_t[N]*1e6:.2f} µs  bias={np_bias_t[N]*1e6:.2f} µs  relu={np_relu_t[N]*1e6:.2f} µs")
 
     # Phase 2: EDSL benchmarks (triggers libomp RTLD_GLOBAL on first call).
@@ -128,19 +102,19 @@ def main():
         edsl_fn, matmul_compile = make_edsl_matmul(N)
         for _ in range(WARMUP):
             edsl_fn(A, B)
-        matmul_t = timeit.timeit(lambda: edsl_fn(A, B), number=n) / n
+        matmul_t = best_of(lambda: edsl_fn(A, B), n)
         matmul_rows.append((label, matmul_t, np_matmul_t[N], matmul_compile))
 
         edsl_fn, bias_compile = make_edsl_bias_add(N)
         for _ in range(WARMUP):
             edsl_fn(A, b)
-        bias_t = timeit.timeit(lambda: edsl_fn(A, b), number=n) / n
+        bias_t = best_of(lambda: edsl_fn(A, b), n)
         bias_rows.append((label, bias_t, np_bias_t[N], bias_compile))
 
         edsl_fn, relu_compile = make_edsl_relu(N)
         for _ in range(WARMUP):
             edsl_fn(A)
-        relu_t = timeit.timeit(lambda: edsl_fn(A), number=n) / n
+        relu_t = best_of(lambda: edsl_fn(A), n)
         relu_rows.append((label, relu_t, np_relu_t[N], relu_compile))
 
         print(f"  edsl  {N:>3}x{N}: matmul={matmul_t*1e6:.2f} µs (compile={matmul_compile*1e3:.1f} ms)  bias={bias_t*1e6:.2f} µs  relu={relu_t*1e6:.2f} µs")

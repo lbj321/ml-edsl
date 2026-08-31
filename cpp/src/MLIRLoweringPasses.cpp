@@ -3,22 +3,15 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
-#include "mlir/Dialect/Linalg/Transforms/TilingInterfaceImpl.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/Dialect/Transform/IR/TransformDialect.h"
-#include "mlir/Dialect/Transform/Interfaces/TransformInterfaces.h"
-#include "mlir/Dialect/Transform/Transforms/TransformInterpreterUtils.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -367,6 +360,80 @@ struct LinalgMatmulTilingPass
   }
 };
 
+// Cache-blocks the K (reduction) dimension of linalg.matmul ops whose K is
+// large. Runs after the outer 64x64 parallel tiling (LinalgOuterTileAndFuse-
+// Pass's fusion path and LinalgMatmulTilingPass's ForallOp fallback both
+// leave K untiled/full-length on the matmul they place inside the
+// scf.forall, to avoid reduction races) and before the 8x8x8 inner
+// vectorization tiling. Without this, the inner loop streams the *entire*
+// K-length A-row-panel and B-column-panel through every 64x64 output tile;
+// once K is large those panels no longer fit L1/L2, and each tile re-fetches
+// from L3/memory on every pass instead of reusing cache — this is what turns
+// into a >400ms 2048x2048 matmul (17x slower than a naive NumPy baseline)
+// despite the vectorized inner kernel.
+//
+// kKcTileSize=256 comes directly from this project's dev-machine cache sizes
+// (32KiB L1d / core): with the existing 8-wide (Mr=Nr=8) register tile, a
+// Kc x 8 panel of each operand is (Kc*8 + Kc*8)*4 bytes, which stays within
+// half of L1d up to Kc=256.
+struct LinalgMatmulKTilingPass
+    : public mlir::PassWrapper<LinalgMatmulKTilingPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulKTilingPass)
+
+  static constexpr int64_t kKcTileSize = 256;
+
+  llvm::StringRef getArgument() const override {
+    return "linalg-tile-matmul-k";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Cache-block the K reduction dimension of large-K linalg.matmul ops";
+  }
+
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
+    func.walk([&](mlir::linalg::MatmulOp op) {
+      // Only touch matmuls already placed inside an outer parallel tile (by
+      // the epilogue-fusion pass or the parallel-tiling fallback) — those
+      // are exactly the ones left with full-length K. A matmul with no
+      // forall parent hasn't reached outer tiling yet and will shortly, so
+      // skip it here rather than cache-block a shape that's about to change.
+      if (!op->getParentOfType<mlir::scf::ForallOp>())
+        return;
+
+      auto lhsType = llvm::cast<mlir::ShapedType>(op.getInputs()[0].getType());
+      int64_t k = lhsType.getShape().back();
+      if (mlir::ShapedType::isDynamic(k) || k <= kKcTileSize)
+        return;
+
+      matmuls.push_back(op);
+    });
+
+    for (mlir::linalg::MatmulOp op : matmuls) {
+      // Named variable required — setTileSizes captures a non-owning ArrayRef.
+      llvm::SmallVector<mlir::OpFoldResult> tileSizes =
+          mlir::getAsIndexOpFoldResult(op->getContext(), {0, 0, kKcTileSize});
+      mlir::scf::SCFTilingOptions opts;
+      opts.setTileSizes(tileSizes);
+      opts.setLoopType(mlir::scf::SCFTilingOptions::LoopType::ForOp);
+      rewriter.setInsertionPoint(op);
+      auto result = mlir::scf::tileUsingSCF(
+          rewriter, llvm::cast<mlir::TilingInterface>(op.getOperation()), opts);
+      if (mlir::failed(result)) {
+        op->emitWarning("linalg-tile-matmul-k: tiling failed, skipping op");
+        continue;
+      }
+      if (op->getNumResults() == 0)
+        rewriter.eraseOp(op);
+      else
+        rewriter.replaceOp(op, result->mergeResult.replacements);
+    }
+  }
+};
+
 // Tiles linalg.generic ops along the innermost loop dimension to `tileSize`.
 // All outer dims are left untiled (size 0). This keeps vectorization from
 // seeing the full tensor as a single vector (e.g. vector<512x512xf32>), which
@@ -425,81 +492,10 @@ struct LinalgGenericTilingPass
   }
 };
 
-// Applies a pre-parsed transform dialect strategy to the module.
-// The strategy module is parsed eagerly at pipeline setup time (when the
-// context is fully configured) and shared via shared_ptr across clones.
-// This avoids context mutation during pass execution and parse-time
-// "unknown op" errors caused by extensions not yet being applied.
-struct TransformStrategyPass
-    : public mlir::PassWrapper<TransformStrategyPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TransformStrategyPass)
-
-  // Shared across clones — parsed once at factory time.
-  std::shared_ptr<mlir::OwningOpRef<mlir::ModuleOp>> strategyModule;
-  // If non-empty, skip modules that don't contain a linalg.generic with
-  // this library_call string (e.g. skip pure matmul for a relu strategy).
-  std::string guardLibraryCall;
-
-  TransformStrategyPass(
-      std::shared_ptr<mlir::OwningOpRef<mlir::ModuleOp>> strategyMod,
-      llvm::StringRef guard)
-      : strategyModule(std::move(strategyMod)),
-        guardLibraryCall(guard.str()) {}
-
-  llvm::StringRef getArgument() const override {
-    return "apply-transform-strategy";
-  }
-  llvm::StringRef getDescription() const override {
-    return "Apply a pre-parsed transform dialect strategy to the module";
-  }
-
-  void runOnOperation() override {
-    mlir::ModuleOp module = getOperation();
-
-    if (!guardLibraryCall.empty()) {
-      // Require exactly one op with the guard library_call. The strategy is
-      // designed for a single dense layer (one relu → one forall). With multiple
-      // layers in one function, match returns multi-value handles and
-      // fuse_into_containing_op would cross-fuse incorrectly.
-      int count = 0;
-      module.walk([&](mlir::linalg::GenericOp op) {
-        auto lc = op->getAttrOfType<mlir::StringAttr>("library_call");
-        if (lc && lc.getValue() == guardLibraryCall)
-          ++count;
-      });
-      if (count != 1)
-        return;
-    }
-
-    mlir::Operation *transformRoot =
-        mlir::transform::detail::findTransformEntryPoint(
-            module, **strategyModule);
-    if (!transformRoot) {
-      signalPassFailure();
-      return;
-    }
-    mlir::transform::TransformOptions options;
-    if (mlir::failed(mlir::transform::applyTransformNamedSequence(
-            module, transformRoot, **strategyModule, options)))
-      signalPassFailure();
-  }
-};
-
 } // namespace
 
 namespace mlir_edsl {
 
-std::unique_ptr<mlir::Pass> createTransformStrategyPass(mlir::MLIRContext *ctx,
-                                                        llvm::StringRef strategy,
-                                                        llvm::StringRef guardLibraryCall) {
-  auto strategyMod = std::make_shared<mlir::OwningOpRef<mlir::ModuleOp>>(
-      mlir::parseSourceString<mlir::ModuleOp>(strategy, ctx));
-  if (!*strategyMod)
-    llvm::report_fatal_error("TransformStrategyPass: failed to parse strategy");
-  return std::make_unique<TransformStrategyPass>(std::move(strategyMod),
-                                                 guardLibraryCall);
-}
 std::unique_ptr<mlir::Pass> createLinalgOuterTileAndFusePass(int64_t tileM,
                                                               int64_t tileN) {
   return std::make_unique<LinalgOuterTileAndFusePass>(tileM, tileN);
@@ -528,6 +524,9 @@ std::unique_ptr<mlir::Pass> createLinalgMatmulTilingPass() {
 std::unique_ptr<mlir::Pass> createLinalgMatmulParallelTilingPass() {
   using LoopType = mlir::scf::SCFTilingOptions::LoopType;
   return std::make_unique<LinalgMatmulTilingPass>(64, 64, 0, LoopType::ForallOp);
+}
+std::unique_ptr<mlir::Pass> createLinalgMatmulKTilingPass() {
+  return std::make_unique<LinalgMatmulKTilingPass>();
 }
 
 #ifdef MLIR_EDSL_CUDA_ENABLED
