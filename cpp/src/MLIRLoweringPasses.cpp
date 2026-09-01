@@ -458,7 +458,7 @@ struct LinalgGenericTilingPass
 
     llvm::SmallVector<mlir::linalg::LinalgOp> ops;
     func.walk([&](mlir::linalg::LinalgOp op) {
-      if (mlir::isa<mlir::linalg::GenericOp, mlir::linalg::FillOp>(op))
+      if (mlir::isa<mlir::linalg::GenericOp>(op))
         ops.push_back(op);
     });
 
