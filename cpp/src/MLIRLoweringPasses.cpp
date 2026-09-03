@@ -17,21 +17,37 @@
 
 namespace {
 
-// Tiles the relu linalg.generic (found via its "relu" library_call attribute,
-// see LinalgBuilder.cpp) and greedily fuses its linalg producers (bias_add,
-// matmul, fill) upward into the generated scf.forall loops. tileConsumerAnd-
-// FuseProducersUsingSCF walks the use-def chain transitively, so this pulls
-// in the whole bias_add → matmul → fill chain in one call without needing
-// them pre-merged into a single generic.
+// Tiles a fusion root and greedily fuses its linalg producers upward into
+// the generated scf.forall loops. tileConsumerAndFuseProducersUsingSCF walks
+// the use-def chain transitively, so this pulls in a whole producer chain in
+// one call without needing them pre-merged into a single generic.
 //
-// Running in tensor land (before bufferization) enables epilogue fusion:
-// fill → matmul → bias_add → relu all execute on the same [tileM×tileN] tile,
-// keeping the matmul output in L2 cache instead of writing it to DRAM first.
+// Two trigger paths, tried in order:
+//   1. Epilogue fusion: the relu linalg.generic (found via its "relu"
+//      library_call attribute, see LinalgBuilder.cpp) is the root, pulling in
+//      the bias_add → matmul → fill chain above it.
+//   2. Bare matmul: when there is no relu epilogue, a plain linalg.matmul is
+//      used as the root instead, pulling in just its fill producer. Without
+//      this, an unfused fill is left as a separate top-level op that (on GPU)
+//      becomes its own gpu.launch_func, or (on CPU) is lowered to a plain
+//      scf.for outside the matmul's omp.parallel region and runs single-
+//      threaded ahead of the parallel matmul.
 //
-// After this pass the body of the scf.forall contains:
+// Running in tensor land (before bufferization) enables this fusion: the
+// producer chain all executes on the same [tileM×tileN] tile, keeping the
+// matmul output in L2 cache instead of writing it to DRAM first.
+//
+// After this pass the body of the scf.forall contains either:
 //   linalg.fill (tile) → linalg.matmul (tile, full K) → linalg.generic (tile)
+// or, for the bare-matmul path:
+//   linalg.fill (tile) → linalg.matmul (tile, full K)
 // The scf.forall is subsequently converted to omp.parallel by the existing
 // ForallToParallelLoop + ConvertSCFToOpenMP pass sequence.
+//
+// Note: both walks below keep the *last* matching op found rather than the
+// first, so a function with multiple independent relu epilogues or multiple
+// independent bare matmuls will only have one of them fused here; the others
+// are left unfused with no diagnostic emitted.
 struct LinalgOuterTileAndFusePass
     : public mlir::PassWrapper<LinalgOuterTileAndFusePass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
@@ -45,8 +61,9 @@ struct LinalgOuterTileAndFusePass
     return "linalg-outer-tile-and-fuse";
   }
   llvm::StringRef getDescription() const override {
-    return "Tile bias+relu linalg.generic and fuse matmul+fill producers into "
-           "scf.forall loops (epilogue fusion, pre-bufferization)";
+    return "Tile relu epilogue (or bare matmul) and fuse matmul+fill "
+           "producers into scf.forall loops (epilogue fusion, "
+           "pre-bufferization)";
   }
 
   void runOnOperation() override {
@@ -55,12 +72,18 @@ struct LinalgOuterTileAndFusePass
 
     // Find the relu generic by its library_call attribute (set in
     // LinalgBuilder.cpp). Producer fusion below walks backward from here.
-    mlir::linalg::GenericOp consumer;
+    mlir::Operation *consumer = nullptr;
     func.walk([&](mlir::linalg::GenericOp op) {
       auto libCall = op->getAttrOfType<mlir::StringAttr>("library_call");
       if (libCall && libCall.getValue() == "relu")
         consumer = op;
     });
+
+    if (!consumer) {
+      // No relu epilogue: fuse fill directly into a bare matmul instead.
+      func.walk([&](mlir::linalg::MatmulOp op) { consumer = op; });
+    }
+
     if (!consumer)
       return;
 
@@ -74,9 +97,7 @@ struct LinalgOuterTileAndFusePass
 
     rewriter.setInsertionPoint(consumer);
     auto fuseResult = mlir::scf::tileConsumerAndFuseProducersUsingSCF(
-        rewriter,
-        mlir::cast<mlir::TilingInterface>(consumer.getOperation()),
-        opts);
+        rewriter, mlir::cast<mlir::TilingInterface>(consumer), opts);
     if (mlir::failed(fuseResult)) {
       consumer->emitWarning(
           "linalg-outer-tile-and-fuse: tiling failed, skipping");
