@@ -92,13 +92,23 @@ struct LinalgOuterTileAndFusePass
   }
 };
 
-// Lowers linalg.matmul tiles with static 8x8 shape directly to vector.contract
+// Lowers any static-shape linalg.matmul tile directly to vector.contract
 // using standard 2D indexing maps {(m,k),(k,n),(m,n)}. This bypasses the
 // linalg vectorizer which always produces a 3D double-broadcast form
 // {(d0,d1,d2),(d0,d1,d2),(d0,d1)} that the OuterProduct lowering strategy
-// cannot decompose into vector.outerproduct → vector.fma.
+// cannot decompose into vector.outerproduct → vector.fma — instead it falls
+// back to a per-output-element vector.extract -> arith.mulf ->
+// vector.reduction -> vector.insert chain, with no FMA at all.
 //
-// Runs pre-bufferize (tensor semantics), so operands are tensor<8x8xf32>, not
+// Deliberately shape-agnostic: this pass's only job is to avoid ever
+// producing the broken 3D-broadcast form. How efficiently a given (M, K, N)
+// then lowers to hardware (e.g. whether it's a clean full-width AVX2 FMA, or
+// a narrower/masked op for a shape that isn't a multiple of the target
+// vector width) is left to VectorContractToOuterProductPass and the
+// standard vector-to-llvm legalization further down the pipeline — not
+// this pass's concern.
+//
+// Runs pre-bufferize (tensor semantics), so operands are tensors, not
 // memref. vector.transfer_write on a tensor is functional — it returns a new
 // tensor rather than mutating C in place — so the matmul's tensor result is
 // replaced with that value instead of being erased as a pure side effect.
@@ -110,7 +120,7 @@ struct LinalgMatmulToContractPass
     return "linalg-matmul-to-contract";
   }
   llvm::StringRef getDescription() const override {
-    return "Lower static 8x8 linalg.matmul tiles to vector.contract with "
+    return "Lower static-shape linalg.matmul tiles to vector.contract with "
            "standard (m,k)x(k,n)->(m,n) indexing maps";
   }
   void runOnOperation() override {
@@ -132,31 +142,49 @@ struct LinalgMatmulToContractPass
       if (!aType || !bType || !cType)
         continue;
 
-      // Only handle static 8x8 tiles — dynamic boundary tiles fall through
-      // to convert-linalg-to-loops for scalar lowering.
-      if (!aType.hasStaticShape() || aType.getShape() != llvm::ArrayRef<int64_t>{8, 8})
-        continue;
-      if (!bType.hasStaticShape() || bType.getShape() != llvm::ArrayRef<int64_t>{8, 8})
-        continue;
-      if (!cType.hasStaticShape() || cType.getShape() != llvm::ArrayRef<int64_t>{8, 8})
+      // Dynamic-shape tiles (boundary tiles under dynamic tiling) fall
+      // through to convert-linalg-to-loops for scalar lowering.
+      if (!aType.hasStaticShape() || !bType.hasStaticShape() ||
+          !cType.hasStaticShape())
         continue;
 
-      auto f32 = mlir::Float32Type::get(ctx);
-      auto vecType = mlir::VectorType::get({8, 8}, f32);
+      int64_t M = aType.getShape()[0];
+      int64_t K = aType.getShape()[1];
+      int64_t N = bType.getShape()[1];
+      if (bType.getShape()[0] != K || cType.getShape() != llvm::ArrayRef<int64_t>{M, N})
+        continue;
+
+      mlir::Type elemType = aType.getElementType();
+      if (bType.getElementType() != elemType || cType.getElementType() != elemType)
+        continue;
+
+      // vector.transfer_read's padding value must be a zero of elemType;
+      // only float/integer scalars are supported here.
+      auto floatType = mlir::dyn_cast<mlir::FloatType>(elemType);
+      auto intType = mlir::dyn_cast<mlir::IntegerType>(elemType);
+      if (!floatType && !intType)
+        continue;
+
+      auto vecTypeA = mlir::VectorType::get({M, K}, elemType);
+      auto vecTypeB = mlir::VectorType::get({K, N}, elemType);
+      auto vecTypeC = mlir::VectorType::get({M, N}, elemType);
       mlir::Location loc = matmul.getLoc();
       rewriter.setInsertionPoint(matmul);
 
       auto zero = rewriter.create<mlir::arith::ConstantIndexOp>(loc, 0);
-      auto pad = rewriter.create<mlir::arith::ConstantOp>(
-          loc, f32, rewriter.getF32FloatAttr(0.0f));
+      mlir::Value pad =
+          floatType ? rewriter.create<mlir::arith::ConstantOp>(
+                          loc, elemType, mlir::FloatAttr::get(floatType, 0.0))
+                    : rewriter.create<mlir::arith::ConstantOp>(
+                          loc, elemType, mlir::IntegerAttr::get(intType, 0));
 
       llvm::SmallVector<bool> inBounds = {true, true};
       mlir::Value vA = rewriter.create<mlir::vector::TransferReadOp>(
-          loc, vecType, A, mlir::ValueRange{zero, zero}, pad, inBounds);
+          loc, vecTypeA, A, mlir::ValueRange{zero, zero}, pad, inBounds);
       mlir::Value vB = rewriter.create<mlir::vector::TransferReadOp>(
-          loc, vecType, B, mlir::ValueRange{zero, zero}, pad, inBounds);
+          loc, vecTypeB, B, mlir::ValueRange{zero, zero}, pad, inBounds);
       mlir::Value vC = rewriter.create<mlir::vector::TransferReadOp>(
-          loc, vecType, C, mlir::ValueRange{zero, zero}, pad, inBounds);
+          loc, vecTypeC, C, mlir::ValueRange{zero, zero}, pad, inBounds);
 
       // Standard matmul indexing: (m,n,k) -> (m,k) for A, (k,n) for B, (m,n) for C
       mlir::AffineExpr m, n, k;
