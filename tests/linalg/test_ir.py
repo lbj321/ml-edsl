@@ -160,7 +160,16 @@ class TestDirectOutputBuffer:
         """bias+relu is fused with the matmul and fully vectorized into straight-line
         vector/arith ops (vectorization and contract-to-outerproduct lowering both now
         run pre-bufferize) — no linalg.generic or vector.contract survives, and the
-        result writes directly into the out-param."""
+        result writes directly into the out-param.
+
+        No separate arith.addf for the bias: since LinalgMatmulToContractPass now
+        produces a clean 2D-map vector.contract for this (non-8x8) shape too, the
+        contract's zero accumulator plus the following add-bias is folded by
+        canonicalization into a single vector.contract/fma chain whose initial
+        accumulator is the bias itself — an add can only fuse into the contract this
+        way when the contract has the clean 2D form; the 3D double-broadcast form
+        (which this shape hit before the matmul-to-contract pass was generalized
+        beyond 8x8) blocks that fold, so a real arith.addf would remain."""
         @ml_function
         def dense_relu(W: Tensor[f32, 2, 4], x: Tensor[f32, 4, 3], b: Tensor[f32, 3]) -> Tensor[f32, 2, 3]:
             return relu(matmul(W, x) + b)
@@ -174,7 +183,7 @@ class TestDirectOutputBuffer:
         // CHECK: func.func @dense_relu
         // CHECK-NOT: linalg.generic
         // CHECK-NOT: vector.contract
-        // CHECK: arith.addf
+        // CHECK: vector.fma
         // CHECK: arith.maximumf
         // CHECK: vector.transfer_write {{.*}}, %arg3
         // CHECK-NOT: memref.alloc

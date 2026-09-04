@@ -5,7 +5,7 @@ replaced by lower-level ops at specific pipeline stages.
 """
 
 import numpy as np
-from mlir_edsl import ml_function, Tensor, f32, dot, matmul, tensor_sum, relu
+from mlir_edsl import ml_function, Tensor, f32, i32, dot, matmul, tensor_sum, relu
 
 
 class TestLinalgDotLoweringIR:
@@ -270,8 +270,11 @@ class TestLinalgMatmulToContractPass:
     """IR tests for LinalgMatmulToContractPass (linalg-matmul-to-contract).
 
     Bypasses the linalg vectorizer (which produces a 3D double-broadcast
-    contract) by lowering static 8x8 matmul tiles directly to vector.contract
-    with standard 2D indexing maps {(m,k),(k,n),(m,n)}.
+    contract) by lowering any static-shape matmul directly to vector.contract
+    with standard 2D indexing maps {(m,k),(k,n),(m,n)}. This pass only
+    guarantees the clean 2D form is produced — how efficiently that then
+    lowers to hardware (e.g. full-width AVX2 FMA vs. a narrower op) is
+    downstream's concern (VectorContractToOuterProductPass + vector-to-llvm).
     """
 
     def test_8x8_matmul_emits_vector_contract(self, check_lowered_ir):
@@ -302,9 +305,10 @@ class TestLinalgMatmulToContractPass:
         // CHECK: affine_map<(d0, d1, d2) -> (d0, d1)>
         """, after="linalg-matmul-to-contract")
 
-    def test_non_8x8_matmul_not_lowered(self, check_lowered_ir):
-        """Non-8x8 matmuls are left for the linalg vectorizer — only exact 8x8
-        tiles are handled by this pass."""
+    def test_non_8x8_matmul_also_lowered(self, check_lowered_ir):
+        """Non-8x8 static-shape matmuls are lowered by this pass too — it is
+        not restricted to 8x8 tiles, since the 2D indexing-map construction
+        doesn't depend on the specific M/K/N values."""
         @ml_function
         def mm_fn(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
             return matmul(A, B)
@@ -312,8 +316,37 @@ class TestLinalgMatmulToContractPass:
         mm_fn(np.ones((2, 2), dtype=np.float32),
               np.ones((2, 2), dtype=np.float32))
         check_lowered_ir("""
-        // CHECK: linalg.matmul
-        // CHECK-NOT: vector.contract
+        // CHECK: vector.contract
+        // CHECK-NOT: linalg.matmul
+        """, after="linalg-matmul-to-contract")
+
+    def test_non_square_matmul_lowered(self, check_lowered_ir):
+        """Non-square M/K/N (2x4 @ 4x3) is lowered correctly, using each
+        operand's own shape rather than a single shared shape for all three."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 2, 4], B: Tensor[f32, 4, 3]) -> Tensor[f32, 2, 3]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((2, 4), dtype=np.float32),
+              np.ones((4, 3), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: vector.contract
+        // CHECK-NOT: linalg.matmul
+        """, after="linalg-matmul-to-contract")
+
+    def test_int_matmul_lowered_with_correct_element_type(self, check_lowered_ir):
+        """An integer matmul must not be padded/read as f32 — the pass reads
+        each operand's actual element type instead of assuming float."""
+        @ml_function
+        def mm_fn(A: Tensor[i32, 2, 2], B: Tensor[i32, 2, 2]) -> Tensor[i32, 2, 2]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((2, 2), dtype=np.int32),
+              np.ones((2, 2), dtype=np.int32))
+        check_lowered_ir("""
+        // CHECK: vector.contract
+        // CHECK-SAME: vector<2x2xi32>
+        // CHECK-NOT: linalg.matmul
         """, after="linalg-matmul-to-contract")
 
 
