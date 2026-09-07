@@ -2,28 +2,52 @@
 // to vectorization granularity. Runs as its own --transform-interpreter
 // pass over out/packed.mlir, so the tiled-but-not-yet-vectorized IR can be
 // inspected on its own (out/tiled.mlir).
+//
+// Outer block-grid tiling now mirrors the real compiler's split between
+// parallel and serial tiling (LinalgMatmulParallelTilingPass then
+// LinalgMatmulKTilingPass): the M/N block-grid dims (parallel iterators) go
+// to an scf.forall so the OpenMP conversion path (forall -> parallel ->
+// omp.parallel, later in run.sh) has something to act on; the K block-grid
+// dim (reduction iterator) stays a serial scf.for, since tiling a reduction
+// dim into forall would require per-thread accumulation the plain
+// tile_using_forall op doesn't provide - see TileUsingForallOp's own
+// "user's responsibility" warning in LinalgTransformOps.td.
 module attributes {transform.with_named_sequence} {
   transform.named_sequence @__transform_main(%module: !transform.any_op {transform.readonly}) {
-    // Tile the packed op's outer block-grid dims (M,N,K) to 1, leaving a
-    // 32x32x32 generic per grid cell inside an explicit scf.for nest.
-    // Vectorizing the untiled 6D generic directly would fold the
-    // block-grid trip counts (4x4x4 here) into the vector shape too, which
-    // is wrong - same reasoning as the old linalg-block-pack-matmul
-    // experiment's tile_and_vectorize.mlir.
+    // Tile the packed op's outer M/N block-grid dims (parallel iterators) to
+    // 1 via scf.forall, leaving K block-grid (32) and the 32x32x32 inner
+    // tile untouched.
     %generic = transform.structured.match ops{["linalg.generic"]} in %module
         : (!transform.any_op) -> !transform.any_op
-    %tiled_generic, %mb_loop, %nb_loop, %kb_loop =
-        transform.structured.tile_using_for %generic tile_sizes [1, 1, 1, 0, 0, 0]
-        : (!transform.any_op)
-        -> (!transform.any_op, !transform.any_op, !transform.any_op, !transform.any_op)
+    %tiled_generic_0, %forall =
+        transform.structured.tile_using_forall %generic tile_sizes [1, 1, 0, 0, 0, 0]
+        : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
 
     %func = transform.structured.match ops{["func.func"]} attributes{sym_name = "matmul"} in %module
         : (!transform.any_op) -> !transform.any_op
 
-    // Tiling-by-one leaves the tiled generic at rank 6 with three
-    // unit-extent dims (1x1x1x32x32x32) - fold those away before
-    // vectorizing (in the next stage) or linalg::vectorize's
-    // contraction-detection won't fire.
+    // Tiling-by-one leaves the tiled generic at rank 6 with two unit-extent
+    // dims (1x1x32x32x32x32) - fold those away before tiling K block-grid
+    // below, same reasoning as the old single-level tile_using_for version.
+    transform.apply_patterns to %func {
+      transform.apply_patterns.canonicalization
+      transform.apply_patterns.linalg.tiling_canonicalization
+    } : !transform.any_op
+    transform.apply_cse to %func : !transform.any_op
+    transform.apply_patterns to %func {
+      transform.apply_patterns.linalg.fold_unit_extent_dims_via_reshapes
+    } : !transform.any_op
+
+    // Serial K block-grid tiling (32 -> 1), inside the forall body -
+    // matches LinalgMatmulKTilingPass running nested inside the outer
+    // parallel tile in the real pipeline. Reduction dim, so tile_using_for
+    // (iter_args accumulation), not forall.
+    %generic_1b = transform.structured.match ops{["linalg.generic"]} in %func
+        : (!transform.any_op) -> !transform.any_op
+    %tiled_generic_1b, %kb_loop =
+        transform.structured.tile_using_for %generic_1b tile_sizes [1, 0, 0, 0]
+        : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+
     transform.apply_patterns to %func {
       transform.apply_patterns.canonicalization
       transform.apply_patterns.linalg.tiling_canonicalization
