@@ -10,6 +10,7 @@
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
+#include "mlir/Dialect/Vector/Transforms/VectorRewritePatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -231,6 +232,363 @@ struct LinalgMatmulToContractPass
           loc, result, C, mlir::ValueRange{zero, zero}, inBounds);
 
       rewriter.replaceOp(matmul, newC.getResult());
+    }
+  }
+};
+
+// Marks the linalg.generic that linalg::pack rewrites a linalg.matmul into,
+// so later passes in the experimental packed pipeline (tiling, vectorization)
+// can re-find exactly that op across separate PassManager stages without
+// walking module-wide state or guessing from shape/iterator-type signatures
+// alone — same idea as LinalgBuilder.cpp's "relu" library_call marker (see
+// LinalgOuterTileAndFusePass above). Each stage that further rewrites the
+// marked op must re-attach this attribute to its replacement so the next
+// stage can still find it; LinalgMatmulPackPass sets it once here, the
+// tiling pass below re-attaches it after every tileUsingSCF call.
+constexpr llvm::StringLiteral kPackedMatmulMarker = "mlir_edsl.packed_matmul";
+
+// Experimental: packs each linalg.matmul into 32x32x32 blocks via
+// linalg.pack/unpack, the first stage of the linalg.pack-based lowering
+// pipeline being ported from experiments/matmul-per-tile-packing/pack.mlir
+// (see that file for the transform-dialect version this mirrors). Not yet
+// wired into addCPUPasses — this pass is being built and verified stage by
+// stage before it replaces any part of the default pipeline.
+//
+// Runs pre-bufferize (tensor semantics), like LinalgMatmulToContractPass
+// above. linalg::pack rewrites the matched matmul (and its A/B/acc operands)
+// in place: linalg.pack ops materialize the packed A/B, the matmul itself
+// becomes a 6-loop linalg.generic over the packed blocks, and a trailing
+// linalg.unpack restores the original (unpacked) output shape.
+struct LinalgMatmulPackPass
+    : public mlir::PassWrapper<LinalgMatmulPackPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulPackPass)
+
+  int64_t packM, packN, packK;
+
+  explicit LinalgMatmulPackPass(int64_t m = 32, int64_t n = 32, int64_t k = 32)
+      : packM(m), packN(n), packK(k) {}
+
+  llvm::StringRef getArgument() const override {
+    return "linalg-matmul-pack";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Experimental: pack linalg.matmul into blocked layout via "
+           "linalg.pack/unpack";
+  }
+
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+    mlir::MLIRContext *ctx = func->getContext();
+
+    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
+    func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
+
+    for (mlir::linalg::MatmulOp matmulOp : matmuls) {
+      llvm::SmallVector<mlir::OpFoldResult> packedSizes =
+          mlir::getAsIndexOpFoldResult(ctx, {packM, packN, packK});
+      rewriter.setInsertionPoint(matmulOp);
+      auto packResult = mlir::linalg::pack(
+          rewriter, llvm::cast<mlir::linalg::LinalgOp>(matmulOp.getOperation()),
+          packedSizes);
+      if (mlir::failed(packResult)) {
+        matmulOp->emitWarning("linalg-matmul-pack: packing failed, skipping op");
+        continue;
+      }
+      packResult->packedLinalgOp->setAttr(kPackedMatmulMarker,
+                                          rewriter.getUnitAttr());
+    }
+  }
+};
+
+// Experimental: tiles the linalg.generic LinalgMatmulPackPass produced
+// (found via kPackedMatmulMarker) by one configurable level, ported from
+// experiments/matmul-per-tile-packing/tile.mlir. Reused for all three of
+// tile.mlir's nested tiling levels via the create*() factories below — same
+// "one struct, several instantiations" idiom LinalgMatmulTilingPass already
+// uses for the non-packed pipeline's outer/inner tiling. Each level is its
+// own separate PassManager stage (not folded into one pass), sandwiched with
+// the standard canonicalize/cse passes at the addCPUPasses call site once
+// wired in, matching every other stage in this pipeline.
+//
+// Re-attaches kPackedMatmulMarker to the newly tiled (smaller) op after each
+// tileUsingSCF call, so the next tiling-level pass (a fresh func.walk, since
+// this is a separate PassManager stage) can still find it.
+//
+// Each tileUsingSCF call on a tile-by-one dim leaves unit-extent dims behind
+// (this is a 6D op), so `foldUnitDims` folds them via ReassociativeReshape.
+// tile.mlir also runs its own tiling_canonicalization patterns right after
+// each tile call (narrower than the general canonicalizer, and not
+// something createCanonicalizerPass applies on its own) — both pattern sets
+// applied directly here via applyPatternsGreedily, same mechanism
+// VectorCleanupPass and VectorContractToOuterProductPass already use above,
+// rather than pulling in a nested PassManager for the standard canonicalizer
+// (that stays a sibling pass at the call site instead).
+struct LinalgMatmulPackedTilingPass
+    : public mlir::PassWrapper<LinalgMatmulPackedTilingPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulPackedTilingPass)
+  using LoopType = mlir::scf::SCFTilingOptions::LoopType;
+
+  llvm::SmallVector<int64_t, 6> tileSizes;
+  LoopType loopType;
+  bool foldUnitDims;
+  std::string argument;
+  std::string description;
+
+  LinalgMatmulPackedTilingPass(llvm::ArrayRef<int64_t> sizes, LoopType lt,
+                               bool foldUnits, llvm::StringRef arg,
+                               llvm::StringRef desc)
+      : tileSizes(sizes.begin(), sizes.end()), loopType(lt),
+        foldUnitDims(foldUnits), argument(arg), description(desc) {}
+
+  llvm::StringRef getArgument() const override { return argument; }
+  llvm::StringRef getDescription() const override { return description; }
+
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    llvm::SmallVector<mlir::Operation *> targets;
+    func.walk([&](mlir::linalg::GenericOp op) {
+      if (op->hasAttr(kPackedMatmulMarker))
+        targets.push_back(op.getOperation());
+    });
+
+    for (mlir::Operation *op : targets) {
+      llvm::SmallVector<mlir::OpFoldResult> ofrSizes =
+          mlir::getAsIndexOpFoldResult(op->getContext(), tileSizes);
+      mlir::scf::SCFTilingOptions opts;
+      opts.setTileSizes(ofrSizes);
+      opts.setLoopType(loopType);
+      rewriter.setInsertionPoint(op);
+      auto result = mlir::scf::tileUsingSCF(
+          rewriter, llvm::cast<mlir::TilingInterface>(op), opts);
+      if (mlir::failed(result)) {
+        op->emitWarning(getArgument() + ": tiling failed, skipping op");
+        continue;
+      }
+      if (op->getNumResults() == 0)
+        rewriter.eraseOp(op);
+      else
+        rewriter.replaceOp(op, result->mergeResult.replacements);
+      mlir::Operation *tiledOp = result->tiledOps.back();
+
+      // Tiling-by-one leaves unit-extent dims on `tiledOp` (this is a 6D
+      // op). Fold them via a direct dropUnitDims() call, scoped to just this
+      // op, rather than a blanket applyPatternsGreedily: dropUnitDims
+      // *replaces* the op with a new one (a collapsed reshape of it), and a
+      // greedy rewrite gives no handle back to that replacement — the
+      // kPackedMatmulMarker tag below would be lost the moment the pattern
+      // fires, leaving the next tiling-level pass's func.walk with nothing
+      // to find. Calling dropUnitDims ourselves gets the replacement handle
+      // directly instead.
+      //
+      // dropUnitDims() itself only builds the replacement op (stealing
+      // genericOp's region via inlineRegionBefore) and returns it — unlike
+      // tileUsingSCF above, it does NOT call replaceOp on our behalf (only
+      // its OpRewritePattern wrapper, used by the greedy-pattern path, does
+      // that). Skipping the explicit replaceOp here would leave genericOp
+      // alive in the IR with its region already stolen — an ill-formed op
+      // that segfaults the next pass that walks over it.
+      if (foldUnitDims) {
+        if (auto genericOp =
+                llvm::dyn_cast<mlir::linalg::GenericOp>(tiledOp)) {
+          rewriter.setInsertionPoint(genericOp);
+          mlir::linalg::ControlDropUnitDims options;
+          auto dropResult =
+              mlir::linalg::dropUnitDims(rewriter, genericOp, options);
+          if (mlir::succeeded(dropResult)) {
+            rewriter.replaceOp(genericOp, dropResult->replacements);
+            tiledOp = dropResult->resultOp.getOperation();
+          }
+        }
+      }
+
+      tiledOp->setAttr(kPackedMatmulMarker, rewriter.getUnitAttr());
+    }
+
+    // tiling_canonicalization patterns only target affine/memref/scf/
+    // tensor.cast ops (see populateLinalgTilingCanonicalizationPatterns),
+    // never linalg.generic, so a blanket applyPatternsGreedily here can't
+    // touch — or drop the marker from — the ops tagged above.
+    mlir::RewritePatternSet tilingPatterns(func->getContext());
+    mlir::linalg::populateLinalgTilingCanonicalizationPatterns(tilingPatterns);
+    (void)mlir::applyPatternsGreedily(func, std::move(tilingPatterns));
+  }
+};
+
+// Experimental: vectorizes the linalg.generic LinalgMatmulPackedTilingPass's
+// final (8x8x8) tiling level produced (found via kPackedMatmulMarker),
+// ported from experiments/matmul-per-tile-packing/vectorize.mlir's first
+// sub-step (transform.structured.vectorize).
+//
+// Scoped to the marked op only, unlike the existing (shared)
+// LinalgVectorizationPass below, which is deliberately NOT reused here: it
+// walks every remaining linalg op in the function, and running it this
+// early would also vectorize not-yet-tiled epilogue generics (relu/bias),
+// causing the SSA blowup LinalgGenericTilingPass exists to prevent (see its
+// own comment). By the time the *shared* LinalgVectorizationPass runs later
+// in the pipeline, this op is already gone (replaced by vector ops below),
+// so it never sees — or re-vectorizes — it.
+//
+// Once vectorized, the op is a sequence of vector.transfer_read/
+// arith.mulf/vector.multi_reduction/transfer_write ops, not a single op
+// anymore, so there is nothing left to re-tag with kPackedMatmulMarker —
+// the two passes below operate function-wide on whatever vector ops exist
+// at that point, which at this stage in the pipeline can only be the ones
+// this pass just created (every other linalg op is still untouched linalg
+// form; the shared vectorization stage hasn't run yet).
+struct LinalgMatmulPackedVectorizePass
+    : public mlir::PassWrapper<LinalgMatmulPackedVectorizePass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulPackedVectorizePass)
+  llvm::StringRef getArgument() const override {
+    return "linalg-matmul-packed-vectorize";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Experimental: vectorize the packed matmul's 8x8x8 tiled generic";
+  }
+
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    llvm::SmallVector<mlir::Operation *> targets;
+    func.walk([&](mlir::linalg::GenericOp op) {
+      if (op->hasAttr(kPackedMatmulMarker))
+        targets.push_back(op.getOperation());
+    });
+
+    for (mlir::Operation *op : targets) {
+      rewriter.setInsertionPoint(op);
+      if (mlir::failed(mlir::linalg::vectorize(rewriter, op)))
+        op->emitWarning(
+            "linalg-matmul-packed-vectorize: vectorization failed, "
+            "skipping op");
+    }
+  }
+};
+
+// Experimental: paired with LinalgMatmulPackedVectorizePass above, ported
+// from vectorize.mlir's second sub-step. linalg::vectorize always lowers a
+// reduction to arith.mulf + vector.multi_reduction with BROADCAST-shaped
+// operands (see LinalgMatmulToContractPass's own comment for why the
+// non-packed pipeline avoids ever sending linalg.matmul through
+// linalg::vectorize in the first place — this pass exists precisely because
+// the packed path does). transfer_permutation_patterns strips the broadcast
+// dim from each transfer_read into an explicit vector.broadcast;
+// reduction_to_contract then folds mulf+multi_reduction into vector.contract
+// AND reduces its rank using that explicit broadcast — both needed
+// together, in the same greedy pattern application, or the contract keeps
+// its broadcast shape and VectorContractToOuterProductPass's OuterProduct
+// lowering (reused as-is right after this pass, see addCPUPasses) silently
+// falls back to a scalar expansion instead of vector.fma.
+//
+// Unlike the existing (shared) VectorCleanupPass below — which only needs
+// reduction_to_contract, since production never routes matmul through
+// linalg::vectorize — this pass is not a reuse of it, it is a distinct
+// pattern set required specifically because this path does.
+struct LinalgMatmulPackedReductionToContractPass
+    : public mlir::PassWrapper<LinalgMatmulPackedReductionToContractPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      LinalgMatmulPackedReductionToContractPass)
+  llvm::StringRef getArgument() const override {
+    return "linalg-matmul-packed-reduction-to-contract";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Experimental: fold mulf+multi_reduction into vector.contract "
+           "for the packed matmul path (with transfer_permutation "
+           "lowering)";
+  }
+
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::RewritePatternSet patterns(func->getContext());
+    mlir::vector::populateVectorTransferPermutationMapLoweringPatterns(patterns);
+    mlir::vector::populateVectorReductionToContractPatterns(patterns);
+    if (mlir::failed(mlir::applyPatternsGreedily(func, std::move(patterns))))
+      signalPassFailure();
+  }
+};
+
+// Experimental: rewrites every linalg.pack op into pad + expand_shape +
+// transpose, ported from experiments/matmul-per-tile-packing/
+// pack_lowering.mlir's first sub-step (transform.structured.lower_pack).
+// Runs pre-bufferize, like every other pass in this experimental path.
+//
+// Unlike LinalgMatmulPackedTilingPass's dropUnitDims usage above,
+// linalg::lowerPack sets its own insertion point and calls
+// rewriter.replaceOp on packOp internally (see Transforms.cpp) — safe to
+// call directly, no extra bookkeeping needed here.
+//
+// Walks the whole function for linalg.pack ops directly by type, not via
+// kPackedMatmulMarker: pack ops are a type only LinalgMatmulPackPass
+// produces in this pipeline, so there is no ambiguity to resolve the way
+// there was for linalg.generic (which many unrelated ops can also be).
+struct LinalgMatmulPackedLowerPackPass
+    : public mlir::PassWrapper<LinalgMatmulPackedLowerPackPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulPackedLowerPackPass)
+  llvm::StringRef getArgument() const override {
+    return "linalg-matmul-packed-lower-pack";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Experimental: lower linalg.pack to pad+expand_shape+transpose";
+  }
+
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    llvm::SmallVector<mlir::linalg::PackOp> packOps;
+    func.walk([&](mlir::linalg::PackOp op) { packOps.push_back(op); });
+
+    for (mlir::linalg::PackOp packOp : packOps) {
+      if (mlir::failed(mlir::linalg::lowerPack(rewriter, packOp)))
+        packOp->emitWarning(
+            "linalg-matmul-packed-lower-pack: lowering failed, skipping op");
+    }
+  }
+};
+
+// Experimental: rewrites every linalg.unpack op into empty + transpose +
+// collapse_shape + extract_slice, ported from pack_lowering.mlir's second
+// sub-step (transform.structured.lower_unpack). Same reasoning as
+// LinalgMatmulPackedLowerPackPass above (direct call is safe, no marker
+// needed — linalg.unpack is likewise unambiguous by type).
+//
+// This is the last experimental pass in the pipeline: after this, only
+// pad/expand_shape/transpose/collapse_shape/extract_slice and the vector
+// ops from the earlier vectorization stage remain, which is exactly the
+// shape the *shared* bufferize -> dealloc -> forall-to-omp -> LLVM-dialect
+// tail (already in addCPUPasses, unchanged) expects to consume.
+struct LinalgMatmulPackedLowerUnpackPass
+    : public mlir::PassWrapper<LinalgMatmulPackedLowerUnpackPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      LinalgMatmulPackedLowerUnpackPass)
+  llvm::StringRef getArgument() const override {
+    return "linalg-matmul-packed-lower-unpack";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Experimental: lower linalg.unpack to "
+           "empty+transpose+collapse_shape+extract_slice";
+  }
+
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    llvm::SmallVector<mlir::linalg::UnPackOp> unpackOps;
+    func.walk([&](mlir::linalg::UnPackOp op) { unpackOps.push_back(op); });
+
+    for (mlir::linalg::UnPackOp unpackOp : unpackOps) {
+      if (mlir::failed(mlir::linalg::lowerUnPack(rewriter, unpackOp)))
+        unpackOp->emitWarning("linalg-matmul-packed-lower-unpack: lowering "
+                              "failed, skipping op");
     }
   }
 };
@@ -576,6 +934,44 @@ std::unique_ptr<mlir::Pass> createLinalgMatmulParallelTilingPass() {
 }
 std::unique_ptr<mlir::Pass> createLinalgMatmulKTilingPass() {
   return std::make_unique<LinalgMatmulKTilingPass>();
+}
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackPass(int64_t packM,
+                                                       int64_t packN,
+                                                       int64_t packK) {
+  return std::make_unique<LinalgMatmulPackPass>(packM, packN, packK);
+}
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackedForallTilingPass() {
+  using LoopType = mlir::scf::SCFTilingOptions::LoopType;
+  return std::make_unique<LinalgMatmulPackedTilingPass>(
+      llvm::ArrayRef<int64_t>{1, 1, 0, 0, 0, 0}, LoopType::ForallOp,
+      /*foldUnits=*/true, "linalg-matmul-packed-tile-forall",
+      "Experimental: tile packed matmul M/N block-grid dims via scf.forall");
+}
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackedKTilingPass() {
+  using LoopType = mlir::scf::SCFTilingOptions::LoopType;
+  return std::make_unique<LinalgMatmulPackedTilingPass>(
+      llvm::ArrayRef<int64_t>{1, 0, 0, 0}, LoopType::ForOp,
+      /*foldUnits=*/true, "linalg-matmul-packed-tile-k",
+      "Experimental: tile packed matmul K block-grid dim via scf.for");
+}
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackedInnerTilingPass() {
+  using LoopType = mlir::scf::SCFTilingOptions::LoopType;
+  return std::make_unique<LinalgMatmulPackedTilingPass>(
+      llvm::ArrayRef<int64_t>{8, 8, 8}, LoopType::ForOp,
+      /*foldUnits=*/false, "linalg-matmul-packed-tile-inner",
+      "Experimental: tile packed matmul remaining 32x32x32 block to 8x8x8");
+}
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackedVectorizePass() {
+  return std::make_unique<LinalgMatmulPackedVectorizePass>();
+}
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackedReductionToContractPass() {
+  return std::make_unique<LinalgMatmulPackedReductionToContractPass>();
+}
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackedLowerPackPass() {
+  return std::make_unique<LinalgMatmulPackedLowerPackPass>();
+}
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackedLowerUnpackPass() {
+  return std::make_unique<LinalgMatmulPackedLowerUnpackPass>();
 }
 
 #ifdef MLIR_EDSL_CUDA_ENABLED

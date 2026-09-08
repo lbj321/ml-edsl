@@ -19,6 +19,17 @@ std::unique_ptr<mlir::Pass> createLinalgMatmulTilingPass();
 std::unique_ptr<mlir::Pass> createLinalgMatmulParallelTilingPass();
 std::unique_ptr<mlir::Pass> createLinalgMatmulKTilingPass();
 
+// Experimental: not yet wired into addCPUPasses.
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackPass(
+    int64_t packM = 32, int64_t packN = 32, int64_t packK = 32);
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackedForallTilingPass();
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackedKTilingPass();
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackedInnerTilingPass();
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackedVectorizePass();
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackedReductionToContractPass();
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackedLowerPackPass();
+std::unique_ptr<mlir::Pass> createLinalgMatmulPackedLowerUnpackPass();
+
 #ifdef MLIR_EDSL_CUDA_ENABLED
 std::unique_ptr<mlir::Pass> createLinalgGPUMatmulTilingPass();
 #endif

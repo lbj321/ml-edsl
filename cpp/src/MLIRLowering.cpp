@@ -77,8 +77,10 @@
 #include "mlir/Dialect/SCF/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Linalg/Transforms/SubsetInsertionOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/Transforms/SubsetInsertionOpInterfaceImpl.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Vector/Transforms/Passes.h"
@@ -179,6 +181,13 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   mlir::linalg::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::vector::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::vector::registerSubsetOpInterfaceExternalModels(registry);
+  // Needed for empty-tensor elimination to reason about linalg.transpose /
+  // tensor.insert_slice as subset-insertion ops — only exercised once the
+  // experimental linalg.pack path's lower_pack/lower_unpack passes start
+  // producing linalg.transpose ops ahead of that stage (see
+  // LinalgMatmulPackedLowerPackPass/LowerUnpackPass in MLIRLoweringPasses.cpp).
+  mlir::linalg::registerSubsetOpInterfaceExternalModels(registry);
+  mlir::tensor::registerSubsetOpInterfaceExternalModels(registry);
   mlir::linalg::registerTilingInterfaceExternalModels(registry);
   mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::scf::registerValueBoundsOpInterfaceExternalModels(registry);
@@ -233,6 +242,59 @@ bool MLIRLowering::runPipeline(mlir::PassManager &pm, mlir::ModuleOp module) {
 }
 
 void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
+  // TEMPORARY (stage-by-stage prototyping of the linalg.pack matmul path,
+  // not for review/commit as-is): run just the new pack pass, then bail out
+  // of the rest of the default pipeline, so SAVE_IR snapshots show exactly
+  // what LinalgMatmulPackPass produces on real compiler-emitted IR.
+  if (const char *stageEnv =
+          std::getenv("MLIR_EDSL_MATMUL_PACK_PROTOTYPE")) {
+    int stage = std::atoi(stageEnv);
+    pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulPackPass());
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createCSEPass());
+    if (stage >= 2) {
+      pm.addNestedPass<mlir::func::FuncOp>(
+          createLinalgMatmulPackedForallTilingPass());
+      pm.addPass(mlir::createCanonicalizerPass());
+      pm.addPass(mlir::createCSEPass());
+    }
+    if (stage >= 3) {
+      pm.addNestedPass<mlir::func::FuncOp>(
+          createLinalgMatmulPackedKTilingPass());
+      pm.addPass(mlir::createCanonicalizerPass());
+      pm.addPass(mlir::createCSEPass());
+    }
+    if (stage >= 4) {
+      pm.addNestedPass<mlir::func::FuncOp>(
+          createLinalgMatmulPackedInnerTilingPass());
+      pm.addPass(mlir::createCanonicalizerPass());
+      pm.addPass(mlir::createCSEPass());
+    }
+    if (stage >= 5) {
+      pm.addNestedPass<mlir::func::FuncOp>(
+          createLinalgMatmulPackedVectorizePass());
+      pm.addNestedPass<mlir::func::FuncOp>(
+          createLinalgMatmulPackedReductionToContractPass());
+      pm.addPass(mlir::createCSEPass());
+      pm.addNestedPass<mlir::func::FuncOp>(
+          createVectorContractToOuterProductPass());
+      pm.addPass(mlir::createCSEPass());
+    }
+    if (stage >= 6) {
+      pm.addNestedPass<mlir::func::FuncOp>(
+          createLinalgMatmulPackedLowerPackPass());
+      pm.addNestedPass<mlir::func::FuncOp>(
+          createLinalgMatmulPackedLowerUnpackPass());
+      pm.addPass(mlir::createCanonicalizerPass());
+      // Matches run.sh's own --eliminate-empty-tensors after this stage —
+      // already the first thing the shared bufferize tail does below, so
+      // once this is wired in for real (not gated behind this prototype
+      // env var) it won't need duplicating here.
+      pm.addPass(mlir::bufferization::createEmptyTensorEliminationPass());
+    }
+    return;
+  }
+
   // Outer 64×64 tile-and-fuse epilogue fusion, run on tensor semantics
   // (pre-bufferize). LinalgOuterTileAndFusePass tiles the relu generic (when
   // present) via the TilingInterface and fuses bias_add/matmul/fill into the
