@@ -289,6 +289,17 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
     // standalone prototype) — the shared tail below already runs it, right
     // before one-shot-bufferize, so it would just be a harmless no-op the
     // second time.
+
+    // Same reasoning as the default path's call to this pass below: any
+    // epilogue generic (bias_add/relu) left over from a chained call is not
+    // touched by the packed-matmul passes above (those only ever match the
+    // matmul itself), so without this it reaches the shared
+    // LinalgVectorizationPass untiled and gets vectorized at full array
+    // width (e.g. vector<1024x1024xf32>), which caused the exact same class
+    // of blowup at convert-vector-to-llvm as the whole-array transpose bug
+    // fixed in LinalgVectorizationPass above — just for a different op.
+    pm.addNestedPass<mlir::func::FuncOp>(createLinalgGenericTilingPass());
+    pm.addPass(mlir::createCanonicalizerPass());
   } else {
     // Outer 64×64 tile-and-fuse epilogue fusion, run on tensor semantics
     // (pre-bufferize). LinalgOuterTileAndFusePass tiles the relu generic

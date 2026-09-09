@@ -614,6 +614,22 @@ struct LinalgVectorizationPass
       if (!op->getBlock())
         continue; // erased by a prior iteration (e.g. nested op inside
                   // vectorized outer)
+      // linalg.transpose is only ever produced by lowerPack/lowerUnPack (see
+      // LinalgMatmulPackedLowerPackPass/LowerUnpackPass) rewriting the
+      // *whole* packed array (block-grid x block-grid x blockSize x
+      // blockSize) into pad+reshape+transpose — pure data movement, not a
+      // compute kernel. Vectorizing it produces a vector as large as the
+      // whole array (e.g. vector<3x3x32x32xf32> for a 96x96 matmul), which
+      // convert-vector-to-llvm can only lower by fully scalar-unrolling —
+      // an explosion that scales with block-grid tile count and dominates
+      // compile time at any nontrivial size. No other pass in this codebase
+      // produces linalg.transpose, so skipping it here is unconditional, not
+      // path-specific: convert-linalg-to-loops below handles it as a plain
+      // scalar copy loop instead, matching how the reference transform-
+      // dialect pipeline (pack_lowering.mlir) never vectorizes past the
+      // innermost tiled matmul either.
+      if (llvm::isa<mlir::linalg::TransposeOp>(op))
+        continue;
       if (!mlir::linalg::hasVectorizationImpl(op))
         continue;
       rewriter.setInsertionPoint(op);
