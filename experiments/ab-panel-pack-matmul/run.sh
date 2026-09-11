@@ -112,4 +112,88 @@ echo
 echo "done. IR at each stage: $OUT_DIR/{packed,tiled_mn,tiled_mn_k,tiled_mn_k_888,vectorized,ablowered,unpack_direct,bufferized}.mlir"
 echo
 COPY_COUNT=$(grep -c "memref.copy" "$OUT_DIR/bufferized.mlir" || true)
-echo "memref.copy count in bufferized.mlir: $COPY_COUNT (expect 0 - into %arg2 should be a bare transpose, no copy)"
+echo "memref.copy count in bufferized.mlir: $COPY_COUNT (expect 0)"
+if [[ "$COPY_COUNT" -ne 0 ]]; then
+  echo "FAIL: expected 0 memref.copy into the destination, found $COPY_COUNT" >&2
+  exit 1
+fi
+
+# Correctness check: the copy-count assertion above only proves the IR
+# *shape* is copy-free - it says nothing about whether
+# LowerUnpackDirectPass's reassociation/permutation handling is actually
+# right. Rerun the exact same 8 stages on matmul_main.mlir (matmul_fn_0
+# plus a @main that fills A=1.0, B=2.0 and prints 3 output elements - every
+# pack/tile/vectorize/unpack-lowering stage only ever matches ops inside
+# @matmul_fn_0, so @main passes through untouched), then finish lowering to
+# LLVM dialect (--scf-forall-to-for instead of the real pipeline's
+# forall->parallel->omp path, to keep this a simple single-threaded
+# correctness run with no OpenMP runtime dependency) and JIT-run it.
+# Expected: 2*K = 2048.0 at every position, since every output element is
+# a dot product of a row of all-1.0 against a column of all-2.0.
+MLIR_RUNNER="$(dirname "$MLIR_OPT")/mlir-runner"
+LLVM_LIB_DIR="$(dirname "$MLIR_OPT")/../lib"
+if [[ ! -e "$MLIR_RUNNER" ]]; then
+  echo "warning: mlir-runner not found next to mlir-opt, skipping correctness check" >&2
+else
+  echo
+  echo "=== correctness check (matmul_main.mlir, expect 2048 x3) ==="
+  "$MLIR_OPT" "$SCRIPT_DIR/matmul_main.mlir" \
+    --linalg-block-pack-matmul="block-factors=32,32,32" \
+    -o "$OUT_DIR/main_packed.mlir"
+  "$MLIR_OPT" "$OUT_DIR/main_packed.mlir" \
+    --transform-preload-library="transform-library-paths=$SCRIPT_DIR/tile_mn_forall.mlir" \
+    --transform-interpreter \
+    -o "$OUT_DIR/main_tiled_mn.mlir"
+  "$MLIR_OPT" "$OUT_DIR/main_tiled_mn.mlir" \
+    --transform-preload-library="transform-library-paths=$SCRIPT_DIR/tile_k_forloop.mlir" \
+    --transform-interpreter \
+    -o "$OUT_DIR/main_tiled_mn_k.mlir"
+  "$MLIR_OPT" "$OUT_DIR/main_tiled_mn_k.mlir" \
+    --transform-preload-library="transform-library-paths=$SCRIPT_DIR/tile_inner_8x8x8.mlir" \
+    --transform-interpreter \
+    -o "$OUT_DIR/main_tiled_888.mlir"
+  "$MLIR_OPT" "$OUT_DIR/main_tiled_888.mlir" \
+    --transform-preload-library="transform-library-paths=$SCRIPT_DIR/vectorize.mlir" \
+    --transform-interpreter \
+    -o "$OUT_DIR/main_vectorized.mlir"
+  "$MLIR_OPT" "$OUT_DIR/main_vectorized.mlir" \
+    --transform-preload-library="transform-library-paths=$SCRIPT_DIR/pack_lowering_ab_only.mlir" \
+    --transform-interpreter --canonicalize \
+    -o "$OUT_DIR/main_ablowered.mlir"
+  "$STANDALONE_OPT" "$OUT_DIR/main_ablowered.mlir" \
+    --linalg-lower-unpack-direct \
+    -o "$OUT_DIR/main_unpack_direct.mlir"
+  "$MLIR_OPT" "$OUT_DIR/main_unpack_direct.mlir" \
+    --one-shot-bufferize="bufferize-function-boundaries=true function-boundary-type-conversion=identity-layout-map" \
+    --canonicalize --cse --canonicalize \
+    -o "$OUT_DIR/main_bufferized.mlir"
+  "$MLIR_OPT" "$OUT_DIR/main_bufferized.mlir" \
+    --scf-forall-to-for \
+    --convert-linalg-to-loops \
+    --convert-vector-to-scf \
+    --buffer-loop-hoisting \
+    --canonicalize \
+    --convert-scf-to-cf \
+    --expand-strided-metadata \
+    --lower-affine \
+    --convert-vector-to-llvm \
+    --convert-ub-to-llvm \
+    --convert-arith-to-llvm \
+    --finalize-memref-to-llvm \
+    --convert-cf-to-llvm \
+    --convert-func-to-llvm \
+    --reconcile-unrealized-casts \
+    --canonicalize --cse \
+    -o "$OUT_DIR/main_llvm.mlir"
+
+  RESULT=$("$MLIR_RUNNER" "$OUT_DIR/main_llvm.mlir" \
+    -e main -entry-point-result=void --O3 \
+    --shared-libs="$LLVM_LIB_DIR/libmlir_runner_utils.so,$LLVM_LIB_DIR/libmlir_c_runner_utils.so")
+  echo "$RESULT"
+  if [[ "$(echo "$RESULT" | sort -u)" != "2048" ]]; then
+    echo "FAIL: expected 2048 at every printed position, got:" >&2
+    echo "$RESULT" >&2
+    exit 1
+  fi
+  echo "correctness check passed"
+fi
