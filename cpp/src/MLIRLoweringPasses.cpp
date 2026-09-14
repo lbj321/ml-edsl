@@ -1015,16 +1015,27 @@ struct LinalgGenericTilingPass
 
   llvm::StringRef getArgument() const override { return "linalg-tile-generic"; }
   llvm::StringRef getDescription() const override {
-    return "Tile linalg.generic ops along the innermost dimension";
+    return "Tile linalg.generic/linalg.fill ops along all loop dimensions";
   }
 
   void runOnOperation() override {
     mlir::func::FuncOp func = getOperation();
     mlir::IRRewriter rewriter(func->getContext());
 
+    // Also matches linalg.fill: in the packed-matmul path, blockPackMatmul
+    // emits C's zero-init fill directly on the full packed tensor (e.g.
+    // tensor<64x64x32x32xf32> at N=2048/block=32), with no tiling stage
+    // downstream ever touching it — unlike the default path, where
+    // LinalgOuterTileAndFusePass always fuses any top-level fill into the
+    // tiled forall first. Left untiled, that fill reaches
+    // LinalgVectorizationPass and gets vectorized at full width, which
+    // lowers to a many-megabyte stack alloca and segfaults (confirmed: 16MB
+    // alloca, N=2048 block=32). Same bug class as the untiled-epilogue-
+    // generic blowup this pass already exists to prevent — linalg.fill was
+    // just never in scope for it.
     llvm::SmallVector<mlir::linalg::LinalgOp> ops;
     func.walk([&](mlir::linalg::LinalgOp op) {
-      if (mlir::isa<mlir::linalg::GenericOp>(op))
+      if (mlir::isa<mlir::linalg::GenericOp, mlir::linalg::FillOp>(op))
         ops.push_back(op);
     });
 
