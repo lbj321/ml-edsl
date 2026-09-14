@@ -1,12 +1,15 @@
 #include "mlir_edsl/MLIRLoweringPasses.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
+#include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
@@ -247,18 +250,26 @@ struct LinalgMatmulToContractPass
 // tiling pass below re-attaches it after every tileUsingSCF call.
 constexpr llvm::StringLiteral kPackedMatmulMarker = "mlir_edsl.packed_matmul";
 
-// Experimental: packs each linalg.matmul into 32x32x32 blocks via
-// linalg.pack/unpack, the first stage of the linalg.pack-based lowering
-// pipeline being ported from experiments/matmul-per-tile-packing/pack.mlir
-// (see that file for the transform-dialect version this mirrors). Not yet
-// wired into addCPUPasses — this pass is being built and verified stage by
-// stage before it replaces any part of the default pipeline.
+// Experimental: packs each linalg.matmul into 32x32x32 blocks via the
+// upstream -linalg-block-pack-matmul utility (mlir::linalg::blockPackMatmul),
+// the first stage of the linalg.pack-based lowering pipeline being ported
+// from experiments/ab-panel-pack-matmul/ (see that directory's run.sh for
+// the mlir-opt/transform-dialect version this mirrors, and matmul.mlir for
+// the input shape it was validated against). Supersedes an earlier version
+// of this pass that called the lower-level mlir::linalg::pack utility
+// directly — blockPackMatmul additionally picks BLIS-style orientation for
+// the B operand (rhsTransposeOuterBlocks/rhsTransposeInnerBlocks default to
+// true), which the hand-rolled mlir::linalg::pack call did not do, and is
+// the actual pass exercised by run.sh's own IR-shape and JIT correctness
+// checks.
 //
 // Runs pre-bufferize (tensor semantics), like LinalgMatmulToContractPass
-// above. linalg::pack rewrites the matched matmul (and its A/B/acc operands)
-// in place: linalg.pack ops materialize the packed A/B, the matmul itself
-// becomes a 6-loop linalg.generic over the packed blocks, and a trailing
-// linalg.unpack restores the original (unpacked) output shape.
+// above. blockPackMatmul rewrites the matched matmul (and its A/B/acc
+// operands) in place: linalg.pack ops materialize the packed A/B, the matmul
+// itself becomes a 6-loop linalg.generic over the packed blocks, and a
+// trailing linalg.unpack restores the original (unpacked) output shape —
+// same PackResult shape mlir::linalg::pack produced, so every downstream
+// pass in this pipeline (tiling, vectorization, lower-pack) needs no changes.
 struct LinalgMatmulPackPass
     : public mlir::PassWrapper<LinalgMatmulPackPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
@@ -274,24 +285,24 @@ struct LinalgMatmulPackPass
   }
   llvm::StringRef getDescription() const override {
     return "Experimental: pack linalg.matmul into blocked layout via "
-           "linalg.pack/unpack";
+           "linalg::blockPackMatmul";
   }
 
   void runOnOperation() override {
     mlir::func::FuncOp func = getOperation();
     mlir::IRRewriter rewriter(func->getContext());
-    mlir::MLIRContext *ctx = func->getContext();
 
     llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
     func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
 
+    mlir::linalg::BlockPackMatmulOptions packOptions;
+    packOptions.blockFactors = {packM, packN, packK};
+
     for (mlir::linalg::MatmulOp matmulOp : matmuls) {
-      llvm::SmallVector<mlir::OpFoldResult> packedSizes =
-          mlir::getAsIndexOpFoldResult(ctx, {packM, packN, packK});
       rewriter.setInsertionPoint(matmulOp);
-      auto packResult = mlir::linalg::pack(
+      auto packResult = mlir::linalg::blockPackMatmul(
           rewriter, llvm::cast<mlir::linalg::LinalgOp>(matmulOp.getOperation()),
-          packedSizes);
+          [&](mlir::linalg::LinalgOp) { return packOptions; });
       if (mlir::failed(packResult)) {
         matmulOp->emitWarning("linalg-matmul-pack: packing failed, skipping op");
         continue;
@@ -416,6 +427,38 @@ struct LinalgMatmulPackedTilingPass
     mlir::RewritePatternSet tilingPatterns(func->getContext());
     mlir::linalg::populateLinalgTilingCanonicalizationPatterns(tilingPatterns);
     (void)mlir::applyPatternsGreedily(func, std::move(tilingPatterns));
+
+    // The dropUnitDims() call above only rank-reduces the tiled
+    // linalg.generic itself — it has no reach into the surrounding
+    // tensor.extract_slice / tensor.parallel_insert_slice /
+    // tensor.insert_slice that tileUsingSCF produced, which still carry the
+    // pre-drop (unit-extent-including) shape. Left alone, that shape
+    // mismatch forces a collapse_shape/expand_shape round-trip at the
+    // boundary once bufferized, which does NOT fold away into a no-op —
+    // confirmed empirically (a real, non-eliminable memref.copy remained
+    // after two canonicalize passes without this).
+    //
+    // The transform-dialect version this pass mirrors
+    // (tile_mn_forall.mlir / tile_k_forloop.mlir's
+    // transform.apply_patterns.linalg.fold_unit_extent_dims_via_reshapes
+    // step) avoids this because it runs mlir::linalg::
+    // populateFoldUnitExtentDimsPatterns greedily over the whole function
+    // (see LinalgTransformOps.cpp's
+    // ApplyFoldUnitExtentDimsViaReshapesPatternsOp::populatePatterns) —
+    // that pattern set also rank-reduces the surrounding slice ops
+    // (RankReducedExtractSliceOp / RankReducedInsertSliceOp), not just the
+    // generic. Running it here too, after the marker is already
+    // re-attached above, gets the same cleanup without needing a
+    // replacement handle from it (the generic itself no longer has unit
+    // dims to drop, so this pass only ever touches the ops around it).
+    if (foldUnitDims) {
+      mlir::RewritePatternSet foldUnitExtentPatterns(func->getContext());
+      mlir::linalg::ControlDropUnitDims dropOptions;
+      mlir::linalg::populateFoldUnitExtentDimsPatterns(foldUnitExtentPatterns,
+                                                       dropOptions);
+      (void)mlir::applyPatternsGreedily(func,
+                                        std::move(foldUnitExtentPatterns));
+    }
   }
 };
 
@@ -554,11 +597,44 @@ struct LinalgMatmulPackedLowerPackPass
   }
 };
 
-// Experimental: rewrites every linalg.unpack op into empty + transpose +
-// collapse_shape + extract_slice, ported from pack_lowering.mlir's second
-// sub-step (transform.structured.lower_unpack). Same reasoning as
-// LinalgMatmulPackedLowerPackPass above (direct call is safe, no marker
-// needed — linalg.unpack is likewise unambiguous by type).
+// Experimental: lowers every linalg.unpack op directly into its destination
+// buffer instead of through the stock mlir::linalg::lowerUnPack's scratch
+// tensor.empty, ported from experiments/ab-panel-pack-matmul/
+// LowerUnpackDirectPass.cpp (see that file's header comment for the full
+// story). Same reasoning as LinalgMatmulPackedLowerPackPass above for why
+// this walks linalg.unpack directly by type rather than via
+// kPackedMatmulMarker.
+//
+// The problem with stock lowerUnPack: it always allocates a fresh scratch
+// tensor.empty for its internal linalg.transpose, then collapse_shapes and
+// extract_slices the result before a final linalg.copy into the unpack's
+// `dest`. -eliminate-empty-tensors can eliminate that trailing copy's own
+// empty (linalg.copy implements SubsetInsertionOpInterface), but it can
+// never reach the *earlier* scratch empty behind the transpose, because
+// neither tensor.collapse_shape nor tensor.expand_shape implement that
+// interface — confirmed empirically against this exact pipeline (see
+// experiments/ab-panel-pack-matmul/run.sh's memref.copy-count assertion).
+//
+// The fix: skip the scratch empty entirely. Reshape the unpack's real
+// destination buffer (found by looking *forward* from the unpack's result to
+// its sole bufferization.materialize_in_destination consumer — the unpack's
+// own `dest` operand is almost always a dead, fill-initialized tensor.empty
+// placeholder that nothing ever promotes to the real destination) up to the
+// transpose's pre-collapse (stripMined) shape via tensor.expand_shape, and
+// have the transpose write directly into that view. Since
+// tensor.expand_shape/collapse_shape are free metadata reshapes once
+// bufferized, the transpose ends up writing straight into the real buffer
+// with no eliminate-empty-tensors dependency at all.
+//
+// Only handles the case where the unpack's sole use is a
+// materialize_in_destination whose dest is already a memref, and where the
+// destination shape has no padding remainder (collapsedType matches
+// destType exactly); anything else falls back to stock
+// mlir::linalg::lowerUnPack unchanged, same two-phase structure as the
+// pack_lowering_ab_only.mlir + LowerUnpackDirectPass split in the
+// experiment (lower_pack via the transform op, lower_unpack via this custom
+// pass) collapsed into one pass here since both fallback and direct paths
+// share the same op type and marker-free matching.
 //
 // This is the last experimental pass in the pipeline: after this, only
 // pad/expand_shape/transpose/collapse_shape/extract_slice and the vector
@@ -574,8 +650,73 @@ struct LinalgMatmulPackedLowerUnpackPass
     return "linalg-matmul-packed-lower-unpack";
   }
   llvm::StringRef getDescription() const override {
-    return "Experimental: lower linalg.unpack to "
-           "empty+transpose+collapse_shape+extract_slice";
+    return "Experimental: lower linalg.unpack directly into its destination "
+           "buffer, falling back to stock lowerUnPack where that isn't safe";
+  }
+
+  // Returns unpackResult's sole materialize_in_destination user, or null if
+  // unpackResult has more than one use or its one use isn't that op.
+  static mlir::bufferization::MaterializeInDestinationOp
+  getSoleMaterializeInDestinationUser(mlir::Value unpackResult) {
+    if (!unpackResult.hasOneUse())
+      return nullptr;
+    return mlir::dyn_cast<mlir::bufferization::MaterializeInDestinationOp>(
+        (*unpackResult.getUses().begin()).getOwner());
+  }
+
+  // Attempts the direct-into-destination lowering for a single unpack op.
+  // Returns failure (without modifying the IR) when the shape falls outside
+  // the case this rewrite handles, so the caller can fall back to stock
+  // lowerUnPack.
+  static mlir::LogicalResult
+  lowerUnpackDirect(mlir::IRRewriter &rewriter, mlir::linalg::UnPackOp unpackOp) {
+    auto materializeOp =
+        getSoleMaterializeInDestinationUser(unpackOp.getResult());
+    if (!materializeOp)
+      return mlir::failure();
+    if (!mlir::isa<mlir::MemRefType>(materializeOp.getDest().getType()))
+      return mlir::failure();
+
+    mlir::Location loc = unpackOp.getLoc();
+
+    mlir::PackingMetadata packingMetadata;
+    llvm::SmallVector<int64_t> packedToStripMinedShapePerm =
+        mlir::linalg::getUnPackInverseSrcPerm(unpackOp, packingMetadata);
+
+    mlir::RankedTensorType packedTensorType = unpackOp.getSourceType();
+    llvm::SmallVector<int64_t> stripMinedShape(packedTensorType.getShape());
+    mlir::applyPermutationToVector(stripMinedShape,
+                                   packedToStripMinedShapePerm);
+    auto stripMinedTensorType =
+        mlir::RankedTensorType::Builder(packedTensorType)
+            .setShape(stripMinedShape);
+    auto collapsedType = mlir::tensor::CollapseShapeOp::inferCollapsedType(
+        stripMinedTensorType, packingMetadata.reassociations);
+
+    auto destTensorType =
+        mlir::cast<mlir::RankedTensorType>(unpackOp.getDestType());
+    if (collapsedType.getShape() != destTensorType.getShape())
+      return mlir::failure(); // padding remainder: fall back below
+
+    rewriter.setInsertionPoint(unpackOp);
+    mlir::Value realDest = rewriter.create<mlir::bufferization::ToTensorOp>(
+        loc, materializeOp.getDest(), /*restrict=*/true, /*writeable=*/true);
+    mlir::Value expandedDest = rewriter.create<mlir::tensor::ExpandShapeOp>(
+        loc, stripMinedTensorType, realDest, packingMetadata.reassociations);
+    mlir::Value transposed =
+        rewriter
+            .create<mlir::linalg::TransposeOp>(loc, unpackOp.getSource(),
+                                               expandedDest,
+                                               packedToStripMinedShapePerm)
+            ->getResult(0);
+    mlir::Value collapsed = rewriter.create<mlir::tensor::CollapseShapeOp>(
+        loc, destTensorType, transposed, packingMetadata.reassociations);
+
+    rewriter.replaceOp(unpackOp, collapsed);
+    // materializeOp now copies realDest's own data back into itself; the
+    // trailing canonicalize pass already run after this stage folds that
+    // self-copy away.
+    return mlir::success();
   }
 
   void runOnOperation() override {
@@ -586,6 +727,8 @@ struct LinalgMatmulPackedLowerUnpackPass
     func.walk([&](mlir::linalg::UnPackOp op) { unpackOps.push_back(op); });
 
     for (mlir::linalg::UnPackOp unpackOp : unpackOps) {
+      if (mlir::succeeded(lowerUnpackDirect(rewriter, unpackOp)))
+        continue;
       if (mlir::failed(mlir::linalg::lowerUnPack(rewriter, unpackOp)))
         unpackOp->emitWarning("linalg-matmul-packed-lower-unpack: lowering "
                               "failed, skipping op");

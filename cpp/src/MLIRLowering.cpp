@@ -413,6 +413,16 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
+  // The packed-matmul path's outer forall (LinalgMatmulPackedForallTilingPass)
+  // leaves a self-copy (memref.copy %x, %x) from tile_using_forall's own
+  // bufferization of tensor.parallel_insert_slice, which the single
+  // canonicalize pass above doesn't fold away — confirmed in
+  // experiments/ab-panel-pack-matmul/run.sh (its stage-8 comment and
+  // memref.copy-count assertion), which needs two canonicalize passes for
+  // the same reason. A second pass here is a no-op for the default pipeline.
+  if (std::getenv("MLIR_EDSL_MATMUL_PACK_PROTOTYPE"))
+    pm.addPass(mlir::createCanonicalizerPass());
+
   pm.addPass(
       mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
   pm.addPass(
