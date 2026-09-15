@@ -333,7 +333,8 @@ struct VectorContractToOuterProductPass
     mlir::func::FuncOp func = getOperation();
     mlir::RewritePatternSet patterns(func->getContext());
     mlir::vector::populateVectorContractLoweringPatterns(
-        patterns, mlir::vector::VectorContractLowering::OuterProduct);
+        patterns, mlir::vector::VectorContractLowering::OuterProduct,
+        /*benefit=*/1, /*disableOuterProductLowering=*/true);
     if (mlir::failed(mlir::applyPatternsGreedily(func, std::move(patterns))))
       signalPassFailure();
   }
