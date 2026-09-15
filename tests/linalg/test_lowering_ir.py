@@ -353,12 +353,13 @@ class TestLinalgMatmulToContractPass:
 class TestVectorContractToOuterProductPass:
     """IR tests for VectorContractToOuterProductPass (vector-contract-to-outerproduct).
 
-    Lowers vector.contract with standard 2D matmul maps to vector.fma via the
-    OuterProduct strategy (contract → outerproduct → fma in one pass).
+    Lowers vector.contract with standard 2D matmul maps to vector.outerproduct
+    via the OuterProduct strategy, with disableOuterProductLowering=true so the
+    outerproduct→fma decomposition is left for convert-vector-to-llvm later.
     """
 
-    def test_8x8_contract_lowered_to_fma(self, check_lowered_ir):
-        """vector.contract on an 8x8 matmul is fully lowered to vector.fma."""
+    def test_8x8_contract_lowered_to_outerproduct(self, check_lowered_ir):
+        """vector.contract on an 8x8 matmul is fully lowered to vector.outerproduct."""
         @ml_function
         def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
             return matmul(A, B)
@@ -366,12 +367,13 @@ class TestVectorContractToOuterProductPass:
         mm_fn(np.ones((8, 8), dtype=np.float32),
               np.ones((8, 8), dtype=np.float32))
         check_lowered_ir("""
-        // CHECK: vector.fma
+        // CHECK: vector.outerproduct
         // CHECK-NOT: vector.contract
+        // CHECK-NOT: vector.fma
         """, after="vector-contract-to-outerproduct")
 
-    def test_large_tiled_matmul_lowered_to_fma(self, check_lowered_ir):
-        """Each 8x8 tile of a tiled matmul is lowered to vector.fma inside scf.for."""
+    def test_large_tiled_matmul_lowered_to_outerproduct(self, check_lowered_ir):
+        """Each 8x8 tile of a tiled matmul is lowered to vector.outerproduct inside scf.for."""
         @ml_function
         def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
             return matmul(A, B)
@@ -380,8 +382,9 @@ class TestVectorContractToOuterProductPass:
               np.ones((16, 16), dtype=np.float32))
         check_lowered_ir("""
         // CHECK: scf.for
-        // CHECK: vector.fma
+        // CHECK: vector.outerproduct
         // CHECK-NOT: vector.contract
+        // CHECK-NOT: vector.fma
         """, after="vector-contract-to-outerproduct")
 
 
