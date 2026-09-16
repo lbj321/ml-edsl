@@ -57,6 +57,14 @@ struct LinalgOuterTileAndFusePass
   explicit LinalgOuterTileAndFusePass(int64_t m, int64_t n)
       : tileM(m), tileN(n) {}
 
+  // tileConsumerAndFuseProducersUsingSCF constructs a new scf.forall, which
+  // needs SCFDialect loaded even when the input IR contains no scf ops yet
+  // (e.g. this pass running standalone on pre-tiling IR, as in
+  // cpp/tools/mlir-edsl-opt).
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::scf::SCFDialect>();
+  }
+
   llvm::StringRef getArgument() const override {
     return "linalg-outer-tile-and-fuse";
   }
@@ -137,6 +145,12 @@ struct LinalgMatmulToContractPass
     : public mlir::PassWrapper<LinalgMatmulToContractPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulToContractPass)
+
+  // Constructs new vector.transfer_read/write and vector.contraction ops.
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::vector::VectorDialect>();
+  }
+
   llvm::StringRef getArgument() const override {
     return "linalg-matmul-to-contract";
   }
@@ -239,6 +253,12 @@ struct LinalgVectorizationPass
     : public mlir::PassWrapper<LinalgVectorizationPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgVectorizationPass)
+
+  // linalg::vectorize constructs new vector.* ops.
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::vector::VectorDialect>();
+  }
+
   llvm::StringRef getArgument() const override { return "linalg-vectorize"; }
   llvm::StringRef getDescription() const override {
     return "Vectorize linalg structured ops to vector dialect";
@@ -361,6 +381,11 @@ struct LinalgMatmulTilingPass
   explicit LinalgMatmulTilingPass(int64_t m, int64_t n, int64_t k,
                                   LoopType lt = LoopType::ForOp)
       : tileM(m), tileN(n), tileK(k), loopType(lt) {}
+
+  // tileUsingSCF constructs a new scf.for or scf.forall.
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::scf::SCFDialect>();
+  }
 
   llvm::StringRef getArgument() const override {
     return loopType == LoopType::ForallOp ? "linalg-tile-matmul-forall"
@@ -496,6 +521,11 @@ struct LinalgGenericTilingPass
 
   int64_t tileSize;
   explicit LinalgGenericTilingPass(int64_t tile) : tileSize(tile) {}
+
+  // tileUsingSCF constructs a new scf.for.
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::scf::SCFDialect>();
+  }
 
   llvm::StringRef getArgument() const override { return "linalg-tile-generic"; }
   llvm::StringRef getDescription() const override {

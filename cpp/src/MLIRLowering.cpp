@@ -157,22 +157,16 @@ MLIRLowering::MLIRLowering(mlir::MLIRContext *sharedContext,
   registerRequiredDialects(ctx_);
 }
 
-void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
-  context->getOrLoadDialect<mlir::arith::ArithDialect>();
-  context->getOrLoadDialect<mlir::func::FuncDialect>();
-  context->getOrLoadDialect<mlir::memref::MemRefDialect>();
-  context->getOrLoadDialect<mlir::scf::SCFDialect>();
-  context->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
-  context->getOrLoadDialect<mlir::tensor::TensorDialect>();
-  context->getOrLoadDialect<mlir::linalg::LinalgDialect>();
-  context->getOrLoadDialect<mlir::vector::VectorDialect>();
-  context->getOrLoadDialect<mlir::bufferization::BufferizationDialect>();
-  context->getOrLoadDialect<mlir::omp::OpenMPDialect>();
-  context->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+void registerCPUDialects(mlir::DialectRegistry &registry) {
+  registry.insert<mlir::arith::ArithDialect, mlir::func::FuncDialect,
+                   mlir::memref::MemRefDialect, mlir::scf::SCFDialect,
+                   mlir::cf::ControlFlowDialect, mlir::tensor::TensorDialect,
+                   mlir::linalg::LinalgDialect, mlir::vector::VectorDialect,
+                   mlir::bufferization::BufferizationDialect,
+                   mlir::omp::OpenMPDialect, mlir::LLVM::LLVMDialect>();
 
   // Register bufferizable op interfaces (tells one-shot-bufferize how to
   // convert each op)
-  mlir::DialectRegistry registry;
   mlir::arith::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::tensor::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::scf::registerBufferizableOpInterfaceExternalModels(registry);
@@ -195,12 +189,31 @@ void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
   // query whether a memref.alloc can be replaced with memref.alloca.
   mlir::memref::registerAllocationOpInterfaceExternalModels(registry);
 
+  // Register LLVM translation interfaces
+  mlir::registerLLVMDialectTranslation(registry);
+  mlir::registerBuiltinDialectTranslation(registry);
+  mlir::registerOpenMPDialectTranslation(registry);
+}
+
+void MLIRLowering::registerRequiredDialects(mlir::MLIRContext *context) {
+  mlir::DialectRegistry registry;
+  registerCPUDialects(registry);
   context->appendDialectRegistry(registry);
 
-  // Register LLVM translation interfaces
-  mlir::registerLLVMDialectTranslation(*context);
-  mlir::registerBuiltinDialectTranslation(*context);
-  mlir::registerOpenMPDialectTranslation(*context);
+  // Eagerly load: MLIRBuilder constructs ops directly via the C++ API
+  // (not by parsing text), which needs dialects already loaded rather than
+  // relying on the parser's lazy auto-load-on-first-op-seen behavior.
+  context->getOrLoadDialect<mlir::arith::ArithDialect>();
+  context->getOrLoadDialect<mlir::func::FuncDialect>();
+  context->getOrLoadDialect<mlir::memref::MemRefDialect>();
+  context->getOrLoadDialect<mlir::scf::SCFDialect>();
+  context->getOrLoadDialect<mlir::cf::ControlFlowDialect>();
+  context->getOrLoadDialect<mlir::tensor::TensorDialect>();
+  context->getOrLoadDialect<mlir::linalg::LinalgDialect>();
+  context->getOrLoadDialect<mlir::vector::VectorDialect>();
+  context->getOrLoadDialect<mlir::bufferization::BufferizationDialect>();
+  context->getOrLoadDialect<mlir::omp::OpenMPDialect>();
+  context->getOrLoadDialect<mlir::LLVM::LLVMDialect>();
 }
 
 void MLIRLowering::attachInstrumentation(mlir::PassManager &pm) {
@@ -232,7 +245,9 @@ bool MLIRLowering::runPipeline(mlir::PassManager &pm, mlir::ModuleOp module) {
   return false;
 }
 
-void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
+void MLIRLowering::addCPUPasses(mlir::PassManager &pm) { buildCPUPipeline(pm); }
+
+void buildCPUPipeline(mlir::OpPassManager &pm) {
   // Outer 64×64 tile-and-fuse epilogue fusion, run on tensor semantics
   // (pre-bufferize). LinalgOuterTileAndFusePass tiles the relu generic (when
   // present) via the TilingInterface and fuses bias_add/matmul/fill into the
