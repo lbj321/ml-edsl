@@ -135,3 +135,6 @@ set_target_properties(_mlir_backend PROPERTIES
     PREFIX ""
     OUTPUT_NAME "_mlir_backend"
 )
+
+# Standalone mlir-opt-style driver for the project's own passes
+add_subdirectory(tools)

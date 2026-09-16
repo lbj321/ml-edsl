@@ -157,9 +157,12 @@ if [ -n "$COMPONENT" ]; then
         bindings)
             make -j"$JOBS" "${MAKE_ARGS[@]}" _mlir_backend
             ;;
+        opt)
+            make -j"$JOBS" "${MAKE_ARGS[@]}" mlir-edsl-opt
+            ;;
         *)
             echo "❌ Unknown component: $COMPONENT"
-            echo "Available components: core, executor, bindings"
+            echo "Available components: core, executor, bindings, opt"
             exit 1
             ;;
     esac
