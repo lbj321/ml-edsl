@@ -57,6 +57,14 @@ struct LinalgOuterTileAndFusePass
   explicit LinalgOuterTileAndFusePass(int64_t m, int64_t n)
       : tileM(m), tileN(n) {}
 
+  // tileConsumerAndFuseProducersUsingSCF constructs a new scf.forall, which
+  // needs SCFDialect loaded even when the input IR contains no scf ops yet
+  // (e.g. this pass running standalone on pre-tiling IR, as in
+  // cpp/tools/mlir-edsl-opt).
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::scf::SCFDialect>();
+  }
+
   llvm::StringRef getArgument() const override {
     return "linalg-outer-tile-and-fuse";
   }
