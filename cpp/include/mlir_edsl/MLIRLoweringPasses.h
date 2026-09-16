@@ -18,6 +18,7 @@ std::unique_ptr<mlir::Pass> createLinalgGenericTilingPass();
 std::unique_ptr<mlir::Pass> createLinalgMatmulTilingPass();
 std::unique_ptr<mlir::Pass> createLinalgMatmulParallelTilingPass();
 std::unique_ptr<mlir::Pass> createLinalgMatmulKTilingPass();
+std::unique_ptr<mlir::Pass> createLinalgEpilogueTileAndFusePass();
 
 #ifdef MLIR_EDSL_CUDA_ENABLED
 std::unique_ptr<mlir::Pass> createLinalgGPUMatmulTilingPass();

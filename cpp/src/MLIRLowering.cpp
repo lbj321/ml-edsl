@@ -258,21 +258,24 @@ void MLIRLowering::addCPUPasses(mlir::PassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulKTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Inner 8x8 serial tiling, also run on tensor semantics (pre-bufferize) for
-  // the same reason as the outer tiling above. Nesting inside the outer
-  // forall's boundary tile (e.g. the 32-wide remainder on a 96x96 matmul)
-  // requires ValueBoundsOpInterface support for affine ops — see the
-  // affine::registerValueBoundsOpInterfaceExternalModels registration in
-  // registerRequiredDialects.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulTilingPass());
+  // Inner 8x8x8 serial tiling, fusing the relu/bias_add epilogue (when
+  // present) into the matmul's own loop nest instead of tiling them
+  // separately afterward — see LinalgEpilogueTileAndFusePass. Also run on
+  // tensor semantics (pre-bufferize) for the same reason as the outer tiling
+  // above. Nesting inside the outer forall's boundary tile (e.g. the 32-wide
+  // remainder on a 96x96 matmul) requires ValueBoundsOpInterface support for
+  // affine ops — see the affine::registerValueBoundsOpInterfaceExternalModels
+  // registration in registerRequiredDialects.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgEpilogueTileAndFusePass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Tile linalg.generic ops (elementwise, bias, relu, etc.) to strips of 8
-  // along the innermost dimension before vectorization, also on tensor
-  // semantics (pre-bufferize) — same TilingInterface-based pass, no memref
-  // dependency. Without this, the vectorizer sees the full tensor as a
-  // single vector<NxNxf32>, causing LLVM O3 to hang on large shapes (e.g.
-  // 512x512) due to combinatorial explosion in its analysis passes.
+  // Fallback: tile any linalg.generic not covered by the fusion above (e.g.
+  // one with no matmul/relu relationship at all) to strips of 8 along the
+  // innermost dimension before vectorization, also on tensor semantics
+  // (pre-bufferize) — same TilingInterface-based pass, no memref dependency.
+  // Without this, the vectorizer sees the full tensor as a single
+  // vector<NxNxf32>, causing LLVM O3 to hang on large shapes (e.g. 512x512)
+  // due to combinatorial explosion in its analysis passes.
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgGenericTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 

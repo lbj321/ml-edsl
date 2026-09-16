@@ -508,8 +508,14 @@ struct LinalgGenericTilingPass
 
     llvm::SmallVector<mlir::linalg::LinalgOp> ops;
     func.walk([&](mlir::linalg::LinalgOp op) {
-      if (mlir::isa<mlir::linalg::GenericOp>(op))
-        ops.push_back(op);
+      if (!mlir::isa<mlir::linalg::GenericOp>(op))
+        return;
+      // Skip generics already tiled by LinalgEpilogueTileAndFusePass (a
+      // relu/bias_add epilogue fused into the matmul's own loop nest) —
+      // this pass is a fallback for generics independent of any matmul.
+      if (op->getParentOfType<mlir::scf::ForOp>())
+        return;
+      ops.push_back(op);
     });
 
     for (mlir::linalg::LinalgOp op : ops) {
@@ -532,6 +538,155 @@ struct LinalgGenericTilingPass
           rewriter, llvm::cast<mlir::TilingInterface>(op.getOperation()), opts);
       if (mlir::failed(result)) {
         op->emitWarning("linalg-tile-generic: tiling failed, skipping op");
+        continue;
+      }
+      if (op->getNumResults() == 0)
+        rewriter.eraseOp(op);
+      else
+        rewriter.replaceOp(op, result->mergeResult.replacements);
+    }
+  }
+};
+
+// Fuses the relu epilogue (bias_add, relu) into the matmul's own 8x8x8
+// micro-kernel tiling, replacing the combination of LinalgMatmulTilingPass
+// (tiling the bare matmul) and LinalgGenericTilingPass (tiling bias_add and
+// relu separately) with a single fused loop nest. Without this, matmul and
+// its epilogue each re-walk the full outer tile independently, materializing
+// the matmul's result to the outer tile's buffer and reading it back for
+// bias_add, then again for relu.
+//
+// Runs on tensor semantics (pre-bufferize), same rationale as
+// LinalgOuterTileAndFusePass: fusion legality is straightforward on tensor
+// SSA values but hard to prove once operands are aliasing memrefs.
+//
+// Two paths, tried in order:
+//   1. Epilogue present: tile the relu generic to [tileM, tileN] and fuse
+//      bias_add + matmul producers into the resulting scf.for nest via
+//      tileConsumerAndFuseProducersUsingSCF — the same mechanism
+//      LinalgOuterTileAndFusePass uses, but with ForOp loops (this nests
+//      inside the outer scf.forall LinalgOuterTileAndFusePass already
+//      produced, not a new forall). relu's iteration space is 2D (M, N)
+//      with no K dimension, so the matmul this pulls in is left with full-
+//      length K; it is re-matched afterward and tiled separately to
+//      [0, 0, tileK].
+//   2. No epilogue: same bare-matmul tiling LinalgMatmulTilingPass used to
+//      do for this case — tile [tileM, tileN, tileK] directly, no fusion
+//      needed since there is no consumer to root a fuse from.
+//
+// tileM=tileN=tileK=8 by default to match the square vector<8x8x8> contract
+// shape the OuterProduct lowering strategy requires (see
+// LinalgMatmulTilingPass's comment above) — changing these independently of
+// that pass would break VectorContractToOuterProductPass downstream.
+//
+// Same "last match" caveat as LinalgOuterTileAndFusePass: a function with
+// multiple independent relu epilogues only has one of them fused here, with
+// no diagnostic for the others.
+struct LinalgEpilogueTileAndFusePass
+    : public mlir::PassWrapper<LinalgEpilogueTileAndFusePass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgEpilogueTileAndFusePass)
+
+  int64_t tileM, tileN, tileK;
+  explicit LinalgEpilogueTileAndFusePass(int64_t m, int64_t n, int64_t k)
+      : tileM(m), tileN(n), tileK(k) {}
+
+  llvm::StringRef getArgument() const override {
+    return "linalg-epilogue-tile-and-fuse";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Tile matmul's micro-kernel and fuse bias/relu epilogue into the "
+           "same loop nest instead of tiling them separately";
+  }
+
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    mlir::Operation *consumer = nullptr;
+    func.walk([&](mlir::linalg::GenericOp op) {
+      auto libCall = op->getAttrOfType<mlir::StringAttr>("library_call");
+      if (libCall && libCall.getValue() == "relu")
+        consumer = op;
+    });
+
+    if (consumer) {
+      llvm::SmallVector<mlir::OpFoldResult> mn =
+          mlir::getAsIndexOpFoldResult(func->getContext(), {tileM, tileN});
+      mlir::scf::SCFTileAndFuseOptions fuseOpts;
+      fuseOpts.setTilingOptions(
+          mlir::scf::SCFTilingOptions()
+              .setTileSizes(mn)
+              .setLoopType(mlir::scf::SCFTilingOptions::LoopType::ForOp));
+
+      rewriter.setInsertionPoint(consumer);
+      auto fuseResult = mlir::scf::tileConsumerAndFuseProducersUsingSCF(
+          rewriter, mlir::cast<mlir::TilingInterface>(consumer), fuseOpts);
+      if (mlir::failed(fuseResult)) {
+        consumer->emitWarning("linalg-epilogue-tile-and-fuse: epilogue "
+                               "tiling failed, skipping");
+        return;
+      }
+
+      llvm::SmallVector<mlir::Value> repls;
+      for (mlir::Value res : consumer->getResults())
+        repls.push_back(fuseResult->replacements.lookup(res));
+      rewriter.replaceOp(consumer, repls);
+
+      // relu's 2D iteration space has no K dim, so the fuse above left the
+      // matmul it pulled in with full-length K — tile that separately.
+      // Read it out of fuseResult->tiledAndFusedOps rather than re-walking
+      // the function: the pre-fusion matmul is now dead but not yet erased
+      // (no canonicalizer has run since the fuse call above), so a fresh
+      // walk could match that stale op instead of the live one fusion
+      // actually created inside the new loop nest.
+      mlir::linalg::MatmulOp matmul;
+      for (mlir::Operation *op : fuseResult->tiledAndFusedOps) {
+        if (auto m = mlir::dyn_cast<mlir::linalg::MatmulOp>(op)) {
+          matmul = m;
+          break;
+        }
+      }
+      if (!matmul)
+        return;
+
+      llvm::SmallVector<mlir::OpFoldResult> k =
+          mlir::getAsIndexOpFoldResult(func->getContext(), {0, 0, tileK});
+      mlir::scf::SCFTilingOptions kOpts;
+      kOpts.setTileSizes(k);
+      kOpts.setLoopType(mlir::scf::SCFTilingOptions::LoopType::ForOp);
+      rewriter.setInsertionPoint(matmul);
+      auto kResult = mlir::scf::tileUsingSCF(
+          rewriter, mlir::cast<mlir::TilingInterface>(matmul.getOperation()),
+          kOpts);
+      if (mlir::failed(kResult)) {
+        matmul->emitWarning(
+            "linalg-epilogue-tile-and-fuse: K tiling failed, skipping");
+        return;
+      }
+      rewriter.replaceOp(matmul, kResult->mergeResult.replacements);
+      return;
+    }
+
+    // No relu epilogue: bare-matmul path, identical to what
+    // LinalgMatmulTilingPass(8,8,8) did for this case.
+    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
+    func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
+
+    for (mlir::linalg::MatmulOp op : matmuls) {
+      llvm::SmallVector<mlir::OpFoldResult> tileSizes =
+          mlir::getAsIndexOpFoldResult(op->getContext(),
+                                        {tileM, tileN, tileK});
+      mlir::scf::SCFTilingOptions opts;
+      opts.setTileSizes(tileSizes);
+      opts.setLoopType(mlir::scf::SCFTilingOptions::LoopType::ForOp);
+      rewriter.setInsertionPoint(op);
+      auto result = mlir::scf::tileUsingSCF(
+          rewriter, llvm::cast<mlir::TilingInterface>(op.getOperation()),
+          opts);
+      if (mlir::failed(result)) {
+        op->emitWarning("linalg-epilogue-tile-and-fuse: bare-matmul tiling "
+                         "failed, skipping");
         continue;
       }
       if (op->getNumResults() == 0)
@@ -577,6 +732,9 @@ std::unique_ptr<mlir::Pass> createLinalgMatmulParallelTilingPass() {
 }
 std::unique_ptr<mlir::Pass> createLinalgMatmulKTilingPass() {
   return std::make_unique<LinalgMatmulKTilingPass>();
+}
+std::unique_ptr<mlir::Pass> createLinalgEpilogueTileAndFusePass() {
+  return std::make_unique<LinalgEpilogueTileAndFusePass>(8, 8, 8);
 }
 
 #ifdef MLIR_EDSL_CUDA_ENABLED
