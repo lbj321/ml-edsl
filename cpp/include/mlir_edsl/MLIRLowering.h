@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Pass/PassManager.h"
 #include "llvm/IR/LLVMContext.h"
@@ -11,6 +12,18 @@
 #include <vector>
 
 namespace mlir_edsl {
+
+// Registers exactly the dialects, external-model interfaces, and LLVM
+// translation interfaces that the CPU lowering pipeline (buildCPUPipeline)
+// depends on. Shared with cpp/tools/mlir-edsl-opt so the standalone tool's
+// dialect registration can't drift out of sync with the JIT lowering path.
+void registerCPUDialects(mlir::DialectRegistry &registry);
+
+// Builds the full CPU lowering pipeline (see MLIRLowering::addCPUPasses) on
+// an arbitrary pass manager. Shared with cpp/tools/mlir-edsl-opt's
+// "cpu-pipeline" PassPipelineRegistration so the tool always runs the exact
+// same pass sequence as the real JIT path.
+void buildCPUPipeline(mlir::OpPassManager &pm);
 
 struct LoweredModule {
   std::unique_ptr<llvm::Module> module;
