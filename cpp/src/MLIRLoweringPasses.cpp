@@ -621,6 +621,12 @@ struct LinalgEpilogueTileAndFusePass
   explicit LinalgEpilogueTileAndFusePass(int64_t m, int64_t n, int64_t k)
       : tileM(m), tileN(n), tileK(k) {}
 
+  // tileConsumerAndFuseProducersUsingSCF/tileUsingSCF construct new scf.for
+  // ops.
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::scf::SCFDialect>();
+  }
+
   llvm::StringRef getArgument() const override {
     return "linalg-epilogue-tile-and-fuse";
   }

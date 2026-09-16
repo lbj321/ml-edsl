@@ -386,20 +386,16 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   // to scalar SCF loops before LLVM conversion
   pm.addNestedPass<mlir::func::FuncOp>(mlir::createConvertVectorToSCFPass());
 
-  // ConvertVectorToSCFPass's rank-reduction lowering allocates a small
-  // memref.alloca per transfer inside the loop body it generates, and never
-  // pops it between iterations (no memref.alloca_scope wraps it - AllocaScopeOp
-  // requires a single-block body, which this loop no longer has once it's
-  // been converted to scf.for/cf branches downstream). At -O0, where the LLVM
-  // optimizer's SROA/mem2reg never runs to fold that alloca away, it grows
-  // the stack by one allocation per loop iteration and overflows for large
-  // trip counts (e.g. a 1024x1024 matmul tiled to 8x8x8: ~2M iterations).
-  // Hoist it out of the loop here, at the MLIR level, so a single reused
-  // allocation reaches codegen regardless of optimization level - the buffer
-  // is fully overwritten and consumed within each iteration, so reusing one
-  // allocation across iterations is safe.
-  pm.addNestedPass<mlir::func::FuncOp>(
-      mlir::bufferization::createBufferLoopHoistingPass());
+  // TEMPORARILY REMOVED for debugging: createBufferLoopHoistingPass() here
+  // hoists the epilogue-fusion passes' per-tile 8x8 accumulator memref.alloc
+  // out of its enclosing loops, but its matching memref.dealloc (already
+  // inserted earlier by createOwnershipBasedBufferDeallocationPass) is left
+  // behind inside the loop body — one allocation, N deallocations of the
+  // same pointer, a deterministic double free on the second loop iteration.
+  // This pass was originally added for a different alloc (ConvertVectorToSCF-
+  // Pass's memref.alloca, which has no pre-existing dealloc to desync from —
+  // see the removed comment in git history). Re-add either scoped to only
+  // that alloca, or moved before dealloc insertion.
   pm.addPass(mlir::createCanonicalizerPass());
 
   // Lower all remaining vector ops → LLVM intrinsics.

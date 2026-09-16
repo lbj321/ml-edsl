@@ -14,7 +14,9 @@
 
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Bufferization/Transforms/Passes.h"
+#include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
+#include "mlir/Dialect/SCF/Transforms/Passes.h"
 #include "mlir/Dialect/Vector/Transforms/Passes.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Pass/PassManager.h"
@@ -42,6 +44,7 @@ void registerCPUPasses() {
   mlir::registerPass([] { return createLinalgMatmulParallelTilingPass(); });
   mlir::registerPass([] { return createLinalgMatmulKTilingPass(); });
   mlir::registerPass([] { return createLinalgGenericTilingPass(); });
+  mlir::registerPass([] { return createLinalgEpilogueTileAndFusePass(); });
 
   mlir::PassPipelineRegistration<>(
       "cpu-pipeline",
@@ -62,9 +65,21 @@ int main(int argc, char **argv) {
   mlir::registerTransformsPasses();
   mlir::bufferization::registerBufferizationPasses();
   mlir::memref::registerMemRefPasses();
+  mlir::vector::registerVectorPasses();
+  mlir::registerSCFPasses();
+  mlir::registerLinalgPasses();
   mlir::registerConvertVectorToSCFPass();
   mlir::registerConvertVectorToLLVMPass();
-  mlir::vector::registerVectorPasses();
+  mlir::registerConvertSCFToOpenMPPass();
+  mlir::registerArithToLLVMConversionPass();
+  mlir::registerConvertControlFlowToLLVMPass();
+  mlir::registerConvertFuncToLLVMPass();
+  mlir::registerConvertOpenMPToLLVMPass();
+  mlir::registerFinalizeMemRefToLLVMConversionPass();
+  mlir::registerLowerAffinePass();
+  mlir::registerReconcileUnrealizedCastsPass();
+  mlir::registerSCFToControlFlowPass();
+  mlir::registerUBToLLVMConversionPass();
 
   mlir::DialectRegistry registry;
   registerCPUDialects(registry);
