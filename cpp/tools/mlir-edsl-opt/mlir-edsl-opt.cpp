@@ -41,6 +41,7 @@ void registerCPUPasses() {
   mlir::registerPass([] { return createLinalgMatmulTilingPass(); });
   mlir::registerPass([] { return createLinalgMatmulParallelTilingPass(); });
   mlir::registerPass([] { return createLinalgMatmulKTilingPass(); });
+  mlir::registerPass([] { return createLinalgGenericTilingPass(); });
 
   mlir::PassPipelineRegistration<>(
       "cpu-pipeline",
