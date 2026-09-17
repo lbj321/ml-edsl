@@ -265,27 +265,19 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulParallelTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Disabled for now: when K > 256, this wraps the matmul in its own
-  // 256-wide-chunk scf.for *before* LinalgEpilogueTileAndFusePass runs.
-  // That pass's producer-fusion (tileConsumerAndFuseProducersUsingSCF) can
-  // only pull in a matmul that's a directly-fusable sibling of the relu/
-  // bias_add op it starts from — once the matmul is one loop-boundary
-  // deeper (wrapped by this pass), fusion can't reach it, so it never lands
-  // in fuseResult->tiledAndFusedOps and LinalgEpilogueTileAndFusePass's own
-  // K-retile step (MLIRLoweringPasses.cpp ~line 686, `if (!matmul) return`)
-  // silently no-ops. The matmul is left at tensor<64x256xf32> (bare 256-wide
-  // K, no M/N tiling) and LinalgMatmulToContractPass converts it straight to
-  // vector.contract at that size — the exact oversized-vector shape that
-  // hangs LLVM O3 (confirmed via mlir-edsl-opt bisection at 512x512, see
-  // matmul-bias-relu-tile-fuse branch). Re-enabling needs
-  // LinalgEpilogueTileAndFusePass to reach through an existing K-chunk
-  // scf.for and tile inside it, not just fuse directly-adjacent producers —
-  // not yet implemented. See LinalgMatmulKTilingPass for what this bought
-  // (L1 cache-blocking for large-K fused epilogues) and
-  // TestLinalgMatmulKTilingPass::test_dense_layer_large_k_cache_blocked for
-  // the now-stale IR assertion.
-  // pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulKTilingPass());
-  // pm.addPass(mlir::createCanonicalizerPass());
+  // Cache-block K into serial 256-wide chunks for matmuls whose K is large
+  // (a no-op below that threshold — see LinalgMatmulKTilingPass). When K >
+  // 256, this wraps the matmul in its own scf.for *before*
+  // LinalgEpilogueTileAndFusePass runs below. That pass's producer-fusion
+  // (tileConsumerAndFuseProducersUsingSCF) can only pull in a matmul that's
+  // a directly-fusable sibling of the relu/bias_add op it starts from —
+  // once the matmul is one loop-boundary deeper (wrapped by this pass),
+  // fusion can't reach it, so its own M/N/K-to-8 retiling step (below) will
+  // silently no-op on it, leaving it at e.g. tensor<64x256xf32>. See
+  // createLinalgMatmulTilingPass further down, which catches exactly that
+  // leftover case.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulKTilingPass());
+  pm.addPass(mlir::createCanonicalizerPass());
 
   // Inner 8x8x8 serial tiling, fusing the relu/bias_add epilogue (when
   // present) into the matmul's own loop nest instead of tiling them
@@ -296,6 +288,26 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   // affine ops — see the affine::registerValueBoundsOpInterfaceExternalModels
   // registration in registerRequiredDialects.
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgEpilogueTileAndFusePass());
+  pm.addPass(mlir::createCanonicalizerPass());
+
+  // Catches whatever the fusion above's own K-retile step couldn't reach:
+  // when linalg-tile-matmul-k already wrapped the matmul in its own K-chunk
+  // scf.for, epilogue-fuse's producer-fusion can't pull it in (see comment
+  // above), so it's left un-tiled to 8x8x8. createLinalgMatmulTilingPass
+  // (linalg-tile-matmul, ForOp) is specifically designed to tile a matmul
+  // already nested in another loop — it's the pass the now-stale
+  // TestLinalgMatmulTilingPass IR tests were originally written against,
+  // before epilogue-fusion replaced it as the primary path. It has no guard
+  // against a matmul the fusion above already tiled down to 8x8x8 — but
+  // re-tiling an op that's already exactly the target size just produces a
+  // trivial single-iteration loop, which the canonicalize right after this
+  // pass folds away entirely (confirmed via mlir-edsl-opt: identical IR
+  // with or without this pass for the already-fused K<=256 case). Below the
+  // K>256 threshold both this and the K-tiling pass above are no-ops and
+  // the fully-fused epilogue path is unaffected end to end. See
+  // experiments/matmul-bias-relu-tile-fuse/repro/ for the mlir-edsl-opt
+  // bisection that found the interaction and validated this ordering.
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
   // Fallback: tile any linalg.generic not covered by the fusion above (e.g.
