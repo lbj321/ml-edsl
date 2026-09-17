@@ -265,13 +265,27 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulParallelTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Cache-block K into serial 256-wide chunks for matmuls whose K is large
-  // (a no-op below that threshold). Targets both the epilogue-fusion path and
-  // the fallback above, since both leave the matmul's K full-length inside
-  // the outer forall. See LinalgMatmulKTilingPass for why this matters — CPU
-  // cache sizes, not correctness.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulKTilingPass());
-  pm.addPass(mlir::createCanonicalizerPass());
+  // Disabled for now: when K > 256, this wraps the matmul in its own
+  // 256-wide-chunk scf.for *before* LinalgEpilogueTileAndFusePass runs.
+  // That pass's producer-fusion (tileConsumerAndFuseProducersUsingSCF) can
+  // only pull in a matmul that's a directly-fusable sibling of the relu/
+  // bias_add op it starts from — once the matmul is one loop-boundary
+  // deeper (wrapped by this pass), fusion can't reach it, so it never lands
+  // in fuseResult->tiledAndFusedOps and LinalgEpilogueTileAndFusePass's own
+  // K-retile step (MLIRLoweringPasses.cpp ~line 686, `if (!matmul) return`)
+  // silently no-ops. The matmul is left at tensor<64x256xf32> (bare 256-wide
+  // K, no M/N tiling) and LinalgMatmulToContractPass converts it straight to
+  // vector.contract at that size — the exact oversized-vector shape that
+  // hangs LLVM O3 (confirmed via mlir-edsl-opt bisection at 512x512, see
+  // matmul-bias-relu-tile-fuse branch). Re-enabling needs
+  // LinalgEpilogueTileAndFusePass to reach through an existing K-chunk
+  // scf.for and tile inside it, not just fuse directly-adjacent producers —
+  // not yet implemented. See LinalgMatmulKTilingPass for what this bought
+  // (L1 cache-blocking for large-K fused epilogues) and
+  // TestLinalgMatmulKTilingPass::test_dense_layer_large_k_cache_blocked for
+  // the now-stale IR assertion.
+  // pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulKTilingPass());
+  // pm.addPass(mlir::createCanonicalizerPass());
 
   // Inner 8x8x8 serial tiling, fusing the relu/bias_add epilogue (when
   // present) into the matmul's own loop nest instead of tiling them
@@ -359,6 +373,25 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
+  // Canonical upstream bufferization ordering: hoist allocations to their
+  // common dominator, then out of enclosing loop nests, before dealloc
+  // insertion — so createOwnershipBasedBufferDeallocationPass below inserts
+  // each memref.dealloc at the alloc's *final* (already-hoisted) location
+  // instead of the dealloc silently staying behind at the alloc's original
+  // position. Order matters: doing this after dealloc insertion (as
+  // buffer-loop-hoisting is more commonly seen used standalone) would hoist
+  // the alloc but leave its dealloc where it was — one allocation, N
+  // deallocations of the same pointer on a loop with N iterations. That's
+  // the exact double-free createBufferLoopHoistingPass caused before, see
+  // the removed-pass comment further down for the sibling case (this one
+  // targets the epilogue-fusion accumulator memref.alloc; that one targets
+  // ConvertVectorToSCFPass's memref.alloca, added separately below since it
+  // doesn't exist yet at this point in the pipeline).
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::bufferization::createBufferHoistingPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::bufferization::createBufferLoopHoistingPass());
+
   pm.addPass(
       mlir::bufferization::createOwnershipBasedBufferDeallocationPass());
   pm.addPass(
@@ -386,16 +419,26 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   // to scalar SCF loops before LLVM conversion
   pm.addNestedPass<mlir::func::FuncOp>(mlir::createConvertVectorToSCFPass());
 
-  // TEMPORARILY REMOVED for debugging: createBufferLoopHoistingPass() here
-  // hoists the epilogue-fusion passes' per-tile 8x8 accumulator memref.alloc
-  // out of its enclosing loops, but its matching memref.dealloc (already
-  // inserted earlier by createOwnershipBasedBufferDeallocationPass) is left
-  // behind inside the loop body — one allocation, N deallocations of the
-  // same pointer, a deterministic double free on the second loop iteration.
-  // This pass was originally added for a different alloc (ConvertVectorToSCF-
-  // Pass's memref.alloca, which has no pre-existing dealloc to desync from —
-  // see the removed comment in git history). Re-add either scoped to only
-  // that alloca, or moved before dealloc insertion.
+  // Hoist the memref.alloca ops ConvertVectorToSCFPass just created (the
+  // vector<8x8xf32> transfer temporaries) out of their enclosing scf.for
+  // loops, including the K-reduction loop whose trip count scales with the
+  // matmul's K dimension. Left in place, an alloca sitting in a loop body
+  // block instead of the function's entry block re-executes — and grows the
+  // stack — on every iteration, with nothing popping it back. At K=512 (64
+  // iterations) this blew the default 8MiB stack deterministically,
+  // regardless of thread count or LLVM optimization level (confirmed via
+  // mlir-edsl-opt bisection — see experiments/matmul-bias-relu-tile-fuse/
+  // repro/run_stack_overflow_repro.sh). This is the same alloca the dead
+  // comment previously here (git blame) warned never to re-add without
+  // scoping to alloca only or moving before dealloc insertion — this
+  // satisfies the latter by construction: the one memref.alloc that mattered
+  // (the epilogue-fusion accumulator) was already hoisted and paired with
+  // its dealloc above, before createOwnershipBasedBufferDeallocationPass
+  // ran, so nothing here can desync an alloc/dealloc pair.
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::bufferization::createBufferHoistingPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::bufferization::createBufferLoopHoistingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
   // Lower all remaining vector ops → LLVM intrinsics.

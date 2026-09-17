@@ -46,3 +46,33 @@ class TestLargeShapes:
         X = np.ones((1024, 1024), dtype=np.float32)
         result = relu_fn(X)
         np.testing.assert_allclose(result, X, rtol=1e-4)
+
+    def test_dense_layer_512(self, backend):
+        """512x512 fused dense layer (relu(X @ W + b)) should compile and
+        produce correct results.
+
+        K=512 clears the 256-wide Kc cache-block threshold (see
+        LinalgMatmulKTilingPass), which used to wrap the matmul in its own
+        scf.for *before* LinalgEpilogueTileAndFusePass ran, leaving it
+        unreachable by that pass's producer-fusion and un-tiled beyond
+        64x256x64 — LinalgMatmulToContractPass then converted that straight
+        to an oversized vector.contract, hanging LLVM O3. Separately, once
+        that was worked around, ConvertVectorToSCFPass's memref.alloca ops
+        landing inside the (now 64-iteration) K-reduction loop with nothing
+        hoisting them out blew the default 8MiB thread stack. Neither issue
+        reproduces below K=448 or with linalg-tile-matmul-k disabled, so
+        this is the smallest execution test that exercises both fixes.
+        """
+        rng = np.random.default_rng(0)
+        N = 512
+
+        @ml_function
+        def dense_fn(X: Tensor[f32, N, N], W: Tensor[f32, N, N], b: Tensor[f32, N]) -> Tensor[f32, N, N]:
+            return relu(X @ W + b)
+
+        X = rng.random((N, N), dtype=np.float32)
+        W = rng.random((N, N), dtype=np.float32)
+        b = rng.random(N, dtype=np.float32)
+        result = dense_fn(X, W, b)
+        expected = np.maximum(X @ W + b, 0.0)
+        np.testing.assert_allclose(result, expected, rtol=1e-3, atol=1e-4)
