@@ -384,18 +384,133 @@ goes to `out/N_description.mlir`, mirroring `matmul-bias-relu-tile-fuse`.
 - **Done when**: correct at full size, IR has pack ops at the right loop depth.
   Expect ~80-90% of Stage 2 performance.
 
-### Stage 4 — Bufferization cleanup
+### Stage 4 — Bufferization cleanup — DONE (2026-09-18)
 
-- One-shot bufferize with `bufferize-function-boundaries`. Check for: no stray
-  `memref.copy` of C, C updated in place, Ã/B̃ buffers allocated once and hoisted
-  out of loops (buffer-loop-hoisting, or passed in as scratch args) — not
-  reallocated per iteration.
-- Full lowering: `canonicalize`, `cse`, `lower-affine`, `convert-scf-to-cf`,
-  `convert-vector-to-llvm`, `finalize-memref-to-llvm`,
-  `convert-arith/func/cf-to-llvm`, `reconcile-unrealized-casts`. Recheck the
-  kernel's assembly — late lowering can undo earlier hoisting.
-- **Done when**: allocations sit outside the hot loops and Stage 3 performance
-  holds.
+Original goals: one-shot bufferize with `bufferize-function-boundaries`; no stray
+`memref.copy` of C; C updated in place; Ã/B̃ allocated once and hoisted out of
+loops; full lowering; recheck the kernel's assembly, since late lowering can
+undo earlier hoisting. **Done when**: allocations sit outside the hot loops and
+Stage 3 performance holds.
+
+**State coming out of Stage 3 (approach 2, checked 2026-09-18).** Most of this
+already holds, as a side effect of the Stage 3 pipeline:
+- C is updated in place. `linalg.fill` and the whole loop nest write `%arg2`
+  directly, and there's no C-sized alloc or copy.
+- The only `memref.copy` ops in `out/stage3b_bufferized.mlir` are self-copies
+  (`memref.copy %x, %x`), left over from tiling's insert_slice-into-own-slice.
+  `-cse` runs after the last `-canonicalize`, so they survive into the dump; the
+  next step's canonicalize (`FoldSelfCopy`) removes them. Cosmetic only.
+- After bufferization, Ã's and B̃'s `memref.alloc` are still *inside* the ic and
+  pc loops. `-buffer-loop-hoisting`, placed late in the LLVM-lowering step,
+  moves them to function entry (2 `malloc` in `stage3b.opt.s`, outside all loops).
+- Kernel asm is identical to Stages 1 and 2, with 0 `memcpy`. B-pack loop: 16
+  `vmovups` + 16 `vmovaps` per 8 rows, which is ideal.
+
+**What's actually left:**
+1. **Leak: nothing frees Ã/B̃.** There's no `free` in the asm; one-shot-bufferize
+   ran without deallocation, so every call leaks
+   `NC/16·KC·16 + MC/6·KC·6` floats (~200 KB at MC=168/NC=32).
+2. **Hoisting depends on where a late lowering flag sits.** Stage 6 (per-thread
+   Ã inside `scf.forall`) and Stage 5 (dynamic sizes can't be hoisted to the
+   function entry) will both need this handled deliberately.
+3. **C gets zeroed in a separate pass** (a `memset` of all of C) before the loop
+   nest. BLIS uses β=0 on the first pc iteration instead. The estimated cost is
+   M·N·4 B written once vs M·N·K·2 flops (~1–2% at K=1024), so this is optional.
+
+**Plan:**
+1. **New driver, `repro/run_stage4.sh`**, copied from `run_stage3b.sh` and
+   reusing `stage3b_transform.mlir` unchanged (TAG=`stage4`). Changes are all in
+   the bufferize step. Right after `one-shot-bufferize`, run:
+   `-canonicalize -buffer-hoisting -buffer-loop-hoisting
+   -ownership-based-buffer-deallocation -canonicalize
+   -buffer-deallocation-simplification -bufferization-lower-deallocations
+   -canonicalize -cse`.
+   Then drop `-buffer-hoisting -buffer-loop-hoisting` from the LLVM-lowering step.
+   - Already dry-run on `out/stage3b_bufferized.mlir`: both allocs land at
+     function entry, exactly 2 `memref.dealloc` sit right before `return`,
+     there are no `bufferization.dealloc`/ownership `scf.if`s in loops, and the
+     self-copies are gone.
+   - Hoisting *before* dealloc insertion is the point. Ownership-based dealloc
+     on the unhoisted IR would put an alloc/free pair inside the ic loop, and
+     it isn't obvious that the later hoisting passes would move both out
+     (unverified). Ordering it this way avoids the question.
+2. **Structural checks added to the run script** (they fail loudly, not just
+   echo):
+   - `memref.copy` with differing operands in the bufferized dump: 0.
+   - `memref.alloc` count: 2, `memref.dealloc` count: 2, both in the
+     function-entry/exit blocks.
+   - asm: `malloc` 2, `free` 2, `memcpy` 0, plus the existing kernel-loop
+     checks (12 FMA / 6 broadcast / 2 B loads / 0 spills).
+3. **Leak regression check**: extend `harness/bench_matmul.c`, or use
+   `/usr/bin/time -v`, and compare max RSS at 10 vs 1000 calls. It should be
+   flat now; before this fix it grows ~200 KB per call.
+4. **Performance holds**: rerun 336×64×512 and 1008×1024×1024, expecting
+   71–73 / 96–101 GFLOPS, within noise of Stage 3. One malloc/free pair per call
+   is negligible next to ~21 ms of compute.
+5. **Optional, only if step 4 shows the `memset` in a profile: β=0 on the
+   first pc.** Use `transform.loop.peel %pc {peel_front = true}` (present at
+   the pin, `SCFTransformOps.td`). In the peeled iteration, C's tile read comes
+   from the fill, so check whether `extract_slice(fill)` → `transfer_read(fill)`
+   folds to a zero splat, removing both the global fill and that first C-tile
+   load. If it doesn't fold cleanly within ~1 hour, defer it to Stage 7. The
+   expected win is ≤2%.
+
+**Result.** `repro/run_stage4.sh` (reuses `stage3b_transform.mlir` unchanged;
+`INPUT`/`TRANSFORM`/`TAG` overrides as in `run_stage3b.sh`):
+- The bufferize step is now `one-shot-bufferize` → `-canonicalize -buffer-hoisting
+  -buffer-loop-hoisting -ownership-based-buffer-deallocation -canonicalize
+  -buffer-deallocation-simplification -bufferization-lower-deallocations
+  -canonicalize -cse` (dump: `out/stage4_dealloc.mlir`). Hoisting moved out of
+  the LLVM-lowering step.
+- **Structural checks now fail the script** (Python block at the end of
+  `run_stage4.sh`):
+  - `memref.copy`: 0, including self-copies.
+  - `memref.alloc`/`memref.dealloc`: 2/2, both at function top level.
+  - asm: `malloc` 2, `free` 2, `memcpy` 0, `memrefCopy` 0.
+  - Kernel loop: 12 `vfmadd231ps`, 6 `vbroadcastss`, 2 B loads, 0 spills.
+  - Everything passes at both sizes, and `llvm-mca` still gives 6.14 cycles/iter.
+  - One pitfall in writing the checks: the second `free` is emitted as a tail
+    call (`jmp free@PLT # TAILCALL`), so counting only `callq` finds 1.
+- **Leak fixed** (`/usr/bin/time -f %M`, max RSS, 10 → 1000 calls at 336×64×512):
+  Stage 3b 4.9 MB → 207 MB (~204 KB/call = B̃ 32 KB + Ã 172 KB, exactly);
+  Stage 4 2.8 MB → 2.8 MB, flat.
+- **Performance** (`taskset -c 0`, correctness OK; Stage 3b rebuilt and
+  interleaved in the same session for a fair comparison):
+  - 336×64×512: **83–85 GFLOPS** vs Stage 3b's 60–72. That's a real win, not
+    noise. Ã (172 KB) is over glibc's 128 KB mmap threshold, so the leaking
+    build got a fresh mmap every call and paid for first-touch page faults.
+    With `free`, glibc raises its dynamic mmap threshold and hands back the same
+    already-mapped pages. Minor faults over 200 calls: **10,694 (3b) vs 530 (4)**,
+    about 51 fresh 4 KB pages per call in 3b, which matches 204 KB.
+  - 1008×1024×1024: **103.7–105.1 GFLOPS** vs Stage 3b's 102.6–104.7 in the
+    same session, i.e. equal within noise. The fault cost is amortized over
+    ~20 ms of compute. This session runs ~4% faster overall than the Stage 3
+    measurement (96.6–100.8).
+- **Step 5 (β=0 via peeling the first pc) skipped as not worth it.** `perf`
+  isn't installed, so I measured the cost directly: `memset` of a 1008×1024 f32
+  C takes 75 µs vs ~20 ms per call, **~0.4%**. Moved to Stage 7's list.
+- **Done when** ✅: allocations sit outside every loop (function entry/exit),
+  there's no leak, and Stage 3 performance holds (equal at the large size,
+  better at the small one).
+
+**Explicitly not in Stage 4** (noted for later stages):
+- A-pack transpose quality. It's 32 `vinsertps` + 16 `vmovss` per 6×8 block,
+  which is mostly scalar, and it's the next obvious packing cost. It's amortized
+  over NC/16 microtiles per Ã element, so it's a tuning item (Stage 7): e.g.
+  `lower_transpose` with a shuffle strategy (`lowering_strategy = "shuffle_16x16"`
+  / `"shuffle_1d"`), or an 8×8 in-register transpose with MR padding.
+- `-test-scalar-vector-transfer-lowering` is a test-only pass. It's fine for
+  the experiment, but porting to production needs a custom pass calling
+  `vector::populateScalarVectorTransferLoweringPatterns`.
+- Scratch buffers passed as function arguments (the BLIS/workspace style) are
+  the alternative to malloc/free. Revisit in Stage 6 if per-thread Ã allocation
+  inside `scf.forall` makes the dealloc path awkward.
+- β=0 on the first pc iteration (`transform.loop.peel {peel_front = true}`)
+  instead of zero-filling C first. Measured at ~0.4% (Stage 7).
+- Dynamic sizes (Stage 5): `-buffer-loop-hoisting` can only lift Ã/B̃ to
+  function entry because their shapes are static. With dynamic M/N/K, the
+  alloc sizes must be computable at function entry (e.g. `min(MC, M)`) or the
+  buffers stay inside the loops. Recheck the alloc checks there.
 
 ### Stage 5 — Remainders
 

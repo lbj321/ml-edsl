@@ -28,7 +28,7 @@ echo "== transform: jc/pc/ic/jr/ir tiling -> pad -> hoist_pad B~ (pc) / A~ (ic) 
   -transform-preload-library="transform-library-paths=$TRANSFORM" \
   -transform-interpreter \
   -canonicalize -cse \
-  -o "$OUT/${TAG}_vectorized.mlir" 2> "$OUT/${TAG}_transform_log.txt"
+  -o "$OUT/${TAG}_vectorized.mlir" > "$OUT/${TAG}_transform_log.txt" 2>&1
 
 echo "== bufferize =="
 "$MLIR_OPT" "$OUT/${TAG}_vectorized.mlir" \
