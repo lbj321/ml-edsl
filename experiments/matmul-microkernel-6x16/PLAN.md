@@ -512,14 +512,84 @@ already holds, as a side effect of the Stage 3 pipeline:
   alloc sizes must be computable at function entry (e.g. `min(MC, M)`) or the
   buffers stay inside the loops. Recheck the alloc checks there.
 
-### Stage 5 — Remainders
+### Stage 5 — Remainders — CLOSED (2026-09-18): not pursued; use a 4×16 kernel + fast-path guard instead
 
-- Try non-multiple sizes (e.g. 1000×1000×1000). Options: loop peeling
-  (`transform.loop.peel` on ir/jr), padding the packed panels to MR/NR multiples
-  (BLIS approach, cheapest here since packing already copies), or masked
-  vectorization for edge tiles.
-- **Done when**: arbitrary sizes are correct with no big perf cliff at
-  non-multiple sizes.
+**Decision.** ~100 GFLOPS single-core is good enough. Full remainder handling
+isn't worth its complexity for porting into the compiler. Shapes are static
+there anyway: `DYN` is barely used, and `FunctionSignature.specialize`
+specializes it to concrete sizes at call time. So the port plan is: a fast path
+for shapes that divide evenly, and the existing pipeline for everything else.
+
+**Why 6×16 doesn't fit the benchmark sizes (256³, 512³, 1024³).** The recipe
+has no remainder handling, so every tile has to divide its dimension. For N and
+K that's easy: shapes are static, so clamp the blocks per shape
+(`NC = min(256, N)`, `KC = min(256, K)`), and for powers of two those always
+divide. **M is the problem: MR=6 never divides a power of two**, and the fast
+path also needs M % MC == 0 (MC=168). Measured with `stage3b_transform.mlir`
+(NC=256) + `run_stage4.sh`:
+
+| shape | 6×16 result |
+|---|---|
+| 504×512×512 (M = 3·168) | all checks pass, **107.5 GFLOPS** |
+| 252×256×256 (M%6 = 0, M%168 ≠ 0) | fails: 2 strided `memref.copy`, 4 allocs |
+| 504×128×128 (N, K < 256 block) | fails: `'vector.mask' op expects only one operation to mask` (without clamping NC/KC) |
+| 256³, 512³ | fail (as 252×256×256) |
+
+**4×16 kernel: covers every power-of-2 shape with no remainder handling.**
+Same transform with MR 6→4, MC 168→128 (NC=KC=256), nothing else changed:
+- Kernel loop: 8 `vfmadd231ps`, 4 `vbroadcastss`, 2 B loads, 0 spills;
+  `llvm-mca` 4.14 cycles/iter vs a 4.0 floor (96.6% of FMA-port peak; 6×16 is
+  97.7%).
+- Only 8 independent accumulators, which is exactly the 2 ports × 4-cycle
+  latency minimum (6×16 has 12). Registers: 8 acc + 2 B + 1 A = 11 of 16.
+- Every other Stage 4 structural check passes: alloc/dealloc placement, no
+  `memref.copy`/`memcpy`/`memrefCopy`.
+- Measured (`taskset -c 0`, correctness OK, 3 runs each, same session):
+
+  | shape | 4×16 | 6×16 reference |
+  |---|---|---|
+  | 256³ | 105–110 GFLOPS | — |
+  | 512³ | 91–95 GFLOPS | 107.5 at 504×512×512 |
+  | 1024³ | 100–101 GFLOPS | 103–105 at 1008×1024×1024 |
+
+  About 3% slower than 6×16 where both apply; ~5.5× the Stage 0 production
+  baseline (18.25 GFLOPS at 1024³).
+- The 512³ dip below both 256³ and 1024³ is not investigated. It's likely a
+  power-of-2 leading-dimension cache-set/4K-aliasing effect. Stage 7 item.
+
+**Port recipe (what to put in the compiler):**
+- Blocking: MR=4, NR=16, MC = min(128, M), NC = min(256, N), KC = min(256, K).
+- Fast-path guard, checked at compile time on the static shape:
+  - M % MC == 0 and MC % MR == 0,
+  - N % NC == 0 and NC % 16 == 0,
+  - K % KC == 0 and KC % 8 == 0 (the A/B pack loops step k by 8).
+
+  All powers of two with M, N ≥ 16 and K ≥ 8 pass. Everything else goes to the
+  existing pipeline.
+- Watch for untested edge cases: when a block covers its whole dimension (e.g.
+  M ≤ MC), that loop has a single iteration and canonicalization may fold it
+  away, which would change what `hoist_pad ... by N loops` counts. 256³ (jc and
+  pc single-iteration) worked. M ≤ 128 (single-iteration ic) is **untested**,
+  so verify 16³–128³ when porting.
+- Transform: `stage3b_transform.mlir` with the four tile sizes substituted. The
+  pipeline is `run_stage4.sh`'s pass list, whose kernel checks expect
+  12 FMA / 6 broadcasts, i.e. 6×16.
+
+**If remainders are ever needed** (from a 1000×1000×1000 dry run with
+`stage3b_transform.mlir` at NC=256 + `run_stage4.sh`): padding each microtile to
+its static bounding box already works, and the kernel, packed layouts and alloc
+hoisting survive. What breaks is the three edge copies that touch unpadded
+data:
+1. **B-pack:** a masked read (`vector.mask`) crashes canonicalize after
+   bufferization. Fix idea: `lower_masked_transfers`/`lower_masks` inside the
+   transform.
+2. **A-pack:** the pad decomposes to fill + a dynamic `insert_slice`.
+3. **C microtile, on every tile:** same fill + dynamic `insert_slice`, with a
+   dynamic copy back.
+
+Paths 2 and 3 end up as strided `memref.copy` → `memrefCopy` runtime calls.
+The fix direction is out-of-bounds/masked transfers straight from A and C, plus
+`split_transfer_full_partial` if full tiles slow down.
 
 ### Stage 6 — Multithreading
 
