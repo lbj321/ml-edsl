@@ -591,7 +591,7 @@ Paths 2 and 3 end up as strided `memref.copy` → `memrefCopy` runtime calls.
 The fix direction is out-of-bounds/masked transfers straight from A and C, plus
 `split_transfer_full_partial` if full tiles slow down.
 
-### Stage 6 — Multithreading
+### Stage 6 — Multithreading — DONE (2026-09-18, jc-parallel)
 
 - L2 is private, L3 shared → parallelize the ic loop. Each core packs/uses its
   own Ã; B̃ is shared (pack cooperatively with a barrier, or have one thread pack
@@ -692,6 +692,63 @@ work in total.
    1→8 threads at 1024³, and the OpenBLAS ratio recorded. A stretch target is
    ≥ 85% of OpenBLAS (~690 GFLOPS) if step 4 finds cheap wins; otherwise that
    work moves to Stage 7.
+
+**Result (2026-09-18) — DONE.**
+- **Files:**
+  - `repro/stage6_transform.mlir`: 4×16, MC=128, KC=256, jc as
+    `tile_using_forall`, NC=128 for 1024³.
+  - `repro/run_stage6.sh [M N K]`:
+    - generates the input and specializes the tile sizes (NC = N/8,
+      MC = min(128, M), KC = min(256, K)), failing fast if the fast-path
+      guard doesn't hold;
+    - runs the Stage 4 bufferization plus the OpenMP lowering;
+    - links libomp;
+    - builds `out/bench_matmul`.
+  - `harness/bench_openblas.py M N K THREADS`: numpy/OpenBLAS reference.
+- **Structural checks** (fail the script):
+  - per-thread allocs inside the forall body, never hoisted above it;
+  - 2 `malloc`/2 `free`, 1 `omp.parallel`/`__kmpc_fork_call`, 0
+    `alloca_scope` after canonicalize, 0 `memref.copy`/`memcpy`/`memrefCopy`;
+  - kernel 8 FMA / 4 broadcasts / 0 spills.
+
+  All pass at 256³, 512³, 1024³ and 2048³.
+- **Scaling** (`OMP_PROC_BIND=close OMP_PLACES=cores taskset -c 0-7`,
+  best of 20, 5 at 2048³; correctness OK in every cell; raw data in
+  `out/stage6_scaling.csv`), GFLOPS for ours / OpenBLAS:
+
+  | size | 1 thread | 2 | 4 | 8 | 1→8 scaling (ours / OpenBLAS) | ours/OpenBLAS @8 |
+  |---|---|---|---|---|---|---|
+  | 256³ | 71 / 110 | 137 / 202 | 257 / 357 | 459 / 595 | 6.4× / 5.4× | 77% |
+  | 512³ | 80 / 118 | 160 / 230 | 305 / 431 | 558 / 794 | 6.9× / 6.7× | 70% |
+  | 1024³ | 85 / 120 | 165 / 234 | 311 / 426 | 585 / 807 | 6.9× / 6.7× | 72% |
+  | 2048³ | 92 / 121 | 172 / 233 | 300 / 427 | 583 / 673 | 6.3× / 5.5× | 87% |
+
+  - **Scaling is as good as OpenBLAS's or better; the gap is
+    single-thread efficiency.**
+- **All-core ceiling:** WSL2 shows a fixed 3600 MHz and has no cpufreq, so
+  the clock was inferred instead. The Stage 1 L1-resident 6×16 kernel
+  (`out/bench_kernel`) runs at 130.5 GFLOPS on 1 core and ~110 per core with
+  8 copies running at once (sum **~880 GFLOPS**). So the all-core AVX clock is
+  ~84% of single-core.
+  - Against that ceiling, OpenBLAS reaches **92%** and we reach **66%** at
+    1024³.
+  - Pitfall: an 8-thread 2048³ `bench_matmul` left running in the background
+    (its naive reference check takes minutes) silently dragged the first
+    probe down to ~100 per core. Check `pgrep bench_matmul` before measuring.
+- **Where the single-thread gap is:** a 1-thread NC sweep at 1024³ gives
+  NC=128 → 81–86, NC=256 → 100–102, NC=512 → 103–104, NC=1024 → 104–106.
+  Each jc block re-packs all of A, so A-pack cost scales with 1/NC; NC = N/8
+  is what the 8-thread split forces. (NC=1024 is a single jc block, so the
+  1-iteration forall folds away and the parallel checks fail, but the `.so`
+  is valid for a 1-thread timing.)
+  - The remaining 104 → 130 gap is packing (the mostly-scalar A transpose)
+    and cache effects. That's Stage 7 territory.
+  - Not dug into further by choice: ~100 single-thread / ~585 on 8 threads
+    is good enough, and integration comes first.
+- **Done when** ✅: correct on 1/2/4/8 threads at every size, ≥ 6× scaling
+  (6.3–6.9×), OpenBLAS ratio recorded (70–87% at 8 threads). The stretch
+  target (≥ 85% of OpenBLAS at 1024³) was not reached, so it moves to
+  Stage 7.
 
 **Port notes.** Production already lowers `scf.forall` →
 OpenMP (`createForallToParallelLoopPass` + `createConvertSCFToOpenMPPass` in
