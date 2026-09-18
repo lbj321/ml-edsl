@@ -259,7 +259,7 @@ goes to `out/N_description.mlir`, mirroring `matmul-bias-relu-tile-fuse`.
   and unchanged; revisit only if a future stage's profile suggests call
   overhead matters.
 
-### Stage 3 — Outer loops + packing
+### Stage 3 — Outer loops + packing — DONE (2026-09-18, approach 2)
 
 - Add jc (NC), pc (KC), ic (MC) loops. Starting blocking for this chip:
   - KC=256: one B micro-panel = 256·16·4 B = 16 KB (half of L1d)
@@ -279,6 +279,108 @@ goes to `out/N_description.mlir`, mirroring `matmul-bias-relu-tile-fuse`.
     script.
 - Do tiling as five successive `tile_using_for` calls, one non-zero entry each
   in `[m, n, k]`, to control loop order explicitly.
+
+#### Approach 1 result (global pack) — layout proven, closed out 2026-09-18
+
+- `repro/stage3_outer.mlir` + `repro/stage3_transform.mlir`, driven by
+  `repro/run_stage3.sh`. Took 7 fixes, documented in the header comments of the
+  transform script and the run script. Most of them work around the approach
+  itself: `structured.pack` turns the matmul into a 5-D `linalg.generic` with k
+  in the middle, which needs `interchange` + `transfer_permutation_patterns` +
+  `reduction_to_contract` just to get the contract back. C also gets packed and
+  unpacked. The pack/unpack transposes need their own tiling and vectorization.
+- **Fix 7** (this round): 12 `callq memcpy` remained in the function (384 B
+  in and 384 B out around every 6×16 microtile, 512 B per B-pack iteration).
+  `-convert-vector-to-scf`'s default lowering of n-D transfers goes through a
+  stack temp buffer (`memref<vector<...>>`), and `opt -O3` couldn't SROA it away
+  on these strided subviews. Fixed with `-convert-vector-to-scf="full-unroll=true"`,
+  which brings memcpy to 0 with the kernel loop unchanged.
+  `rank_reducing_subview_patterns`, run post-bufferization to drop the unit dims
+  of the rank-4 C tile and the `8x1x16` B-pack read, was tried first and made no
+  difference on its own.
+- Kernel k-loop: 12 `vfmadd231ps`, 6 `vbroadcastss`, 2 B loads, 0 spills,
+  `llvm-mca` 6.14 cycles/iter, all identical to Stages 1 and 2.
+- Measured (`harness/bench_matmul`, `taskset -c 0`, correctness OK):
+  - 336×64×512 (MC=168, NC=32, KC=256): **46.4 GFLOPS** (36 before Fix 7).
+  - 1008×1024×1024 (MC=168, NC=256, KC=256; transform jc tile `[0, 16, 0, 0, 0]`):
+    **~65–84 GFLOPS**, noisy from run to run (69.7, then 61/83, then 65/84/84 in
+    later sessions). That's ~70–90% of Stage 2's ~93 plateau.
+- What's left: whole-array packing of A and B (extra passes over memory, and
+  the packed buffers aren't cache-sized), plus C pack/unpack. Approach 2
+  addresses all three.
+
+#### Approach 2 result (BLIS per-block packing via pad + hoist_pad) — DONE 2026-09-18
+
+- `repro/stage3b_transform.mlir`, driven by `repro/run_stage3b.sh` (same
+  lowering as `run_stage3.sh`, including Fix 7; `INPUT`/`TRANSFORM`/`TAG` env
+  overrides). Large-size input: `repro/stage3_outer_large.mlir` (the header of
+  the transform script has the one-line sed for NC=256).
+- Recipe: five one-dim `tile_using_for` calls on the *named* `linalg.matmul`
+  (jc `[0,NC,0]` → pc `[0,0,KC]` → ic `[MC,0,0]` → jr `[0,16,0]` → ir `[6,0,0]`)
+  → `structured.pad` on the 6×16×KC tile (`nofold_flags = [1, 1, 0]`, so C is
+  never padded) → `hoist_pad` B by 3 loops → `hoist_pad` A by 2 loops with
+  `transpose by [1, 0]` → tile and vectorize the packing copies → k-tile by 1
+  and fuse the un-transpose into the k-loop → targeted `structured.vectorize` →
+  `reduction_to_contract` → `lower_contraction`/`lower_outerproduct` → hoist.
+- **Pack ops at the right depth** (`out/stage3b_vectorized.mlir`):
+  B̃ = `tensor<(NC/16)×KC×16>` is built directly inside the pc loop (once per
+  jc, pc), and Ã = `tensor<(MC/6)×KC×6>`, k-major, is built directly inside
+  the ic loop (once per jc, pc, ic). `hoist_pad` makes only the loops the slice
+  indexes into packing dims (jr for B, ir for A), so nothing is duplicated.
+  C is updated in place across pc, with no pack/unpack. Nothing packs inside
+  jr/ir/k.
+- Pitfalls hit, in order:
+  1. **`hoist_pad` → "Source not defined outside of loops -> Skip"**
+     (`-debug-only=hoist-padding`). Each tiling level slices the previous
+     level's slice, so the microtile's operand is defined inside the loops.
+     Fix: `apply_patterns.tensor.merge_consecutive_insert_extract_slice` +
+     canonicalization before `pad`, which collapses the chains to one slice of
+     the original tensor.
+  2. **`hoist_pad ... transpose by [1, 0]` inserts an un-transpose**
+     (`HoistPadding.cpp:982`) back to 6×KC in front of the matmul, costing a 6 KB
+     copy per microtile. Fix: after k-tiling, `fuse_into_containing_op` the
+     un-transpose into the k-loop. Each k step then reads a contiguous
+     `vector<6xf32>` row of Ã, Stage 1's exact access pattern.
+  3. **`fuse_into_containing_op` asserts (crashes) on `tensor.pad`**
+     (`cast<DestinationStyleOpInterface>` in `FuseIntoContainingOp::apply`).
+     So instead of fusing A's zero-width pad into the transpose's tile loop,
+     `apply_patterns.linalg.decompose_pad` removes it (the full-size
+     insert_slice folds away) and the packing transpose reads A directly.
+  4. **`structured.vectorize` on a `tensor.pad` needs explicit
+     `vector_sizes`** on this commit ("Attempted to vectorize, but failed"
+     without them). B's pad is tiled `[8, 0]` and vectorized with `[8, 16]`.
+  5. **The vectorized B pad got un-vectorized by canonicalize.** The
+     `transfer_read(B)` → `transfer_write(tensor.empty)` round trip folds back
+     to `insert_slice(extract_slice(B))`, which bufferizes to a strided
+     `memref.copy`, i.e. a call to the `memrefCopy` runtime helper (`dlopen`:
+     undefined symbol). Fix: `fold_tensor_subset_ops_into_vector_transfers`
+     immediately after vectorizing, before any canonicalization.
+  6. **`vectorize_children_and_apply_patterns` vectorizes `tensor.insert_slice`**
+     on this commit, turning every tiling level's result insert_slice into a
+     whole-block vector copy (`vector<336x32>`, `<168x16>`, …). Stage 2 already
+     had one of these (`stage2_scalarized.mlir:66`, harmless there). Dropping
+     `{vectorize_padding}` doesn't help. Fix: targeted `structured.vectorize`
+     on just the three compute tiles, plus approach 1's
+     `transfer_permutation_patterns` + `reduction_to_contract` phase to form
+     the contract.
+- Kernel k-loop: 12 `vfmadd231ps`, 6 `vbroadcastss`, 2 B loads, 0 spills,
+  0 `memcpy` in the whole function, `llvm-mca` 6.14 cycles/iter, all
+  identical to Stages 1 and 2.
+- Measured (`harness/bench_matmul`, `taskset -c 0`, correctness OK at both sizes):
+  - 336×64×512: **73.0 GFLOPS** (approach 1: 46.4).
+  - 1008×1024×1024: **96.6–100.8 GFLOPS** across 4 runs (approach 1 in the
+    same session: 65–84). That's slightly *above* Stage 2's ~93 plateau
+    measurement and ~5.4× the Stage 0 production baseline (18.25 GFLOPS at
+    1024³).
+- **Done when** ✅: correct at full size, pack ops at the right loop depth,
+  and ≥ the 80–90%-of-Stage-2 target.
+- Carried into Stage 4: `-buffer-loop-hoisting` already hoists both packed
+  buffers (Ã, B̃) to one `malloc` each at function entry, but **nothing frees
+  them**. One-shot-bufferize ran without ownership-based deallocation, so every
+  call leaks (NC/16·KC·16 + MC/6·KC·6 floats). Fix this in Stage 4, either with
+  dealloc or with scratch buffers passed in as arguments. C is zero-filled by a
+  separate `linalg.fill` pass over C before the loop nest (BLIS instead uses
+  β=0 on the first pc iteration), which is worth removing in Stage 4 or 7.
 - **Done when**: correct at full size, IR has pack ops at the right loop depth.
   Expect ~80-90% of Stage 2 performance.
 
