@@ -602,6 +602,106 @@ The fix direction is out-of-bounds/masked transfers straight from A and C, plus
 - **Done when**: ~7× speedup on 8 cores vs. single-core, benchmarked against
   OpenBLAS multithreaded.
 
+**Why jc, not ic (constraint found 2026-09-18).** The original bullet above
+says to parallelize ic, but that fights the Stage 3 recipe. `hoist_pad` only
+hoists across `scf.for`: B̃ is hoisted *above* ic, so ic can't be an
+`scf.forall`. There's also no `loop.for_to_forall` at the pin (only
+`forall_to_for`/`forall_to_parallel`), so ic can't be converted after hoisting
+either. **Parallelizing the outermost jc loop instead leaves the whole Stage
+3/4 recipe unchanged inside the forall body:**
+- set NC = N / 8, so there's one jc block per thread;
+- each thread packs its own B̃ and Ã;
+- C column blocks are disjoint, so there are no races.
+
+The cost is redundancy: every thread packs all of A once per pc, 8× the A-pack
+work in total.
+
+**Dry run (2026-09-18, 1024³, 4×16 kernel, MC=128, KC=256, NC=128):**
+- **Transform:** `stage3b_transform.mlir` with the jc `tile_using_for` → `tile_using_forall
+  tile_sizes [0, 128, 0]`, and ic/ir tile sizes 168/6 → 128/4. Nothing else
+  changed.
+- **Bufferization:** the Stage 4 pass list, unchanged. Per-thread B̃
+  (`8x256x16`, 128 KB) and Ã (`32x256x4`, 128 KB) allocs land at the top of
+  the `scf.forall` body, with deallocs at its end. `-buffer-loop-hoisting` does
+  **not** hoist them out of the forall (which would have been a race).
+- **OpenMP:** `-scf-forall-to-parallel -convert-scf-to-openmp -canonicalize`,
+  then the Stage 4 LLVM lowering + `-convert-openmp-to-llvm` (before
+  `-convert-func-to-llvm`).
+  - `-canonicalize` replaces production's custom `AllocaScopeCleanupPass`.
+    `memref.alloca_scope`'s own canonicalizer (`AllocaScopeInliner`) inlines
+    scopes with no stack allocations, and our buffers are heap `memref.alloc`.
+    Result: 0 `alloca_scope` left and one `omp.parallel`, all in upstream
+    `mlir-opt`.
+  - `mlir-edsl-opt` can't be used for this step anyway: it doesn't register
+    the `ub` dialect (`ub.poison` comes from vectorization).
+- **Asm:** kernel intact (8 `vfmadd231ps`). One `__kmpc_fork_call`, one
+  `malloc`/`free` pair per buffer in the outlined parallel body, and a
+  `memset` of C (serial, before the fork). Linked against
+  `/home/larsan/anaconda3/lib/libomp.so` (`LIBOMP_PATH` in `build/CMakeCache.txt`).
+- **Measured** (`OMP_PROC_BIND=close OMP_PLACES=cores taskset -c 0-7`,
+  correctness OK, 3 runs each; OpenBLAS 0.3.29 is numpy's
+  `OPENBLAS_NUM_THREADS=1/8`, best of 20):
+
+  | 1024³ | 1 thread | 8 threads |
+  |---|---|---|
+  | ours (jc-parallel) | 84 | **584** |
+  | OpenBLAS | 119 | 813 |
+
+  - 6.9× over the same binary on 1 thread, and 5.8× over the best
+    single-thread config (4×16 with NC=256: ~100). NC=128 costs ~15% on one
+    thread.
+  - **72% of OpenBLAS multithreaded, and ~32× the Stage 0 production
+    baseline** (18.25).
+
+**Plan:**
+1. **Formalize the dry run.**
+   - `repro/stage6_transform.mlir`: the 4×16 recipe with jc as a forall,
+     NC = N/8, written for 1024³. A header note gives the sed for 256³/512³
+     (NC = 32/64).
+   - `repro/run_stage6.sh`: `run_stage4.sh`'s steps plus the OpenMP lowering
+     above, linking libomp (`LIBOMP_DIR` override, default
+     `/home/larsan/anaconda3/lib`).
+   - Checks that fail the script:
+     - kernel 8 FMA / 4 broadcasts / 0 spills;
+     - exactly 1 `__kmpc_fork_call`;
+     - 2 `malloc` + 2 `free` (per-thread, inside the outlined body);
+     - 0 `memcpy`/`memrefCopy`;
+     - 0 `alloca_scope` after canonicalize.
+   - Build `bench_matmul` into `out/` (gitignored) instead of `harness/`.
+2. **OpenBLAS reference script**, `harness/bench_openblas.py M N K THREADS`:
+   numpy float32 `a @ b`, best of N, run under the same `taskset`.
+3. **Scaling table.** Threads ∈ {1, 2, 4, 8} × sizes {256³, 512³, 1024³, 2048³},
+   ours vs OpenBLAS. 256³ is small enough that fork/join and packing overhead
+   should show.
+4. **Find the gap to OpenBLAS (72%)** before changing anything. Candidates, in
+   the order I'd test them:
+   - **Redundant A packing** (8×) with the mostly-scalar A-pack transpose (32
+     `vinsertps` + 16 `vmovss` per 8×4 block, Stage 4 note). Estimated at
+     ~8% of each thread's time at 1024³. Test: time a build with the A-pack
+     loop body replaced by a no-op (results wrong, timing only).
+   - **All-core AVX clock.** If the sustained clock drops under load, peak
+     drops with it. Sample `/proc/cpuinfo` MHz during an 8-thread run to get
+     the real peak; OpenBLAS may already be ~75% of it rather than 100%.
+   - **Serial `memset` of C** before the fork. Stage 4 measured it at ~0.4% of
+     single-thread time, so relative to the 8-thread time it's ~3%. Easy fix:
+     move the fill inside the forall (tile the `linalg.fill` with the same jc
+     forall), or β=0 on the first pc.
+   - **NC=128 per thread** (vs 256 single-thread) and MC/KC retuning for 8
+     cores sharing L3.
+5. **Done-when:** correct on 1/2/4/8 threads at all sizes, ≥ 6× scaling
+   1→8 threads at 1024³, and the OpenBLAS ratio recorded. A stretch target is
+   ≥ 85% of OpenBLAS (~690 GFLOPS) if step 4 finds cheap wins; otherwise that
+   work moves to Stage 7.
+
+**Port notes.** Production already lowers `scf.forall` →
+OpenMP (`createForallToParallelLoopPass` + `createConvertSCFToOpenMPPass` in
+`MLIRLowering.cpp`) and loads libomp `RTLD_GLOBAL` for the JIT
+(`MLIRExecutor.cpp`), so the runtime side is in place. The only compile-time
+change is the jc `tile_using_forall` with NC = N / num_threads (N/num_threads
+must stay a multiple of 16: true for power-of-2 N ≥ 128 with 8 threads).
+Production's `AllocaScopeCleanupPass` could probably be replaced by
+`-canonicalize` the same way, but that's untested in production.
+
 ### Stage 7 — Tuning
 
 - Sweep KC ∈ {192, 256, 320}, MC, and k-unroll U.
