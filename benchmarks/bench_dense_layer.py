@@ -12,7 +12,7 @@ import numpy as np
 from mlir_edsl import ml_function, Tensor, f32, relu
 from mlir_edsl.backend import get_backend
 
-from common import SIZES, WARMUP, best_of, repeats_for, print_section
+from common import SIZES, WARMUP, time_call, repeats_for, print_section
 
 
 def make_edsl_dense(N: int):
@@ -50,8 +50,8 @@ def main():
         for _ in range(WARMUP):
             np.maximum(X @ W + b, 0.0)
 
-        numpy_times[N] = best_of(lambda: np.maximum(X @ W + b, 0.0), n)
-        print(f"  numpy {N:>3}x{N}: {numpy_times[N] * 1e6:.2f} µs")
+        numpy_times[N] = time_call(lambda: np.maximum(X @ W + b, 0.0), n)
+        print(f"  numpy {N:>3}x{N}: {numpy_times[N].median * 1e6:.2f} µs")
 
     # Phase 2: EDSL benchmarks (triggers libomp RTLD_GLOBAL on first call).
     backend = get_backend()
@@ -68,10 +68,10 @@ def main():
         for _ in range(WARMUP):
             edsl_fn(X, W, b)
 
-        edsl_times[N] = best_of(lambda: edsl_fn(X, W, b), n)
-        print(f"  edsl  {N:>3}x{N}: call={edsl_times[N] * 1e6:.2f} µs  compile={compile_times[N] * 1e3:.1f} ms")
+        edsl_times[N] = time_call(lambda: edsl_fn(X, W, b), n)
+        print(f"  edsl  {N:>3}x{N}: call={edsl_times[N].median * 1e6:.2f} µs  compile={compile_times[N] * 1e3:.1f} ms")
 
-    rows = [(f"{N:>4}x{N:<2}", edsl_times[N], numpy_times[N], compile_times[N]) for N in SIZES]
+    rows = [(f"{N}x{N}", edsl_times[N], numpy_times[N], compile_times[N]) for N in SIZES]
     print_section("Dense Layer: relu(X @ W + b)", rows)
 
 
