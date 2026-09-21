@@ -401,9 +401,116 @@ but the pass matches only `"relu"`, so it silently loses epilogue fusion and
 does two extra full-array round-trips. Step 4's epilogue-on-accumulator would
 cover all four rows uniformly.
 
+## Step 2a: packing B (DONE)
+
+`pack_b` on by default. B's operand slice is padded (`nofold`) and the pad
+hoisted out of the ir and jr loops, giving `B~ : tensor<(NC/NR) x KC x NR>`
+built once per pc iteration, so the microkernel reads contiguous NR-wide rows
+instead of striding by N. A is still unpacked (Step 2b).
+
+**Through `@ml_function` at 1024^3** (9700KF, f32, median of 60, spread in
+brackets):
+
+| threads | old pipeline | Step 1 | + B packing |
+|---|---|---|---|
+| 1 | 25.0 | 44.9 | **84** [1.07] |
+| 4 | 98.6 | 146.7 | **300** [1.14] |
+| 8 | 191.6 | 193.4 | **~470-500** [1.31-2.60] |
+
+The 8-thread cell is the point of the exercise: Step 1 sat at parity with the
+old pipeline there because both were memory-bound. Its spread stays above the
+1.3 that `benchmarks/common.py` treats as trustworthy, so read it as a range;
+four runs gave 464, 474, 482, 499.
+
+Single core via `repro/run_step1.sh -- pack_b=1`: **85.1** at 1024^3, against
+40.1 for Step 1.
+
+### Divergences from the plan
+
+- **Hoist depth is 2, not 3.** The plan assumed the experiment's nest, where
+  jc was the only parallel loop. This pass fuses ic and jc into one 2-D
+  `scf.forall`, and `hoistPaddingOnTensors` only hoists across `scf.for`, so
+  the loops between the tile and the pc body are just ir and jr. Both panels
+  land in the pc body, which is where BLIS wants them.
+- **The `memcpy` gate was wrong and is not met.** The plan required 0
+  `memcpy` in the output; there is 1, in the B-packing loop. Removing it (by
+  unrolling the 8 x NR transfers to NR-wide rows) costs **10%** — interleaved,
+  4 pairs, zero overlap:
+
+  | | 1 | 2 | 3 | 4 |
+  |---|---|---|---|---|
+  | with memcpy | 86.06 | 86.62 | 85.88 | 86.90 |
+  | unrolled | 77.79 | 78.16 | 77.01 | 78.60 |
+
+  512 contiguous bytes is a size glibc's `memcpy` handles better than eight
+  separate row transfers, and this copy is amortized over the NC/NR microtiles
+  that read the panel. Stage 3 Fix 7 chased `memcpy` out of the *microkernel*,
+  where 12 calls per microtile really did cost; that finding does not carry
+  over. If ever revisited: `vector::populateVectorUnrollPatterns` with
+  nativeShape `{1, nr}`, filtered to transfers under the pack loop, and
+  strictly *after* the subset fold — before it, the round trip collapses back
+  to the strided `memrefCopy` the fold exists to prevent.
+- **`MLIRLoweringPasses.cpp` was split.** It had reached 1126 lines and 11
+  passes; the blocked path is now `cpp/src/passes/LinalgMatmulBlockedPass.cpp`
+  (496 lines), leaving 655. Clean cut — nothing else referenced the moved code.
+- **Two registrations were missing.** `tensor::registerTilingInterfaceExternalModels`
+  and `registerInferTypeOpInterfaceExternalModels`, without which
+  tiling the hoisted pad fails with no diagnostic (the `dyn_cast<TilingInterface>`
+  just returns null). Both are in `registerCPUDialects`, so `mlir-edsl-opt`
+  gets them too.
+
+### What this pass is, precisely
+
+Not a port of `stage6_transform.mlir`. Roughly a third of that script is
+reproduced, a third is deliberately replaced by passes the pipeline already
+had (the "key finding" above), and a third is Step 2b. The transform-dialect
+ops and this pass call the *same* upstream entry points one layer apart:
+
+| script op | upstream call | used here |
+|---|---|---|
+| `structured.tile_using_for` | `scf::tileUsingSCF` | yes |
+| `structured.pad` | `linalg::rewriteAsPaddedOp` | yes |
+| `structured.hoist_pad` | `linalg::hoistPaddingOnTensors` | yes |
+| `structured.vectorize` | `linalg::vectorize` | yes |
+| `apply_patterns.tensor.merge_consecutive_...` | `tensor::populateMergeConsecutive...` | yes |
+| `apply_patterns.tensor.fold_tensor_subset_...` | `tensor::populateFoldTensorSubset...` | yes |
+
+There is no hand-written rewriting logic in the pass: it is a shape guard,
+handle bookkeeping, and calls into these. The structural differences from the
+script are the 2-D forall (measured: 121 -> 193 GFLOPS on 8 threads) and
+leaving microkernel construction to the existing passes.
+
+### Checks
+
+- `B~` is `tensor<16x256x16xf32>` at 256^3 — static, (NC/NR) x KC x NR.
+- One `malloc`/`free` pair; no `memrefCopy`; max RSS flat over 10 vs 1000
+  calls (163.6 vs 163.3 MB).
+- Microkernel unchanged: 8 `vfmadd231ps`, 4 `vbroadcastss`, 0 spills.
+- `tests/linalg/test_blocked_matmul_ir.py` covers the 2-D forall, the marked
+  4x16x1 tile, the packed panel, the outerproduct kernel, and that a rejected
+  shape (24^3) is left alone. Suite: **712 passed, 16 skipped**.
+
+### Unrelated flake found
+
+`test_binary_op_execution.py::test_three_layer_net` fails about 1 run in 9.
+Nothing to do with this work — the blocked pass leaves that function entirely
+untouched (all 3 matmuls have linalg consumers, so the guard rejects them;
+verified in the `linalg-matmul-blocked` snapshot). It is unseeded random data
+with `rtol=1e-4` and no `atol`, through a relu whose output can land near
+zero: absolute error is ~2e-6 in every trial, relative error explodes only
+when the expected value does not. One-line fix, not applied here.
+
 ## Next
 
-1. **Packing (Step 2).** The 8-thread parity above is a memory-traffic wall;
-   Stage 4 measured ~100 GFLOPS single-thread packed against our 45.
+1. **Packing A (Step 2b).** The remaining half: hoist A's pad with a `[1, 0]`
+   transpose into k-major panels, decompose the zero-width pad, and fuse the
+   un-transpose into the k-loop. Needs the scalarization pass
+   (`vector::populateScalarVectorTransferLoweringPatterns`) so the A~ row read
+   becomes MR broadcasts.
 2. **Targeted hoisting**, which un-skips the ten crashers.
-3. **IR tests** for the blocked path, replacing the three stale ones.
+3. **Rewrite the three stale IR assertions** against the blocked path
+   (`test_bare_matmul_fused`, `test_bare_matmul_not_retiled`,
+   `test_large_matmul_produces_extract_slices`,
+   `test_omp_loop_body_has_no_alloca_scope`). New coverage for the blocked
+   path itself is in `tests/linalg/test_blocked_matmul_ir.py`.
+4. **The `test_three_layer_net` flake** (see Step 2a), one line.

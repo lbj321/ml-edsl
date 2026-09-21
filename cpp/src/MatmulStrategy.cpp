@@ -132,6 +132,8 @@ mlir::FailureOr<MatmulStrategy> chooseStrategy(mlir::linalg::MatmulOp op,
   strategy.mc = *mc;
   strategy.nc = *nc;
   strategy.kc = *kc;
+  strategy.packA = ov.packA;
+  strategy.packB = ov.packB;
   strategy.vectorize = ov.vectorize;
   return strategy;
 }

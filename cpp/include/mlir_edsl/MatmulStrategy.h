@@ -48,7 +48,10 @@ struct MatmulStrategy {
   int64_t nc = 0;
   int64_t kc = 0;
 
-  /// Operand packing (Step 2 — not implemented yet).
+  /// Operand packing. When set, the MR x NR x KC tile's operand is padded and
+  /// the pad hoisted out of the ir/jr loops into a contiguous panel rebuilt
+  /// once per pc iteration: B~ = (NC/NR) x KC x NR, and A~ = (MC/MR) x KC x MR
+  /// transposed to k-major so each k step reads a contiguous MR-element row.
   bool packA = false;
   bool packB = false;
 
@@ -75,6 +78,8 @@ struct StrategyOverrides {
   int64_t mcTarget = 128;
   int64_t ncTarget = 256;
   int64_t kcTarget = 256;
+  bool packA = false;
+  bool packB = true;
   bool vectorize = true;
 };
 

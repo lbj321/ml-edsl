@@ -77,6 +77,8 @@
 #include "mlir/Dialect/SCF/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Tensor/IR/TensorInferTypeOpInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/IR/TensorTilingInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
@@ -174,6 +176,13 @@ void registerCPUDialects(mlir::DialectRegistry &registry) {
   mlir::vector::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::vector::registerSubsetOpInterfaceExternalModels(registry);
   mlir::linalg::registerTilingInterfaceExternalModels(registry);
+  // tensor.pad's TilingInterface is an external model too. Without it,
+  // LinalgMatmulBlockedPass's packing phase cannot tile the hoisted pad that
+  // builds B~ — the dyn_cast<TilingInterface> simply fails, with no
+  // diagnostic to point at the missing registration. That tiling in turn
+  // reifies the pad's result shape, which needs the InferType models.
+  mlir::tensor::registerTilingInterfaceExternalModels(registry);
+  mlir::tensor::registerInferTypeOpInterfaceExternalModels(registry);
   mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::scf::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::tensor::registerValueBoundsOpInterfaceExternalModels(registry);
@@ -395,6 +404,25 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   // analysis working over already-deduped IR.
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createCanonicalizerPass());
+
+  // Hoist buffer allocations out of the loops that produced them, *before*
+  // deallocation is inserted. LinalgMatmulBlockedPass's packed A~/B~ buffers
+  // bufferize to a memref.alloc inside the pc loop; hoisted, each thread
+  // allocates them once per call instead of once per pc iteration. Running
+  // the ownership-based dealloc pass first would instead pin an alloc/free
+  // pair inside that loop, and glibc hands back freshly mmap'd (unfaulted)
+  // pages every time for buffers over its 128 KB threshold — the experiment
+  // measured 10,694 vs 530 minor page faults over 200 calls for exactly this
+  // (PLAN.md Stage 4).
+  //
+  // BufferLoopHoisting deliberately never lifts an allocation out of an
+  // scf.forall body (that would be a race), so per-thread packing buffers
+  // stay per-thread. The second BufferLoopHoisting run further down serves an
+  // unrelated purpose (ConvertVectorToSCF's per-transfer alloca).
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::bufferization::createBufferHoistingPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::bufferization::createBufferLoopHoistingPass());
 
   pm.addPass(
       mlir::bufferization::createOwnershipBasedBufferDeallocationPass());

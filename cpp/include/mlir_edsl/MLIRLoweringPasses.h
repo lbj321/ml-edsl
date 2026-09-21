@@ -21,8 +21,8 @@ std::unique_ptr<mlir::Pass> createLinalgMatmulKTilingPass();
 
 /// BLIS-style cache and register blocking (jc/pc/ic/jr/ir over an MR x NR
 /// register tile). Configured through pass options — see MatmulStrategy.h.
-/// Deliberately not part of buildCPUPipeline: it is reachable only from
-/// mlir-edsl-opt, composed ahead of -cpu-pipeline.
+/// Runs first in buildCPUPipeline with its default options; the options
+/// themselves are reachable only from mlir-edsl-opt.
 std::unique_ptr<mlir::Pass> createLinalgMatmulBlockedPass();
 
 #ifdef MLIR_EDSL_CUDA_ENABLED
