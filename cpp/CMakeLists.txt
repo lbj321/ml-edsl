@@ -39,6 +39,7 @@ add_library(mlir_edsl_core STATIC
     src/MLIRBuilder.cpp
     src/MLIRLowering.cpp
     src/MLIRLoweringPasses.cpp
+    src/MatmulStrategy.cpp
     src/ShapeUtils.cpp
     src/builders/ArithBuilder.cpp
     src/builders/SCFBuilder.cpp
@@ -53,6 +54,8 @@ if(NOT LLVM_ENABLE_RTTI)
     set_source_files_properties(src/MLIRLowering.cpp
         PROPERTIES COMPILE_OPTIONS "-fno-rtti")
     set_source_files_properties(src/MLIRLoweringPasses.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(src/MatmulStrategy.cpp
         PROPERTIES COMPILE_OPTIONS "-fno-rtti")
     if(MLIR_EDSL_CUDA)
         set_source_files_properties(src/MLIRExecutor.cpp
