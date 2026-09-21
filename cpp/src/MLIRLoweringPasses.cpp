@@ -1,5 +1,7 @@
 #include "mlir_edsl/MLIRLoweringPasses.h"
 
+#include "mlir_edsl/MatmulStrategy.h"
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -14,6 +16,8 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+
+#include <array>
 
 namespace {
 
@@ -89,7 +93,14 @@ struct LinalgOuterTileAndFusePass
 
     if (!consumer) {
       // No relu epilogue: fuse fill directly into a bare matmul instead.
-      func.walk([&](mlir::linalg::MatmulOp op) { consumer = op; });
+      // Blocked tiles are skipped: LinalgMatmulBlockedPass already placed
+      // them inside its own loop nest and tiled their fill, so wrapping one in
+      // another scf.forall here would double-tile it.
+      func.walk([&](mlir::linalg::MatmulOp op) {
+        if (op->hasAttr(mlir_edsl::kBlockedAttrName))
+          return;
+        consumer = op;
+      });
     }
 
     if (!consumer)
@@ -167,6 +178,12 @@ struct LinalgMatmulToContractPass
     func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
 
     for (mlir::linalg::MatmulOp matmul : matmuls) {
+      // LinalgMatmulBlockedPass's vectorize=false toggle: leave the register
+      // tile for convert-linalg-to-loops so a scalar baseline can be measured
+      // against the vectorized one.
+      if (matmul->hasAttr(mlir_edsl::kNoVectorizeAttrName))
+        continue;
+
       mlir::Value A = matmul.getInputs()[0];
       mlir::Value B = matmul.getInputs()[1];
       mlir::Value C = matmul.getOutputs()[0];
@@ -277,6 +294,10 @@ struct LinalgVectorizationPass
         continue; // erased by a prior iteration (e.g. nested op inside
                   // vectorized outer)
       if (!mlir::linalg::hasVectorizationImpl(op))
+        continue;
+      // See the matching skip in LinalgMatmulToContractPass — the blocked
+      // pass's vectorize=false toggle.
+      if (op->hasAttr(mlir_edsl::kNoVectorizeAttrName))
         continue;
       rewriter.setInsertionPoint(op);
       if (mlir::failed(mlir::linalg::vectorize(rewriter, op)))
@@ -410,6 +431,11 @@ struct LinalgMatmulTilingPass
       if (loopType == LoopType::ForallOp &&
           op->getParentOfType<mlir::scf::ForallOp>())
         return;
+      // Blocked tiles are already at the register tile size chosen by
+      // MatmulStrategy; the 8x8x8 ForOp configuration would split a 4x16 tile
+      // into 4x8 halves, and the 64x64 ForallOp one would re-tile it entirely.
+      if (op->hasAttr(mlir_edsl::kBlockedAttrName))
+        return;
       matmuls.push_back(op);
     });
 
@@ -479,6 +505,12 @@ struct LinalgMatmulKTilingPass
       if (!op->getParentOfType<mlir::scf::ForallOp>())
         return;
 
+      // A blocked tile has K=1 and so is already below the threshold below;
+      // the explicit skip is insurance for Step 3, where jc becomes an
+      // scf.forall and the parent check above starts passing.
+      if (op->hasAttr(mlir_edsl::kBlockedAttrName))
+        return;
+
       auto lhsType = llvm::cast<mlir::ShapedType>(op.getInputs()[0].getType());
       int64_t k = lhsType.getShape().back();
       if (mlir::ShapedType::isDynamic(k) || k <= kKcTileSize)
@@ -505,6 +537,209 @@ struct LinalgMatmulKTilingPass
         rewriter.eraseOp(op);
       else
         rewriter.replaceOp(op, result->mergeResult.replacements);
+    }
+  }
+};
+
+// Row height used when strip-mining the C-initializing linalg.fill in
+// blockMatmul. Any small constant works — the point is only to keep the
+// vectorizer from seeing the whole MxN fill as one vector; the column extent
+// is the register tile's NR so the stores line up with the microkernel.
+constexpr int64_t kFillTileRows = 8;
+
+// Tiles one level of a loop nest with scf.for, replacing `op` with the tiled
+// result and returning the newly created tile op. Exactly one entry of `sizes`
+// is expected to be non-zero per call: issuing one call per level is what
+// fixes the resulting loop order, which a single multi-dimensional
+// tile_using_for would not (see PLAN.md Stage 2 — [6,16,0] gives ir-outer/
+// jr-inner, the opposite of what the macro-kernel wants).
+static mlir::FailureOr<mlir::Operation *>
+tileOneLevel(mlir::IRRewriter &rewriter, mlir::Operation *op,
+             llvm::ArrayRef<int64_t> sizes,
+             mlir::scf::SCFTilingOptions::LoopType loopType =
+                 mlir::scf::SCFTilingOptions::LoopType::ForOp) {
+  auto tilingOp = llvm::dyn_cast<mlir::TilingInterface>(op);
+  if (!tilingOp)
+    return mlir::failure();
+
+  // Named variable required — setTileSizes captures a non-owning ArrayRef.
+  llvm::SmallVector<mlir::OpFoldResult> tileSizes =
+      mlir::getAsIndexOpFoldResult(op->getContext(), sizes);
+  mlir::scf::SCFTilingOptions opts;
+  opts.setTileSizes(tileSizes);
+  opts.setLoopType(loopType);
+
+  rewriter.setInsertionPoint(op);
+  auto result = mlir::scf::tileUsingSCF(rewriter, tilingOp, opts);
+  if (mlir::failed(result))
+    return mlir::failure();
+  if (result->tiledOps.size() != 1)
+    return mlir::failure();
+
+  rewriter.replaceOp(op, result->mergeResult.replacements);
+  return result->tiledOps.front();
+}
+
+// BLIS-style cache and register blocking for a single linalg.matmul, on
+// tensor semantics. Produces the loop nest
+//
+//   jc (N/NC) → pc (K/KC) → ic (M/MC) → jr (NC/NR) → ir (MC/MR) → k (KC/1)
+//
+// leaving an MR x NR x 1 linalg.matmul tile at the bottom. That tile is the
+// microkernel, but this pass does not build it: LinalgMatmulToContractPass
+// turns it into a vector.contract, LinalgVectorizationPass handles the fill,
+// LoopInvariantSubsetHoisting lifts the C accumulator into the k-loop's
+// iter_args as a vector<MRxNRxf32>, and VectorContractToOuterProductPass
+// lowers the contract to vector.outerproduct → FMA. All four already exist in
+// buildCPUPipeline.
+//
+// No operand packing yet (INTEGRATION.md Step 2): A is read as MR scalars from
+// MR different rows and B has stride N between k steps, which is the bulk of
+// the remaining gap to the experiment's ~100 GFLOPS.
+static mlir::LogicalResult blockMatmul(mlir::IRRewriter &rewriter,
+                                       mlir::linalg::MatmulOp op,
+                                       const mlir_edsl::MatmulStrategy &s) {
+  // The fill initializing C, captured before tiling rewrites the operand.
+  // Handling it is not optional: a bare matmul's fill is normally fused into
+  // the 64x64 forall by LinalgOuterTileAndFusePass, but that pass skips
+  // blocked matmuls, finds no other consumer and returns — leaving the fill
+  // untiled for LinalgVectorizationPass to turn into a single
+  // vector<1024x1024xf32>, which convert-vector-to-scf makes a 4 MB stack
+  // temporary.
+  auto fill = op.getOutputs()[0].getDefiningOp<mlir::linalg::FillOp>();
+
+  using LoopType = mlir::scf::SCFTilingOptions::LoopType;
+  const std::array<std::pair<std::array<int64_t, 3>, LoopType>, 4> levels = {{
+      // jc and ic fused into one 2-D scf.forall over MC x NC tiles of C. Both
+      // are parallel dimensions in BLIS, and splitting only N makes every
+      // thread sweep the whole of A, so total A traffic grows with the thread
+      // count — measured at 1024^3, 8 bands of 128 was *slower* than 4 bands
+      // of 256. Tiling both keeps each thread's working set to an MC-row band
+      // of A and an NC-column band of B, which is what the 64x64 forall in the
+      // old pipeline did.
+      //
+      // ForallToParallelLoop + ConvertSCFToOpenMP turn this into omp.parallel.
+      // The rest stay serial: K must not be split across threads (it is the
+      // reduction), and the register tiles are per-thread work.
+      {{s.mc, s.nc, 0}, LoopType::ForallOp}, // ic x jc: C cache tile
+      {{0, 0, s.kc}, LoopType::ForOp},       // pc: K cache block
+      {{0, s.nr, 0}, LoopType::ForOp},       // jr: N register tile
+      {{s.mr, 0, 0}, LoopType::ForOp},       // ir: M register tile
+  }};
+
+  mlir::Operation *current = op.getOperation();
+  for (const auto &[sizes, loopType] : levels) {
+    auto tiled = tileOneLevel(rewriter, current, sizes, loopType);
+    if (mlir::failed(tiled))
+      return mlir::failure();
+    current = *tiled;
+  }
+
+  // Reduce the MR x NR x KC tile to the MR x NR x 1 register tile. With no
+  // packing there is no un-transpose to fuse into this loop, so a plain tiling
+  // suffices here.
+  auto kernel = tileOneLevel(rewriter, current, {0, 0, 1});
+  if (mlir::failed(kernel))
+    return mlir::failure();
+
+  (*kernel)->setAttr(mlir_edsl::kBlockedAttrName, rewriter.getUnitAttr());
+  if (!s.vectorize)
+    (*kernel)->setAttr(mlir_edsl::kNoVectorizeAttrName, rewriter.getUnitAttr());
+
+  // Strip-mine the fill so it vectorizes into small row stores rather than one
+  // whole-matrix vector. Step 3 replaces this with fusion into the jc forall,
+  // which also parallelizes it.
+  if (fill) {
+    auto tiledFill = tileOneLevel(rewriter, fill.getOperation(),
+                                  {kFillTileRows, s.nr});
+    if (mlir::failed(tiledFill))
+      return mlir::failure();
+  }
+
+  return mlir::success();
+}
+
+// BLIS-style blocking driver. See blockMatmul above for the loop nest and
+// mlir_edsl::chooseStrategy for the fast-path guard; a matmul the guard
+// rejects is left untouched for the existing 64x64 / 8x8x8 passes.
+//
+// Not part of buildCPUPipeline — it is reachable only from mlir-edsl-opt,
+// where it composes with the rest of the pipeline as
+//
+//   mlir-edsl-opt in.mlir -linalg-matmul-blocked=mr=6,nr=16 -cpu-pipeline
+//
+// because the mlir_edsl.blocked marker keeps the superseded passes off its
+// tiles.
+struct LinalgMatmulBlockedPass
+    : public mlir::PassWrapper<LinalgMatmulBlockedPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulBlockedPass)
+
+  LinalgMatmulBlockedPass() = default;
+  // Pass::Option is not copy-constructible, so the compiler cannot generate
+  // the copy constructor clonePass() needs; copying the PassWrapper base
+  // preserves the option values.
+  LinalgMatmulBlockedPass(const LinalgMatmulBlockedPass &other)
+      : mlir::PassWrapper<LinalgMatmulBlockedPass,
+                          mlir::OperationPass<mlir::func::FuncOp>>(other) {}
+
+  Option<int64_t> mr{*this, "mr",
+                     llvm::cl::desc("Register tile rows (microkernel M)"),
+                     llvm::cl::init(4)};
+  Option<int64_t> nr{*this, "nr",
+                     llvm::cl::desc("Register tile columns (microkernel N)"),
+                     llvm::cl::init(16)};
+  Option<int64_t> mc{*this, "mc",
+                     llvm::cl::desc("Upper bound on the M cache block"),
+                     llvm::cl::init(128)};
+  Option<int64_t> nc{*this, "nc",
+                     llvm::cl::desc("Upper bound on the N cache block"),
+                     llvm::cl::init(256)};
+  Option<int64_t> kc{*this, "kc",
+                     llvm::cl::desc("Upper bound on the K cache block"),
+                     llvm::cl::init(256)};
+  Option<bool> vectorize{
+      *this, "vectorize",
+      llvm::cl::desc("Let the register tile reach the vectorizing passes"),
+      llvm::cl::init(true)};
+
+  // tileUsingSCF constructs new scf.for loops.
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::scf::SCFDialect>();
+  }
+
+  llvm::StringRef getArgument() const override {
+    return "linalg-matmul-blocked";
+  }
+  llvm::StringRef getDescription() const override {
+    return "BLIS-style cache and register blocking of linalg.matmul into a "
+           "jc/pc/ic/jr/ir loop nest over an MR x NR register tile";
+  }
+
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::IRRewriter rewriter(func->getContext());
+
+    mlir_edsl::StrategyOverrides ov;
+    ov.mr = mr;
+    ov.nr = nr;
+    ov.mcTarget = mc;
+    ov.ncTarget = nc;
+    ov.kcTarget = kc;
+    ov.vectorize = vectorize;
+
+    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
+    func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
+
+    for (mlir::linalg::MatmulOp op : matmuls) {
+      auto strategy = mlir_edsl::chooseStrategy(op, ov);
+      if (mlir::failed(strategy))
+        continue; // Guard rejected it: leave it for the existing pipeline.
+      if (mlir::failed(blockMatmul(rewriter, op, *strategy))) {
+        // Do NOT signalPassFailure — a partially tiled matmul is still
+        // correct, and the remaining passes can lower whatever is left.
+        op->emitWarning("linalg-matmul-blocked: tiling failed, skipping op");
+      }
     }
   }
 };
@@ -607,6 +842,9 @@ std::unique_ptr<mlir::Pass> createLinalgMatmulParallelTilingPass() {
 }
 std::unique_ptr<mlir::Pass> createLinalgMatmulKTilingPass() {
   return std::make_unique<LinalgMatmulKTilingPass>();
+}
+std::unique_ptr<mlir::Pass> createLinalgMatmulBlockedPass() {
+  return std::make_unique<LinalgMatmulBlockedPass>();
 }
 
 #ifdef MLIR_EDSL_CUDA_ENABLED

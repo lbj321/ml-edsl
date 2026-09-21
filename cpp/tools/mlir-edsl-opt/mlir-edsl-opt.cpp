@@ -42,12 +42,16 @@ void registerCPUPasses() {
   mlir::registerPass([] { return createLinalgMatmulParallelTilingPass(); });
   mlir::registerPass([] { return createLinalgMatmulKTilingPass(); });
   mlir::registerPass([] { return createLinalgGenericTilingPass(); });
+  // Not in buildCPUPipeline — compose it ahead of -cpu-pipeline instead:
+  //   mlir-edsl-opt in.mlir -linalg-matmul-blocked=mr=6,nr=16 -cpu-pipeline
+  mlir::registerPass([] { return createLinalgMatmulBlockedPass(); });
 
   mlir::PassPipelineRegistration<>(
       "cpu-pipeline",
       "Run the full mlir_edsl CPU lowering pipeline (same sequence as "
       "MLIRLowering::addCPUPasses)",
       [](mlir::OpPassManager &pm) { buildCPUPipeline(pm); });
+
 }
 
 } // namespace
