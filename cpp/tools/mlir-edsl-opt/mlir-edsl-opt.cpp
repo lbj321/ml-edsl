@@ -32,6 +32,7 @@ void registerCPUPasses() {
   mlir::registerPass([] { return createLinalgMatmulToContractPass(); });
   mlir::registerPass([] { return createLinalgVectorizationPass(); });
   mlir::registerPass([] { return createVectorCleanupPass(); });
+  mlir::registerPass([] { return createVectorTransposeLoweringPass(); });
   mlir::registerPass([] { return createAllocaScopeCleanupPass(); });
   mlir::registerPass(
       [] { return createVectorContractToOuterProductPass(); });

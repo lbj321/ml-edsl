@@ -500,17 +500,75 @@ with `rtol=1e-4` and no `atol`, through a relu whose output can land near
 zero: absolute error is ~2e-6 in every trial, relative error explodes only
 when the expected value does not. One-line fix, not applied here.
 
+## Step 2b: packing A (DONE)
+
+`pack_a` on by default. A's pad is hoisted with a `[1, 0]` transpose into
+`A~ : tensor<(MC/MR) x KC x MR>`, the zero-width pad is decomposed so the
+transpose reads A directly, the packing transpose is tiled to 8 rows, and the
+un-transpose `hoistPaddingOnTensors` leaves behind is fused into the k-loop by
+`tileConsumerAndFuseProducersUsingSCF` — so each k step transposes a 1 x MR
+row rather than copying MR x KC per microtile.
+
+**Through `@ml_function` at 1024^3**, median of 60:
+
+| threads | old | Step 1 | + B pack | + A pack |
+|---|---|---|---|---|
+| 1 | 25.0 | 44.9 | 84 | **92.8** |
+| 4 | 98.6 | 146.7 | 300 | **330.5** |
+| 8 | 191.6 | 193.4 | ~470-500 | **539-549** |
+
+3.7x / 3.4x / 2.85x over the old pipeline, and within reach of the
+experiment's ~100 / ~585.
+
+### A-packing needs the transposing transfer lowered, or it is a net loss
+
+First attempt measured *slower* than B-only — 83 vs 86 single core, 443 vs
+~470-500 on 8 threads. The packing loop was a `vinsertps` chain:
+
+    18 vmovups  15 vinsertps  9 vbroadcastss  8 vmovaps  5 vblendps  2 vshufps
+
+The cause was not that the transpose is unvectorized. `LinalgVectorizationPass`
+does vectorize it — into a `vector.transfer_read` carrying a `permutation_map`,
+i.e. a transposing load, which `convert-vector-to-llvm` can only do
+element-wise.
+
+Fix: `VectorTransposeLoweringPass`, new, after `LinalgVectorizationPass`. It
+runs `populateVectorTransferPermutationMapLoweringPatterns` (splitting the
+permuting transfer into a plain transfer plus an explicit `vector.transpose`)
+and `populateVectorTransposeLoweringPatterns` with `Shuffle16x16`. These are
+the script's `transfer_permutation_patterns` and `lower_transpose` phases,
+which the "key finding" section had written off as unnecessary — they are not,
+once A is packed. The loop becomes a real in-register transpose:
+
+    24 vmovups  9 vshufps  8 vmovaps  4 vunpcklps  4 vunpckhps
+     4 vextractf128  2 vinsertps  2 vpermpd
+
+and A-packing flips from -3% to +11%, interleaved single core:
+
+| | 1 | 2 | 3 |
+|---|---|---|---|
+| B only | 81.58 | 86.70 | 86.21 |
+| A + B | 95.01 | 95.86 | 94.88 |
+
+### Notes
+
+- The plan's scalarization pass
+  (`vector::populateScalarVectorTransferLoweringPatterns`) is not implemented
+  and is not needed: the microkernel reads A as MR `vbroadcastss` whether or
+  not A is packed.
+- `VectorTransposeLoweringPass` is a global pipeline change; the full suite
+  is unaffected.
+- Panels at 256^3: `B~ = tensor<16x256x16xf32>`, `A~ = tensor<32x256x4xf32>`.
+  Microkernel unchanged at 8 `vfmadd231ps`, 4 `vbroadcastss`, 0 spills. Max
+  RSS flat over 10 vs 1000 calls. **712 passed, 16 skipped.**
+
 ## Next
 
-1. **Packing A (Step 2b).** The remaining half: hoist A's pad with a `[1, 0]`
-   transpose into k-major panels, decompose the zero-width pad, and fuse the
-   un-transpose into the k-loop. Needs the scalarization pass
-   (`vector::populateScalarVectorTransferLoweringPatterns`) so the A~ row read
-   becomes MR broadcasts.
-2. **Targeted hoisting**, which un-skips the ten crashers.
-3. **Rewrite the three stale IR assertions** against the blocked path
+1. **Targeted hoisting**, which un-skips the ten crashers. Now the largest
+   item: a dense layer with a relu is miscompiled today.
+2. **Rewrite the three stale IR assertions** against the blocked path
    (`test_bare_matmul_fused`, `test_bare_matmul_not_retiled`,
    `test_large_matmul_produces_extract_slices`,
    `test_omp_loop_body_has_no_alloca_scope`). New coverage for the blocked
    path itself is in `tests/linalg/test_blocked_matmul_ir.py`.
-4. **The `test_three_layer_net` flake** (see Step 2a), one line.
+3. **The `test_three_layer_net` flake** (see Step 2a), one line.

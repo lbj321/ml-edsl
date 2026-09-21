@@ -86,6 +86,10 @@ constexpr llvm::StringLiteral kTileIdAttrName = "mlir_edsl.blocked_tile_id";
 // register: each iteration copies an 8 x NR block with two vector transfers.
 constexpr int64_t kPackTileRows = 8;
 
+// Marks A's packing transpose so it can be re-found after decomposing the pad.
+constexpr llvm::StringLiteral kPackTransposeAttrName =
+    "mlir_edsl.blocked_pack_transpose";
+
 // The register tile carrying `tileId`, or null. Raw Operation* handles do not
 // survive a greedy pattern application, so every step that applies patterns
 // re-acquires the tile through this.
@@ -219,6 +223,63 @@ packOperands(mlir::IRRewriter &rewriter, mlir::func::FuncOp func,
     mlir::tensor::populateFoldTensorSubsetIntoVectorTransferPatterns(patterns);
     if (mlir::failed(applyPatternSet(func, std::move(patterns))))
       return mlir::failure();
+
+    tile = findTileById(func, tileId);
+    if (!tile)
+      return mlir::failure();
+  }
+
+  // A~: hoist across ir and jr with a [1, 0] transpose, so each k step reads a
+  // contiguous MR-element row instead of MR scalars from MR different rows.
+  if (s.packA) {
+    auto padA = tile->getOperand(0).getDefiningOp<mlir::tensor::PadOp>();
+    if (!padA)
+      return mlir::failure();
+
+    mlir::tensor::PadOp hoistedPad;
+    llvm::SmallVector<mlir::linalg::TransposeOp> transposeOps;
+    auto packed = mlir::linalg::hoistPaddingOnTensors(
+        rewriter, padA, /*numLoops=*/2, /*transposeVector=*/{1, 0}, hoistedPad,
+        transposeOps);
+    if (mlir::failed(packed))
+      return mlir::failure();
+    rewriter.replaceOp(padA, *packed);
+
+    // transposeOps[0] is the packing transpose, [1] the un-transpose put back
+    // in front of the tile. Mark the former: decomposing the pad below runs
+    // patterns, after which the raw handle is no longer safe.
+    if (transposeOps.empty())
+      return mlir::failure();
+    transposeOps.front()->setAttr(kPackTransposeAttrName,
+                                  rewriter.getUnitAttr());
+
+    // A's pad is zero-width — the transpose is the packing copy — and
+    // tensor.pad is not destination-style, so it cannot be fused with the
+    // fusion utilities. Decomposing it lets the transpose read A directly.
+    {
+      mlir::RewritePatternSet patterns(ctx);
+      mlir::linalg::populateDecomposePadPatterns(patterns);
+      if (mlir::failed(applyPatternSet(func, std::move(patterns))))
+        return mlir::failure();
+    }
+
+    mlir::Operation *packTranspose = nullptr;
+    func.walk([&](mlir::linalg::TransposeOp op) {
+      if (op->hasAttr(kPackTransposeAttrName)) {
+        packTranspose = op.getOperation();
+        return mlir::WalkResult::interrupt();
+      }
+      return mlir::WalkResult::advance();
+    });
+    if (!packTranspose)
+      return mlir::failure();
+
+    // Tiled to 8 rows for the same reason as B's copy; LinalgVectorizationPass
+    // vectorizes the tiles later.
+    auto trTile = tileOneLevel(rewriter, packTranspose, {kPackTileRows, 0});
+    if (mlir::failed(trTile))
+      return mlir::failure();
+    (*trTile)->removeAttr(kPackTransposeAttrName);
 
     tile = findTileById(func, tileId);
     if (!tile)
@@ -398,7 +459,7 @@ struct LinalgMatmulBlockedPass
                      llvm::cl::init(256)};
   Option<bool> packA{*this, "pack_a",
                      llvm::cl::desc("Pack A into k-major MR-wide panels"),
-                     llvm::cl::init(false)};
+                     llvm::cl::init(true)};
   Option<bool> packB{*this, "pack_b",
                      llvm::cl::desc("Pack B into contiguous NR-wide panels"),
                      llvm::cl::init(true)};

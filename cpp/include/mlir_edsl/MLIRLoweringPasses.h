@@ -12,6 +12,9 @@ std::unique_ptr<mlir::Pass> createLinalgOuterTileAndFusePass(
 std::unique_ptr<mlir::Pass> createLinalgMatmulToContractPass();
 std::unique_ptr<mlir::Pass> createLinalgVectorizationPass();
 std::unique_ptr<mlir::Pass> createVectorCleanupPass();
+
+/// Lower permuting vector transfers and vector.transpose to shuffles.
+std::unique_ptr<mlir::Pass> createVectorTransposeLoweringPass();
 std::unique_ptr<mlir::Pass> createAllocaScopeCleanupPass();
 std::unique_ptr<mlir::Pass> createVectorContractToOuterProductPass();
 std::unique_ptr<mlir::Pass> createLinalgGenericTilingPass();

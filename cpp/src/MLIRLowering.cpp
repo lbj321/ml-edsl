@@ -362,6 +362,8 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(
       mlir::createLoopInvariantSubsetHoistingPass());
 
+  pm.addNestedPass<mlir::func::FuncOp>(createVectorTransposeLoweringPass());
+
   // Fuse mulf + multi_reduction → vector.contract for better LLVM codegen
   pm.addNestedPass<mlir::func::FuncOp>(createVectorCleanupPass());
 

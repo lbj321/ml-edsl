@@ -329,6 +329,31 @@ struct VectorCleanupPass
   }
 };
 
+// Rewrites permuting vector.transfer ops into a plain transfer plus an
+// explicit vector.transpose, then lowers that transpose with shuffles.
+// Without this a transposing transfer_read (as the A-packing copy produces)
+// reaches convert-vector-to-llvm and degenerates into a vinsertps chain.
+struct VectorTransposeLoweringPass
+    : public mlir::PassWrapper<VectorTransposeLoweringPass,
+                               mlir::OperationPass<mlir::func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VectorTransposeLoweringPass)
+  llvm::StringRef getArgument() const override {
+    return "vector-transpose-lowering";
+  }
+  llvm::StringRef getDescription() const override {
+    return "Lower permuting vector transfers and vector.transpose to shuffles";
+  }
+  void runOnOperation() override {
+    mlir::func::FuncOp func = getOperation();
+    mlir::RewritePatternSet patterns(func->getContext());
+    mlir::vector::populateVectorTransferPermutationMapLoweringPatterns(patterns);
+    mlir::vector::populateVectorTransposeLoweringPatterns(
+        patterns, mlir::vector::VectorTransposeLowering::Shuffle16x16);
+    if (mlir::failed(mlir::applyPatternsGreedily(func, std::move(patterns))))
+      signalPassFailure();
+  }
+};
+
 // Inlines memref.alloca_scope ops whose body contains no memref.alloca —
 // i.e. scopes wrapped by ConvertSCFToOpenMPPass "just in case" that never
 // actually need stack scoping. Must run before scf-to-cf: AllocaScopeOp
@@ -623,6 +648,9 @@ std::unique_ptr<mlir::Pass> createLinalgVectorizationPass() {
 }
 std::unique_ptr<mlir::Pass> createVectorCleanupPass() {
   return std::make_unique<VectorCleanupPass>();
+}
+std::unique_ptr<mlir::Pass> createVectorTransposeLoweringPass() {
+  return std::make_unique<VectorTransposeLoweringPass>();
 }
 std::unique_ptr<mlir::Pass> createAllocaScopeCleanupPass() {
   return std::make_unique<AllocaScopeCleanupPass>();

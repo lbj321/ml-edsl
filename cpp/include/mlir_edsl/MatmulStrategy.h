@@ -78,7 +78,7 @@ struct StrategyOverrides {
   int64_t mcTarget = 128;
   int64_t ncTarget = 256;
   int64_t kcTarget = 256;
-  bool packA = false;
+  bool packA = true;
   bool packB = true;
   bool vectorize = true;
 };

@@ -54,6 +54,34 @@ class TestBlockedMatmulStructure:
         // CHECK-SAME: tensor<256x16xf32>
         """, after="linalg-matmul-blocked")
 
+    def test_packs_a_into_k_major_panel(self, check_lowered_ir):
+        """A~ is (MC/MR) x KC x MR, built by a tiled [1,0] transpose."""
+        _run(N)
+        check_lowered_ir("""
+        // CHECK: linalg.transpose ins({{.*}} : tensor<4x8xf32>)
+        // CHECK-SAME: outs({{.*}} : tensor<8x4xf32>)
+        // CHECK-SAME: permutation = [1, 0]
+        """, after="linalg-matmul-blocked")
+
+    def test_a_untranspose_is_fused_into_k_loop(self, check_lowered_ir):
+        """The un-transpose hoisting leaves behind becomes a per-k-step 1xMR."""
+        _run(N)
+        check_lowered_ir("""
+        // CHECK: linalg.transpose ins({{.*}} : tensor<1x4xf32>)
+        // CHECK-SAME: outs({{.*}} : tensor<4x1xf32>)
+        """, after="linalg-matmul-blocked")
+
+    def test_transposing_transfer_is_lowered(self, check_lowered_ir):
+        """No permuting transfer survives to reach convert-vector-to-llvm.
+
+        A transposing transfer_read lowers to a vinsertps chain; shuffles are
+        worth ~11% on the packed path.
+        """
+        _run(N)
+        check_lowered_ir("""
+        // CHECK-NOT: permutation_map
+        """, after="vector-transpose-lowering")
+
     def test_microkernel_is_outerproduct(self, check_lowered_ir):
         """The reused pipeline passes turn the register tile into FMAs."""
         _run(N)
