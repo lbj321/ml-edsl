@@ -15,7 +15,7 @@ import numpy as np
 from mlir_edsl import ml_function, Tensor, f32, matmul, relu
 from mlir_edsl.backend import get_backend
 
-from common import SIZES, WARMUP, best_of, repeats_for, print_section
+from common import SIZES, WARMUP, time_call, repeats_for, print_section
 
 
 def make_edsl_matmul(N: int):
@@ -81,10 +81,10 @@ def main():
             np.add(A, b)
             np.maximum(A, 0.0)
 
-        np_matmul_t[N] = best_of(lambda: np.matmul(A, B), n)
-        np_bias_t[N]   = best_of(lambda: np.add(A, b), n)
-        np_relu_t[N]   = best_of(lambda: np.maximum(A, 0.0), n)
-        print(f"  numpy {N:>3}x{N}: matmul={np_matmul_t[N]*1e6:.2f} µs  bias={np_bias_t[N]*1e6:.2f} µs  relu={np_relu_t[N]*1e6:.2f} µs")
+        np_matmul_t[N] = time_call(lambda: np.matmul(A, B), n)
+        np_bias_t[N]   = time_call(lambda: np.add(A, b), n)
+        np_relu_t[N]   = time_call(lambda: np.maximum(A, 0.0), n)
+        print(f"  numpy {N:>3}x{N}: matmul={np_matmul_t[N].median*1e6:.2f} µs  bias={np_bias_t[N].median*1e6:.2f} µs  relu={np_relu_t[N].median*1e6:.2f} µs")
 
     # Phase 2: EDSL benchmarks (triggers libomp RTLD_GLOBAL on first call).
     backend = get_backend()
@@ -97,27 +97,27 @@ def main():
     for N in SIZES:
         A, B, b = inputs[N]
         n = repeats_for(N)
-        label = f"{N:>4}x{N:<2}"
+        label = f"{N}x{N}"
 
         edsl_fn, matmul_compile = make_edsl_matmul(N)
         for _ in range(WARMUP):
             edsl_fn(A, B)
-        matmul_t = best_of(lambda: edsl_fn(A, B), n)
+        matmul_t = time_call(lambda: edsl_fn(A, B), n)
         matmul_rows.append((label, matmul_t, np_matmul_t[N], matmul_compile))
 
         edsl_fn, bias_compile = make_edsl_bias_add(N)
         for _ in range(WARMUP):
             edsl_fn(A, b)
-        bias_t = best_of(lambda: edsl_fn(A, b), n)
+        bias_t = time_call(lambda: edsl_fn(A, b), n)
         bias_rows.append((label, bias_t, np_bias_t[N], bias_compile))
 
         edsl_fn, relu_compile = make_edsl_relu(N)
         for _ in range(WARMUP):
             edsl_fn(A)
-        relu_t = best_of(lambda: edsl_fn(A), n)
+        relu_t = time_call(lambda: edsl_fn(A), n)
         relu_rows.append((label, relu_t, np_relu_t[N], relu_compile))
 
-        print(f"  edsl  {N:>3}x{N}: matmul={matmul_t*1e6:.2f} µs (compile={matmul_compile*1e3:.1f} ms)  bias={bias_t*1e6:.2f} µs  relu={relu_t*1e6:.2f} µs")
+        print(f"  edsl  {N:>3}x{N}: matmul={matmul_t.median*1e6:.2f} µs (compile={matmul_compile*1e3:.1f} ms)  bias={bias_t.median*1e6:.2f} µs  relu={relu_t.median*1e6:.2f} µs")
 
     print()
     print_section("Matmul: X @ W", matmul_rows)
