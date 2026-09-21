@@ -8,6 +8,11 @@ existing passes wherever possible and removing the ones it supersedes.
 number isn't measured yet; Step 0 does that. Experiment: ~100 GFLOPS on 1
 thread and ~585 on 8 (Stage 6), correct for every power-of-2 shape.
 
+> **Superseded — see the implementation log at the end of this file.** That 18
+> GFLOPS is a CLI-toolchain figure (`opt -O3 -mcpu=skylake`). Measured through
+> the JIT, the old pipeline does **25.0 GFLOPS on 1 thread and 191.6 on 8** at
+> 1024³, which is the baseline any comparison should use.
+
 ## Key finding: the new pass only tiles and packs; existing passes build the microkernel
 
 Checked 2026-09-18 at 1024³:
@@ -244,3 +249,161 @@ comes with a toggle, so you can always measure what that step contributed.
    counts.
 3. **Performance:** a benchmark script, not in CI. Record numbers per step in
    this file, the same way PLAN.md does for each stage.
+
+---
+
+# Implementation log
+
+What actually landed, and where it diverged from the plan above.
+
+## Steps 0 + 1 + parallel outer tiling (DONE)
+
+`LinalgMatmulBlockedPass` runs first in `buildCPUPipeline`, unconditionally.
+Packing (Step 2) is **not** done, so A is read as MR scalars from MR rows and
+B has stride N between k steps.
+
+**Through `@ml_function` at 1024^3** (9700KF, f32, best of 25 samples — see
+the measurement note below):
+
+| threads | old pipeline | blocked path | |
+|---|---|---|---|
+| 1 | 25.0 | **44.9** | 1.80x |
+| 4 | 98.6 | **146.7** | 1.49x |
+| 8 | 191.6 | **193.4** | parity |
+
+A clear win at low thread counts, parity on the full machine: at 8 threads
+both are memory-bound, which is what packing addresses.
+
+Note the old pipeline's real JIT baseline is **25.0 GFLOPS single-thread**,
+not the 18.25 quoted at the top of this file — that figure came from the CLI
+toolchain with a fixed `opt -O3 -mcpu=skylake`, and the JIT's own O2/O3 does
+better. Compare like with like.
+
+**Single core via `repro/run_step1.sh`** (CLI toolchain, `taskset -c 0`, all
+passing `bench_matmul.c`'s naive reference check):
+
+| shape | mr=4 | mr=6 |
+|---|---|---|
+| 256^3 | 48.2 | — |
+| 512^3 | 46.4 | — |
+| 768^3 | 49.0 | **58.7** |
+| 1024^3 | 40.1 | rejected |
+
+The microkernel is exactly what the "key finding" section predicted: the hot
+loop at 1024^3 is 8 `vfmadd231ps`, 4 `vbroadcastss`, 2 `vmovups` (the B tile),
+**0 spills**, no `memcpy`, with C held in `ymm0`-`ymm7` across the whole
+k-loop and stored only after it exits.
+
+### Divergences from the plan
+
+- **Cache blocks are derived, not fixed.** `mc`/`nc`/`kc` are *upper bounds*;
+  `chooseStrategy` searches downward for the largest block that is both a
+  multiple of the register tile and a divisor of the extent. The blocking
+  follows the microkernel — mr=6 on M=768 picks MC=96 by itself. This replaces
+  the plan's separate divisibility checklist: every `%` condition in it is
+  implied by a successful search.
+- **6x16 is selectable but cannot be the default.** `MC % 6 == 0` forces a
+  factor of 3 into MC, and no such MC divides a power-of-2 M, so 1024^3 is
+  rejected outright. 4x16 is the default. Where 6x16 is legal it is worth
+  having: 768^3 measured **58.7 vs 49.0**, a 1.20x gain.
+- **No env var.** The pass is wired into `buildCPUPipeline` unconditionally,
+  so `mr`/`nr` are reachable only as `mlir-edsl-opt` pass options; the JIT
+  always uses the derived defaults.
+- **The parallel level is a 2-D forall over ic x jc**, not jc alone as the
+  plan assumed — see below.
+
+## Pitfall: parallelize M and N, not N alone
+
+The plan's Stage 6 shape (jc forall only) is wrong without packing. Splitting
+only N makes every thread sweep the whole of A, so total A traffic grows with
+the thread count. Measured at 1024^3 on 8 threads:
+
+| jc bands | NC | GFLOPS |
+|---|---|---|
+| 4 | 256 | 121 |
+| 8 | 128 | 104 |
+
+More parallelism, *less* throughput. Sizing NC by thread count — the obvious
+fix — makes it worse, not better.
+
+Tiling both dimensions into one `scf.forall` over MC x NC tiles bounds each
+thread's working set to an MC-row band of A and an NC-column band of B, and
+took 8 threads from 121 to ~193. This is what the old 64x64 forall did, and
+what BLIS does: jc and ic are both parallel loops. A sweep of MC/NC targets
+(64/64, 64/128, 128/128, 128/256) found nothing better than the 128/256
+default, so the remaining gap is not tile tuning.
+
+## Pitfall: LoopInvariantSubsetHoisting has no globally correct position
+
+The microkernel needs this pass to lift the C tile into the k-loop's
+`iter_args` — worth **39.8 vs 16.7 GFLOPS** at 1024^3 single-core. Without it
+the loop reloads and stores all 8 accumulator registers every k step
+(`vmovups` in the hot loop goes 2 -> 10).
+
+It only achieves that **pre-bufferization**, while C is still tensor SSA;
+moved after bufferization it hoists nothing for the blocked path.
+
+But it is a whole-function pass, and pre-bufferization it also rewrites the
+fused matmul+bias+relu epilogue's `extract_slice`/`insert_slice` chain into
+tensor iter_args. That defeats one-shot-bufferize's in-place analysis: the
+dense chain lowers with two `memrefCopy` calls the base pipeline does not
+emit, and **aborts at run time**.
+
+One phase is right for the blocked matmul and wrong for fusion. It is
+currently run globally and the breakage accepted.
+
+**The fix** is to hoist only the blocked loops: mark the k-loop `scf.for` with
+`mlir_edsl.blocked` (the marker currently goes on the `linalg.matmul`, which
+`LinalgMatmulToContractPass` erases — the loop survives) and run
+`hoistLoopInvariantSubsets` on those alone. Watch for the two canonicalizer
+runs in between dropping the discardable attribute.
+
+## Pitfall: measure with enough samples
+
+This machine's numbers swing ~1.5x with sample count. The same binary and
+shape measured 157, 292 and 196 GFLOPS under three protocols — short runs sit
+in turbo, sustained AVX2 FMA load settles at the offset clock. Use at least
+25 timed calls and report the spread; several conclusions in this file were
+wrong the first time for exactly this reason.
+
+## Known breakage: 13 skipped tests
+
+Ten **crashes**, all epilogue chains. `chooseStrategy` rejects matmuls with a
+linalg consumer, so they stay on the old path, which the global hoisting
+miscompiles: `test_epilogue_fusion.py` (8), `test_multicore.py::TestMulticoreDenseLayer`
+(3), `test_lowering_ir.py::test_dense_layer_large_k_cache_blocked`.
+
+Three **stale IR assertions**, failing because the new path works — bare
+matmuls no longer produce a 64x64 `scf.forall`, 8x8 `extract_slice`s or an
+`omp.parallel`: `test_bare_matmul_fused`, `test_bare_matmul_not_retiled`,
+`test_large_matmul_produces_extract_slices`,
+`test_omp_loop_body_has_no_alloca_scope`. These want rewriting against the
+blocked path, not un-skipping.
+
+Everything else passes: **707 passed, 16 skipped**.
+
+## Fusion inventory (context for Step 4)
+
+There is exactly one fusion call site in the project:
+`tileConsumerAndFuseProducersUsingSCF` in `LinalgOuterTileAndFusePass`. Its
+root selection is two-tier — a generic with `library_call == "relu"`, else the
+last bare `linalg.matmul` — and it is narrower than it looks:
+
+| chain | fused into the tile | left outside |
+|---|---|---|
+| matmul -> bias -> **relu** | fill, matmul, bias_add, relu | — |
+| matmul -> bias -> **leaky_relu** | fill, matmul | bias_add, leaky_relu |
+| matmul -> **bias** only | fill, matmul | bias_add |
+| matmul -> `tensor_map(fn)` | fill, matmul | the map generic |
+
+`leaky_relu` is tagged `library_call = "leaky_relu"` by `LinalgBuilder.cpp`
+but the pass matches only `"relu"`, so it silently loses epilogue fusion and
+does two extra full-array round-trips. Step 4's epilogue-on-accumulator would
+cover all four rows uniformly.
+
+## Next
+
+1. **Packing (Step 2).** The 8-thread parity above is a memory-traffic wall;
+   Stage 4 measured ~100 GFLOPS single-thread packed against our 45.
+2. **Targeted hoisting**, which un-skips the ten crashers.
+3. **IR tests** for the blocked path, replacing the three stale ones.
