@@ -775,3 +775,39 @@ Production's `AllocaScopeCleanupPass` could probably be replaced by
 - A small script (`harness/count_fma.sh` or similar) that greps the assembly for
   `vfmadd231ps` and `rsp`-relative accesses inside the hot loop label — run it at
   every stage, not just Stage 1.
+
+## Register-tile sweep (harness/sweep_kernels.py)
+
+Basis for the MR x NR choice. Each shape is the isolated microkernel on
+packed panels hot in L1, so this is the kernel loop alone — Stage 1's recipe
+run verbatim for any MR/NR. `out/` is gitignored, so the table is reproduced
+here; regenerate with `python3 harness/sweep_kernels.py`.
+
+| kernel | acc | GFLOPS | cyc/it | floor | % | fma | bcst | ld | spills |
+|---|---|---|---|---|---|---|---|---|---|
+| **6x16** | 12 | **130.8** | 6.14 | 6.0 | 97.7 | 12 | 6 | 2 | 0 |
+| 6x16/k2 | 12 | 125.5 | 12.14 | 12.0 | 98.8 | 24 | 12 | 4 | 0 |
+| 4x16/k2 | 8 | 123.9 | 8.14 | 8.0 | 98.3 | 16 | 8 | 4 | 0 |
+| **4x16** | 8 | **121.7** | 4.14 | 4.0 | 96.6 | 8 | 4 | 2 | 0 |
+| 4x16/k4 | 8 | 113.8 | 16.14 | 16.0 | 99.1 | 32 | 16 | 8 | 0 |
+| 12x8 | 12 | 113.2 | 6.63 | 6.0 | 90.5 | 12 | 12 | 1 | 0 |
+| 2x32 | 8 | 109.1 | 4.14 | 4.0 | 96.6 | 8 | 2 | 4 | 0 |
+| 2x32/k2 | 8 | 103.7 | 8.14 | 8.0 | 98.3 | 16 | 4 | 8 | 0 |
+| 8x8 (production) | 8 | 100.8 | 4.63 | 4.0 | 86.4 | 8 | 8 | 1 | 0 |
+| 6x8 | 6 | 86.7 | 4.13 | 3.0 | 72.6 | 6 | 6 | 1 | 0 |
+| 8x8/k2 | 8 | 73.7 | 9.69 | 8.0 | 82.6 | 16 | 16 | 3 | 2 |
+| 2x16 | 4 | 65.0 | 4.12 | 2.0 | 48.5 | 4 | 2 | 2 | 0 |
+| 3x32 | 12 | 64.6 | 12.10 | 6.0 | 49.6 | 12 | 3 | 8 | 4 |
+| 8x16 | 16 | 63.7 | 13.15 | 8.0 | 60.8 | 16 | 8 | 16 | 14 |
+| 4x24 | 12 | 4.7 | 163.12 | 6.0 | 3.7 | 12 | 4 | 24 | 191 |
+
+- **6x16 wins** at 97.7% of the FMA-port floor, 1.30x the 8x8 production
+  shape. 4x16 is 7% behind but is what the compiler defaults to, because
+  MR=6 cannot divide a power-of-2 M (see INTEGRATION.md).
+- **Above 16 live ymm registers it collapses.** 8x16 needs 16+2+1 = 19 and
+  spills 14 times; 4x24 spills 191 and loses 96% of peak. This is the
+  `MR*NR/8 + NR/8 + 1 <= 16` budget chooseStrategy enforces.
+- **k-unrolling is a wash**: 4x16/k2 gains 2 GFLOPS, 6x16/k2 loses 5, /k4
+  loses 8. Not worth the code.
+- Numbers are AVX2 (16 ymm). An AVX-512 target has 32 registers and the
+  whole table should be re-run before trusting the budget check.
