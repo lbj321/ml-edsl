@@ -37,10 +37,10 @@ class TestBlockedMatmulStructure:
         """, after="linalg-matmul-blocked")
 
     def test_register_tile_is_marked_and_4x16x1(self, check_lowered_ir):
-        """The innermost tile is MR x NR x 1 and carries the blocked marker."""
+        """The innermost tile is MR x NR x 1 and records its strategy."""
         _run(N)
         check_lowered_ir("""
-        // CHECK: linalg.matmul {mlir_edsl.blocked}
+        // CHECK: linalg.matmul {mlir_edsl.blocked = {kc = 256 : i64, mc = 128 : i64, mr = 4 : i64, nc = 256 : i64, nr = 16 : i64, pack_a = true, pack_b = true, vectorize = true}}
         // CHECK-SAME: tensor<4x1xf32>, tensor<1x16xf32>
         // CHECK-SAME: tensor<4x16xf32>
         """, after="linalg-matmul-blocked")
@@ -118,5 +118,5 @@ class TestBlockedMatmulFallback:
         check_lowered_ir("""
         // CHECK: linalg.matmul ins({{.*}} : tensor<256x256xf32>, tensor<256x256xf32>)
         // CHECK: scf.forall
-        // CHECK: linalg.matmul {mlir_edsl.blocked}
+        // CHECK: linalg.matmul {mlir_edsl.blocked =
         """, after="linalg-matmul-blocked")

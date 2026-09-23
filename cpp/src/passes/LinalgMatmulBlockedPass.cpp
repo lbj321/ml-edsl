@@ -175,9 +175,8 @@ tileNest(mlir::IRRewriter &rewriter, mlir::linalg::MatmulOp op,
 
   // Marked now rather than after k-tiling: every later tiling clones the op
   // and carries the attributes along.
-  current->setAttr(mlir_edsl::kBlockedAttrName, rewriter.getUnitAttr());
-  if (!s.vectorize)
-    current->setAttr(mlir_edsl::kNoVectorizeAttrName, rewriter.getUnitAttr());
+  current->setAttr(mlir_edsl::kBlockedAttrName,
+                   mlir_edsl::buildBlockedConfig(rewriter.getContext(), s));
 
   // Strip-mine the fill so it vectorizes into small row stores rather than one
   // whole-matrix vector. Step 3 replaces this with fusion into the jc forall,

@@ -1,5 +1,7 @@
 #include "mlir_edsl/MatmulStrategy.h"
 
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 
 #include <algorithm>
@@ -136,6 +138,29 @@ mlir::FailureOr<MatmulStrategy> chooseStrategy(mlir::linalg::MatmulOp op,
   strategy.packB = ov.packB;
   strategy.vectorize = ov.vectorize;
   return strategy;
+}
+
+mlir::DictionaryAttr buildBlockedConfig(mlir::MLIRContext *ctx,
+                                        const MatmulStrategy &s) {
+  mlir::Builder b(ctx);
+  return b.getDictionaryAttr({
+      b.getNamedAttr("mr", b.getI64IntegerAttr(s.mr)),
+      b.getNamedAttr("nr", b.getI64IntegerAttr(s.nr)),
+      b.getNamedAttr("mc", b.getI64IntegerAttr(s.mc)),
+      b.getNamedAttr("nc", b.getI64IntegerAttr(s.nc)),
+      b.getNamedAttr("kc", b.getI64IntegerAttr(s.kc)),
+      b.getNamedAttr("pack_a", b.getBoolAttr(s.packA)),
+      b.getNamedAttr("pack_b", b.getBoolAttr(s.packB)),
+      b.getNamedAttr("vectorize", b.getBoolAttr(s.vectorize)),
+  });
+}
+
+bool isBlockedWithoutVectorize(mlir::Operation *op) {
+  auto config = op->getAttrOfType<mlir::DictionaryAttr>(kBlockedAttrName);
+  if (!config)
+    return false;
+  auto vectorize = config.getAs<mlir::BoolAttr>("vectorize");
+  return vectorize && !vectorize.getValue();
 }
 
 } // namespace mlir_edsl

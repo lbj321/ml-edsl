@@ -183,7 +183,7 @@ struct LinalgMatmulToContractPass
       // LinalgMatmulBlockedPass's vectorize=false toggle: leave the register
       // tile for convert-linalg-to-loops so a scalar baseline can be measured
       // against the vectorized one.
-      if (matmul->hasAttr(mlir_edsl::kNoVectorizeAttrName))
+      if (mlir_edsl::isBlockedWithoutVectorize(matmul))
         continue;
 
       mlir::Value A = matmul.getInputs()[0];
@@ -299,7 +299,7 @@ struct LinalgVectorizationPass
         continue;
       // See the matching skip in LinalgMatmulToContractPass — the blocked
       // pass's vectorize=false toggle.
-      if (op->hasAttr(mlir_edsl::kNoVectorizeAttrName))
+      if (mlir_edsl::isBlockedWithoutVectorize(op))
         continue;
       rewriter.setInsertionPoint(op);
       if (mlir::failed(mlir::linalg::vectorize(rewriter, op)))

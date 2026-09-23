@@ -8,8 +8,9 @@
 
 namespace mlir_edsl {
 
-/// Discardable unit attribute set by LinalgMatmulBlockedPass on every
-/// linalg.matmul tile it produces.
+/// Discardable attribute set by LinalgMatmulBlockedPass on every linalg.matmul
+/// tile it produces. Its value is a dictionary of the strategy that produced
+/// the tile (see buildBlockedConfig), so IR dumps show which blocking was used.
 ///
 /// The blocked pass leaves MR x NR x 1 tiles behind that the older matmul
 /// passes would happily re-tile: LinalgOuterTileAndFusePass would wrap one in
@@ -17,18 +18,9 @@ namespace mlir_edsl {
 /// tile into 4x8 halves, and the 64x64 parallel tiling would grab them too.
 /// Those three passes skip any op carrying this attribute; the passes that
 /// *build* the microkernel (LinalgMatmulToContractPass,
-/// LinalgVectorizationPass) deliberately do not.
+/// LinalgVectorizationPass) deliberately do not, unless the strategy turned
+/// vectorization off (see isBlockedWithoutVectorize).
 constexpr llvm::StringLiteral kBlockedAttrName = "mlir_edsl.blocked";
-
-/// Discardable unit attribute set alongside kBlockedAttrName when the blocked
-/// pass runs with vectorize=false. LinalgMatmulToContractPass and
-/// LinalgVectorizationPass skip ops carrying it, so the register tile falls
-/// through to convert-linalg-to-loops as scalar code.
-///
-/// It is a separate attribute from kBlockedAttrName precisely because those
-/// two passes must keep processing blocked tiles in the normal case — they are
-/// what turns an MR x NR x 1 tile into the microkernel.
-constexpr llvm::StringLiteral kNoVectorizeAttrName = "mlir_edsl.no_vectorize";
 
 /// A complete blocking decision for one linalg.matmul: the register tile (the
 /// microkernel), the cache blocks derived from it, and the feature toggles.
@@ -55,8 +47,8 @@ struct MatmulStrategy {
   bool packA = false;
   bool packB = false;
 
-  /// When false the produced tiles are marked so LinalgMatmulToContractPass
-  /// and LinalgVectorizationPass skip them and they fall through to
+  /// When false LinalgMatmulToContractPass and LinalgVectorizationPass skip
+  /// the produced tiles (see isBlockedWithoutVectorize) and they fall through to
   /// convert-linalg-to-loops. For a meaningful scalar comparison LLVM's own
   /// loop/SLP vectorizers must be disabled too, or O2/O3 re-vectorizes them.
   bool vectorize = true;
@@ -96,5 +88,14 @@ struct StrategyOverrides {
 /// ymm registers; and shapes for which no valid cache block exists.
 mlir::FailureOr<MatmulStrategy> chooseStrategy(mlir::linalg::MatmulOp op,
                                                const StrategyOverrides &ov);
+
+/// The kBlockedAttrName value recording `s`: mr, nr, mc, nc, kc (i64) and
+/// pack_a, pack_b, vectorize (bool).
+mlir::DictionaryAttr buildBlockedConfig(mlir::MLIRContext *ctx,
+                                        const MatmulStrategy &s);
+
+/// True when `op` is a blocked tile whose strategy has vectorize = false, so
+/// it must be left for convert-linalg-to-loops as scalar code.
+bool isBlockedWithoutVectorize(mlir::Operation *op);
 
 } // namespace mlir_edsl
