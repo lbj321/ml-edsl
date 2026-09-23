@@ -101,239 +101,30 @@ static int64_t loopsBetween(mlir::Operation *op, mlir::Operation *outer) {
       ++count;
   return count;
 }
-
-// Temporary id attached to the register tile so the packing phases can
-// re-find it after applying function-wide patterns. Removed again once the
-// microkernel is built; unlike mlir_edsl.blocked it means nothing to any
-// other pass.
-constexpr llvm::StringLiteral kTileIdAttrName = "mlir_edsl.blocked_tile_id";
-
 // Rows of B packed per iteration of the B~ packing loop. 8 is one f32 ymm
 // register: each iteration copies an 8 x NR block with two vector transfers.
 constexpr int64_t kPackTileRows = 8;
 
-// Marks A's packing transpose so it can be re-found after decomposing the pad.
-constexpr llvm::StringLiteral kPackTransposeAttrName =
-    "mlir_edsl.blocked_pack_transpose";
-
-// The register tile carrying `tileId`, or null. Raw Operation* handles do not
-// survive a greedy pattern application, so every step that applies patterns
-// re-acquires the tile through this.
-static mlir::Operation *findTileById(mlir::func::FuncOp func, int64_t tileId) {
-  mlir::Operation *found = nullptr;
-  func.walk([&](mlir::linalg::MatmulOp op) {
-    auto id = op->getAttrOfType<mlir::IntegerAttr>(kTileIdAttrName);
-    if (id && id.getInt() == tileId) {
-      found = op.getOperation();
-      return mlir::WalkResult::interrupt();
-    }
-    return mlir::WalkResult::advance();
-  });
-  return found;
+// Runs one pattern set greedily over `ops` only, plus the ops the patterns
+// create. Scoping is what lets the caller keep holding handles: ops outside
+// the set are never folded, rewritten or erased as dead. Kept deliberately
+// narrow — no canonicalizer — because canonicalization at the wrong moment
+// undoes two of the rewrites below (see packB).
+static mlir::LogicalResult applyPatternSetTo(llvm::ArrayRef<mlir::Operation *> ops,
+                                             mlir::RewritePatternSet &&patterns) {
+  mlir::GreedyRewriteConfig config;
+  config.setStrictness(mlir::GreedyRewriteStrictness::ExistingAndNewOps);
+  return mlir::applyOpPatternsGreedily(ops, std::move(patterns), config);
 }
 
-// Runs one pattern set greedily over `func`, the same way VectorCleanupPass
-// and AllocaScopeCleanupPass do. Kept deliberately narrow — no canonicalizer
-// — because canonicalization at the wrong moment undoes two of the rewrites
-// below (see the comments in packOperands).
-static mlir::LogicalResult applyPatternSet(mlir::func::FuncOp func,
-                                           mlir::RewritePatternSet &&patterns) {
-  return mlir::applyPatternsGreedily(func, std::move(patterns));
-}
-
-// BLIS-style operand packing for one MR x NR x KC register tile.
+// Tiles `op` into the BLIS loop nest
 //
-// Pads the tile's A and/or B operand and hoists the pad out of the ir and jr
-// loops, which turns it into a packing loop nest at the pc level plus a cheap
-// slice at the use site:
+//   jc (N/NC) → pc (K/KC) → ic (M/MC) → jr (NC/NR) → ir (MC/MR)
 //
-//   B~ : tensor<(NC/NR) x KC x NR>     contiguous NR-wide rows
-//   A~ : tensor<(MC/MR) x KC x MR>     k-major, via a [1, 0] transpose
-//
-// Both panels are hoisted to the pc body (hoistDepth loops up), which is
-// where BLIS wants them — B~ reused across ir, A~ across jr and ir.
-//
-// Returns the (re-found) register tile, whose operands now read from the
-// packed panels.
-static mlir::FailureOr<mlir::Operation *>
-packOperands(mlir::IRRewriter &rewriter, mlir::func::FuncOp func,
-             mlir::Operation *tile, const mlir_edsl::MatmulStrategy &s,
-             int64_t hoistDepth, int64_t tileId) {
-  mlir::MLIRContext *ctx = func->getContext();
-
-  // Every tiling level slices the previous level's slice, so the tile's
-  // operands are defined *inside* the loops we want to hoist out of, and
-  // hoistPaddingOnTensors refuses with "Source not defined outside of loops".
-  // Collapsing the chains to a single slice of the original tensor is what
-  // makes the hoist legal.
-  {
-    mlir::RewritePatternSet patterns(ctx);
-    mlir::tensor::populateMergeConsecutiveInsertExtractSlicePatterns(patterns);
-    if (mlir::failed(applyPatternSet(func, std::move(patterns))))
-      return mlir::failure();
-  }
-  tile = findTileById(func, tileId);
-  if (!tile)
-    return mlir::failure();
-
-  // Pad every iteration dimension. The slices are already exactly MR x NR x KC
-  // so no element is actually added; the nofold flag is what forces the pad to
-  // survive as a real copy, which *is* the packing. C is never padded — it is
-  // accumulated in place across pc.
-  auto linalgTile = llvm::dyn_cast<mlir::linalg::LinalgOp>(tile);
-  if (!linalgTile)
-    return mlir::failure();
-
-  mlir::Attribute zero = rewriter.getZeroAttr(rewriter.getF32Type());
-  mlir::linalg::LinalgPaddingOptions padOpts;
-  padOpts.setPaddingValues({zero, zero, zero});
-  padOpts.setPaddingDimensions({0, 1, 2});
-  padOpts.setNofoldFlags({s.packA, s.packB, false});
-  padOpts.setCopyBackOp(mlir::linalg::LinalgPaddingOptions::CopyBackOp::None);
-
-  mlir::linalg::LinalgOp paddedOp;
-  llvm::SmallVector<mlir::Value> replacements;
-  llvm::SmallVector<mlir::tensor::PadOp> padOps;
-  rewriter.setInsertionPoint(tile);
-  if (mlir::failed(mlir::linalg::rewriteAsPaddedOp(
-          rewriter, linalgTile, padOpts, paddedOp, replacements, padOps)))
-    return mlir::failure();
-  // rewriteAsPaddedOp clones the op onto the padded operands (carrying its
-  // attributes, so the marker and id survive) but leaves the original in
-  // place for the caller to replace.
-  rewriter.replaceOp(tile, replacements);
-  tile = paddedOp.getOperation();
-
-  // B~: hoist across ir and jr with no transpose. The pad is a plain row copy,
-  // so the packed panel keeps B's (k, n) order.
-  if (s.packB) {
-    auto padB = tile->getOperand(1).getDefiningOp<mlir::tensor::PadOp>();
-    if (!padB)
-      return mlir::failure();
-
-    mlir::tensor::PadOp hoistedPad;
-    llvm::SmallVector<mlir::linalg::TransposeOp> transposeOps;
-    auto packed = mlir::linalg::hoistPaddingOnTensors(
-        rewriter, padB, hoistDepth, /*transposeVector=*/{}, hoistedPad,
-        transposeOps);
-    if (mlir::failed(packed))
-      return mlir::failure();
-    rewriter.replaceOp(padB, *packed);
-
-    // Tile the packing copy to 8 rows and vectorize each 8 x NR block.
-    // Untiled, it vectorizes to one whole-panel vector that
-    // convert-vector-to-llvm can only lower by scalar-unrolling it.
-    // tensor.pad needs explicit vector sizes; it fails to vectorize without.
-    auto padTile =
-        tileOneLevel(rewriter, hoistedPad.getOperation(), {kPackTileRows, 0});
-    if (mlir::failed(padTile))
-      return mlir::failure();
-    rewriter.setInsertionPoint(padTile->op);
-    // inputScalableVecDims must be given whenever inputVectorSizes is (the
-    // vectorizer asserts on a length mismatch); nothing here is scalable.
-    const llvm::SmallVector<bool> notScalable = {false, false};
-    if (mlir::failed(mlir::linalg::vectorize(
-            rewriter, padTile->op, /*inputVectorSizes=*/{kPackTileRows, s.nr},
-            notScalable)))
-      return mlir::failure();
-
-    // Fold the insert_slice into the transfer_write *now*. Left alone, the
-    // transfer_read/transfer_write round trip through a fresh tensor.empty
-    // folds back to insert_slice(extract_slice(B)), which bufferizes to a
-    // strided memref.copy — a call to the memrefCopy runtime helper, which is
-    // an undefined symbol in the JIT.
-    mlir::RewritePatternSet patterns(ctx);
-    mlir::tensor::populateFoldTensorSubsetIntoVectorTransferPatterns(patterns);
-    if (mlir::failed(applyPatternSet(func, std::move(patterns))))
-      return mlir::failure();
-
-    tile = findTileById(func, tileId);
-    if (!tile)
-      return mlir::failure();
-  }
-
-  // A~: hoist across ir and jr with a [1, 0] transpose, so each k step reads a
-  // contiguous MR-element row instead of MR scalars from MR different rows.
-  if (s.packA) {
-    auto padA = tile->getOperand(0).getDefiningOp<mlir::tensor::PadOp>();
-    if (!padA)
-      return mlir::failure();
-
-    mlir::tensor::PadOp hoistedPad;
-    llvm::SmallVector<mlir::linalg::TransposeOp> transposeOps;
-    auto packed = mlir::linalg::hoistPaddingOnTensors(
-        rewriter, padA, hoistDepth, /*transposeVector=*/{1, 0}, hoistedPad,
-        transposeOps);
-    if (mlir::failed(packed))
-      return mlir::failure();
-    rewriter.replaceOp(padA, *packed);
-
-    // transposeOps[0] is the packing transpose, [1] the un-transpose put back
-    // in front of the tile. Mark the former: decomposing the pad below runs
-    // patterns, after which the raw handle is no longer safe.
-    if (transposeOps.empty())
-      return mlir::failure();
-    transposeOps.front()->setAttr(kPackTransposeAttrName,
-                                  rewriter.getUnitAttr());
-
-    // A's pad is zero-width — the transpose is the packing copy — and
-    // tensor.pad is not destination-style, so it cannot be fused with the
-    // fusion utilities. Decomposing it lets the transpose read A directly.
-    {
-      mlir::RewritePatternSet patterns(ctx);
-      mlir::linalg::populateDecomposePadPatterns(patterns);
-      if (mlir::failed(applyPatternSet(func, std::move(patterns))))
-        return mlir::failure();
-    }
-
-    mlir::Operation *packTranspose = nullptr;
-    func.walk([&](mlir::linalg::TransposeOp op) {
-      if (op->hasAttr(kPackTransposeAttrName)) {
-        packTranspose = op.getOperation();
-        return mlir::WalkResult::interrupt();
-      }
-      return mlir::WalkResult::advance();
-    });
-    if (!packTranspose)
-      return mlir::failure();
-
-    // Tiled to 8 rows for the same reason as B's copy; LinalgVectorizationPass
-    // vectorizes the tiles later.
-    auto trTile = tileOneLevel(rewriter, packTranspose, {kPackTileRows, 0});
-    if (mlir::failed(trTile))
-      return mlir::failure();
-    trTile->op->removeAttr(kPackTransposeAttrName);
-
-    tile = findTileById(func, tileId);
-    if (!tile)
-      return mlir::failure();
-  }
-
-  return tile;
-}
-
-// BLIS-style cache and register blocking for a single linalg.matmul, on
-// tensor semantics. Produces the loop nest
-//
-//   jc (N/NC) → pc (K/KC) → ic (M/MC) → jr (NC/NR) → ir (MC/MR) → k (KC/1)
-//
-// leaving an MR x NR x 1 linalg.matmul tile at the bottom. That tile is the
-// microkernel, but this pass does not build it: LinalgMatmulToContractPass
-// turns it into a vector.contract, LinalgVectorizationPass handles the fill,
-// LoopInvariantSubsetHoisting lifts the C accumulator into the k-loop's
-// iter_args as a vector<MRxNRxf32>, and VectorContractToOuterProductPass
-// lowers the contract to vector.outerproduct → FMA. All four already exist in
-// buildCPUPipeline.
-//
-// With packB, B's operand slice is padded and the pad hoisted out of the ir
-// and jr loops, producing B~ = (NC/NR) x KC x NR built once per pc iteration,
-// so the microkernel reads contiguous NR-wide rows instead of striding by N.
-// packA does the same with a [1, 0] transpose, giving k-major A~ panels.
-static mlir::LogicalResult blockMatmul(mlir::IRRewriter &rewriter,
-                                       mlir::func::FuncOp func,
-                                       mlir::linalg::MatmulOp op,
-                                       const mlir_edsl::MatmulStrategy &s,
-                                       int64_t tileId) {
+// leaving an MR x NR x KC tile, and strip-mines the fill initializing C.
+static mlir::FailureOr<BlockedNest>
+tileNest(mlir::IRRewriter &rewriter, mlir::linalg::MatmulOp op,
+         const mlir_edsl::MatmulStrategy &s) {
   // The fill initializing C, captured before tiling rewrites the operand.
   // Handling it is not optional: a bare matmul's fill is normally fused into
   // the 64x64 forall by LinalgOuterTileAndFusePass, but that pass skips
@@ -381,77 +172,242 @@ static mlir::LogicalResult blockMatmul(mlir::IRRewriter &rewriter,
   nest.tile = current;
   if (!nest.forall || !nest.pc || !nest.jr || !nest.ir)
     return mlir::failure();
-  const int64_t hoistDepth = loopsBetween(nest.tile, nest.pc);
 
-  // Mark the tile now rather than after k-tiling: every later tiling clones
-  // the op and carries the attributes along, the marker keeps the outer walk
-  // in runOnOperation from picking this matmul up a second time, and the id
-  // lets the packing phases below re-find the tile after they have applied
-  // function-wide patterns (which invalidate raw Operation* handles).
+  // Marked now rather than after k-tiling: every later tiling clones the op
+  // and carries the attributes along.
   current->setAttr(mlir_edsl::kBlockedAttrName, rewriter.getUnitAttr());
-  current->setAttr(kTileIdAttrName, rewriter.getI64IntegerAttr(tileId));
   if (!s.vectorize)
     current->setAttr(mlir_edsl::kNoVectorizeAttrName, rewriter.getUnitAttr());
 
   // Strip-mine the fill so it vectorizes into small row stores rather than one
-  // whole-matrix vector. Done before packing, because packing applies
-  // function-wide patterns that would invalidate the captured fill handle.
-  // Step 3 replaces this with fusion into the jc forall, which also
-  // parallelizes it.
+  // whole-matrix vector. Step 3 replaces this with fusion into the jc forall,
+  // which also parallelizes it.
   if (fill) {
     auto tiledFill = tileOneLevel(rewriter, fill.getOperation(),
                                   {kFillTileRows, s.nr});
     if (mlir::failed(tiledFill))
       return mlir::failure();
   }
+  return nest;
+}
 
-  if (s.packA || s.packB) {
-    auto packed = packOperands(rewriter, func, current, s, hoistDepth, tileId);
-    if (mlir::failed(packed))
-      return mlir::failure();
-    current = *packed;
-  }
+// Collapses the slice chains feeding the tile into single slices of the
+// original tensors. Every tiling level slices the previous level's slice, so
+// the tile's operands are defined *inside* the loops we want to hoist out of,
+// and hoistPaddingOnTensors refuses with "Source not defined outside of
+// loops". Seeding the whole chain also lets the driver erase the outer slices
+// once they are dead.
+static mlir::LogicalResult mergeSliceChains(BlockedNest &nest) {
+  llvm::SmallVector<mlir::Operation *> slices;
+  nest.forall.walk(
+      [&](mlir::tensor::ExtractSliceOp op) { slices.push_back(op); });
+  mlir::RewritePatternSet patterns(nest.forall->getContext());
+  mlir::tensor::populateMergeConsecutiveInsertExtractSlicePatterns(patterns);
+  return applyPatternSetTo(slices, std::move(patterns));
+}
 
-  // Reduce the MR x NR x KC tile to the MR x NR x 1 register tile.
-  //
-  // With packA there is an un-transpose in front of the tile (hoisting with a
-  // transpose leaves one behind, see packOperands) which must move inside this
-  // loop, or every microtile pays a full MR x KC copy. Fusing the producer
-  // into the generated k-loop makes each k step transpose a 1 x MR row of A~
-  // instead — i.e. exactly the contiguous read the packing was for.
-  mlir::Operation *kernel = nullptr;
-  if (s.packA) {
-    auto tilingOp = llvm::dyn_cast<mlir::TilingInterface>(current);
-    if (!tilingOp)
-      return mlir::failure();
+// Pads every iteration dimension of the tile. The slices are already exactly
+// MR x NR x KC so no element is actually added; the nofold flag is what forces
+// the pad to survive as a real copy, which *is* the packing. C is never padded
+// — it is accumulated in place across pc.
+static mlir::LogicalResult padTile(mlir::IRRewriter &rewriter,
+                                   BlockedNest &nest,
+                                   const mlir_edsl::MatmulStrategy &s) {
+  auto linalgTile = llvm::dyn_cast<mlir::linalg::LinalgOp>(nest.tile);
+  if (!linalgTile)
+    return mlir::failure();
 
-    llvm::SmallVector<mlir::OpFoldResult> tileSizes =
-        mlir::getAsIndexOpFoldResult(current->getContext(), {0, 0, 1});
-    mlir::scf::SCFTileAndFuseOptions opts;
-    opts.tilingOptions.setTileSizes(tileSizes);
-    rewriter.setInsertionPoint(current);
-    auto result =
-        mlir::scf::tileConsumerAndFuseProducersUsingSCF(rewriter, tilingOp, opts);
-    if (mlir::failed(result))
-      return mlir::failure();
+  mlir::Attribute zero = rewriter.getZeroAttr(rewriter.getF32Type());
+  mlir::linalg::LinalgPaddingOptions padOpts;
+  padOpts.setPaddingValues({zero, zero, zero});
+  padOpts.setPaddingDimensions({0, 1, 2});
+  padOpts.setNofoldFlags({s.packA, s.packB, false});
+  padOpts.setCopyBackOp(mlir::linalg::LinalgPaddingOptions::CopyBackOp::None);
 
-    llvm::SmallVector<mlir::Value> replacements;
-    for (mlir::Value res : current->getResults())
-      replacements.push_back(result->replacements.lookup(res));
-    rewriter.replaceOp(current, replacements);
+  mlir::linalg::LinalgOp paddedOp;
+  llvm::SmallVector<mlir::Value> replacements;
+  llvm::SmallVector<mlir::tensor::PadOp> padOps;
+  rewriter.setInsertionPoint(nest.tile);
+  if (mlir::failed(mlir::linalg::rewriteAsPaddedOp(
+          rewriter, linalgTile, padOpts, paddedOp, replacements, padOps)))
+    return mlir::failure();
+  // rewriteAsPaddedOp clones the op onto the padded operands (carrying its
+  // attributes, so the marker survives) but leaves the original in place for
+  // the caller to replace.
+  rewriter.replaceOp(nest.tile, replacements);
+  nest.tile = paddedOp.getOperation();
+  return mlir::success();
+}
 
-    kernel = findTileById(func, tileId);
-    if (!kernel)
-      return mlir::failure();
-  } else {
-    auto tiled = tileOneLevel(rewriter, current, {0, 0, 1});
+// B~ = (NC/NR) x KC x NR: hoists B's pad to the pc body with no transpose.
+// The pad is a plain row copy, so the packed panel keeps B's (k, n) order and
+// the microkernel reads contiguous NR-wide rows instead of striding by N.
+static mlir::LogicalResult packB(mlir::IRRewriter &rewriter, BlockedNest &nest,
+                                 const mlir_edsl::MatmulStrategy &s) {
+  auto padB = nest.tile->getOperand(1).getDefiningOp<mlir::tensor::PadOp>();
+  if (!padB)
+    return mlir::failure();
+
+  mlir::tensor::PadOp hoistedPad;
+  llvm::SmallVector<mlir::linalg::TransposeOp> transposeOps;
+  auto packed = mlir::linalg::hoistPaddingOnTensors(
+      rewriter, padB, loopsBetween(nest.tile, nest.pc),
+      /*transposeVector=*/{}, hoistedPad, transposeOps);
+  if (mlir::failed(packed))
+    return mlir::failure();
+  rewriter.replaceOp(padB, *packed);
+
+  // Tile the packing copy to 8 rows and vectorize each 8 x NR block.
+  // Untiled, it vectorizes to one whole-panel vector that
+  // convert-vector-to-llvm can only lower by scalar-unrolling it.
+  // tensor.pad needs explicit vector sizes; it fails to vectorize without.
+  auto padTile =
+      tileOneLevel(rewriter, hoistedPad.getOperation(), {kPackTileRows, 0});
+  if (mlir::failed(padTile) || padTile->loops.size() != 1)
+    return mlir::failure();
+  rewriter.setInsertionPoint(padTile->op);
+  // inputScalableVecDims must be given whenever inputVectorSizes is (the
+  // vectorizer asserts on a length mismatch); nothing here is scalable.
+  const llvm::SmallVector<bool> notScalable = {false, false};
+  if (mlir::failed(mlir::linalg::vectorize(
+          rewriter, padTile->op, /*inputVectorSizes=*/{kPackTileRows, s.nr},
+          notScalable)))
+    return mlir::failure();
+
+  // Fold the insert_slice into the transfer_write *now*. Left alone, the
+  // transfer_read/transfer_write round trip through a fresh tensor.empty
+  // folds back to insert_slice(extract_slice(B)), which bufferizes to a
+  // strided memref.copy — a call to the memrefCopy runtime helper, which is
+  // an undefined symbol in the JIT.
+  llvm::SmallVector<mlir::Operation *> packLoopOps;
+  padTile->loops.front()->walk([&](mlir::Operation *op) {
+    if (op != padTile->loops.front().getOperation())
+      packLoopOps.push_back(op);
+  });
+  mlir::RewritePatternSet patterns(rewriter.getContext());
+  mlir::tensor::populateFoldTensorSubsetIntoVectorTransferPatterns(patterns);
+  return applyPatternSetTo(packLoopOps, std::move(patterns));
+}
+
+// A~ = (MC/MR) x KC x MR: hoists A's pad to the pc body with a [1, 0]
+// transpose, so each k step reads a contiguous MR-element row instead of MR
+// scalars from MR different rows.
+static mlir::LogicalResult packA(mlir::IRRewriter &rewriter, BlockedNest &nest) {
+  auto padA = nest.tile->getOperand(0).getDefiningOp<mlir::tensor::PadOp>();
+  if (!padA)
+    return mlir::failure();
+
+  mlir::tensor::PadOp hoistedPad;
+  llvm::SmallVector<mlir::linalg::TransposeOp> transposeOps;
+  auto packed = mlir::linalg::hoistPaddingOnTensors(
+      rewriter, padA, loopsBetween(nest.tile, nest.pc),
+      /*transposeVector=*/{1, 0}, hoistedPad, transposeOps);
+  if (mlir::failed(packed))
+    return mlir::failure();
+  rewriter.replaceOp(padA, *packed);
+
+  // transposeOps[0] is the packing transpose, [1] the un-transpose put back
+  // in front of the tile.
+  if (transposeOps.empty())
+    return mlir::failure();
+  mlir::linalg::TransposeOp packTranspose = transposeOps.front();
+
+  // A's pad is zero-width — the transpose is the packing copy — and
+  // tensor.pad is not destination-style, so it cannot be fused with the
+  // fusion utilities. Decomposing it lets the transpose read A directly.
+  mlir::RewritePatternSet patterns(rewriter.getContext());
+  mlir::linalg::populateDecomposePadPatterns(patterns);
+  if (mlir::failed(
+          applyPatternSetTo({hoistedPad.getOperation()}, std::move(patterns))))
+    return mlir::failure();
+
+  // Tiled to 8 rows for the same reason as B's copy; LinalgVectorizationPass
+  // vectorizes the tiles later.
+  auto trTile = tileOneLevel(rewriter, packTranspose.getOperation(),
+                             {kPackTileRows, 0});
+  return mlir::success(mlir::succeeded(trTile));
+}
+
+// Reduces the MR x NR x KC tile to the MR x NR x 1 register tile.
+//
+// With packA there is an un-transpose in front of the tile (hoisting with a
+// transpose leaves one behind, see packA) which must move inside this loop,
+// or every microtile pays a full MR x KC copy. Fusing the producer into the
+// generated k-loop makes each k step transpose a 1 x MR row of A~ instead —
+// i.e. exactly the contiguous read the packing was for.
+static mlir::LogicalResult tileK(mlir::IRRewriter &rewriter, BlockedNest &nest,
+                                 const mlir_edsl::MatmulStrategy &s) {
+  if (!s.packA) {
+    auto tiled = tileOneLevel(rewriter, nest.tile, {0, 0, 1});
     if (mlir::failed(tiled))
       return mlir::failure();
-    kernel = tiled->op;
+    nest.tile = tiled->op;
+    return mlir::success();
   }
 
-  kernel->removeAttr(kTileIdAttrName);
+  auto tilingOp = llvm::dyn_cast<mlir::TilingInterface>(nest.tile);
+  if (!tilingOp)
+    return mlir::failure();
+
+  llvm::SmallVector<mlir::OpFoldResult> tileSizes =
+      mlir::getAsIndexOpFoldResult(rewriter.getContext(), {0, 0, 1});
+  mlir::scf::SCFTileAndFuseOptions opts;
+  opts.tilingOptions.setTileSizes(tileSizes);
+  rewriter.setInsertionPoint(nest.tile);
+  auto result =
+      mlir::scf::tileConsumerAndFuseProducersUsingSCF(rewriter, tilingOp, opts);
+  if (mlir::failed(result))
+    return mlir::failure();
+
+  llvm::SmallVector<mlir::Value> replacements;
+  for (mlir::Value res : nest.tile->getResults())
+    replacements.push_back(result->replacements.lookup(res));
+  rewriter.replaceOp(nest.tile, replacements);
+
+  // tiledAndFusedOps also holds the fused un-transpose.
+  auto kernel = llvm::find_if(result->tiledAndFusedOps, [](mlir::Operation *op) {
+    return llvm::isa<mlir::linalg::MatmulOp>(op);
+  });
+  if (kernel == result->tiledAndFusedOps.end())
+    return mlir::failure();
+  nest.tile = *kernel;
   return mlir::success();
+}
+
+// BLIS-style cache and register blocking for a single linalg.matmul, on
+// tensor semantics. Produces the loop nest
+//
+//   jc (N/NC) → pc (K/KC) → ic (M/MC) → jr (NC/NR) → ir (MC/MR) → k (KC/1)
+//
+// leaving an MR x NR x 1 linalg.matmul tile at the bottom. That tile is the
+// microkernel, but this pass does not build it: LinalgMatmulToContractPass
+// turns it into a vector.contract, LinalgVectorizationPass handles the fill,
+// LoopInvariantSubsetHoisting lifts the C accumulator into the k-loop's
+// iter_args as a vector<MRxNRxf32>, and VectorContractToOuterProductPass
+// lowers the contract to vector.outerproduct → FMA. All four already exist in
+// buildCPUPipeline.
+//
+// With packB and/or packA, the operand is padded and the pad hoisted out of
+// the ir and jr loops, turning it into a packing loop nest in the pc body
+// plus a cheap slice at the use site (see packB and packA).
+static mlir::LogicalResult blockMatmul(mlir::IRRewriter &rewriter,
+                                       mlir::linalg::MatmulOp op,
+                                       const mlir_edsl::MatmulStrategy &s) {
+  auto nest = tileNest(rewriter, op, s);
+  if (mlir::failed(nest))
+    return mlir::failure();
+
+  if (s.packA || s.packB) {
+    if (mlir::failed(mergeSliceChains(*nest)) ||
+        mlir::failed(padTile(rewriter, *nest, s)))
+      return mlir::failure();
+    if (s.packB && mlir::failed(packB(rewriter, *nest, s)))
+      return mlir::failure();
+    if (s.packA && mlir::failed(packA(rewriter, *nest)))
+      return mlir::failure();
+  }
+
+  return tileK(rewriter, *nest, s);
 }
 
 // BLIS-style blocking driver. See blockMatmul above for the loop nest and
@@ -534,33 +490,16 @@ struct LinalgMatmulBlockedPass
     ov.packB = packB;
     ov.vectorize = vectorize;
 
-    // Re-walk for each matmul rather than collecting them up front: the
-    // packing phases apply function-wide patterns, which can invalidate any
-    // Operation* handle held across them. Ops that have been handled carry
-    // mlir_edsl.blocked (which chooseStrategy also rejects); ops the guard
-    // rejected get a temporary skip marker so this loop terminates.
-    constexpr llvm::StringLiteral kSkipAttrName = "mlir_edsl.blocked_skip";
-    int64_t tileId = 0;
+    // Collected up front: blocking one matmul only rewrites ops inside its
+    // own loop nest, so the other handles stay valid.
+    llvm::SmallVector<mlir::linalg::MatmulOp> candidates;
+    func.walk([&](mlir::linalg::MatmulOp op) { candidates.push_back(op); });
 
-    while (true) {
-      mlir::linalg::MatmulOp next;
-      func.walk([&](mlir::linalg::MatmulOp op) {
-        if (op->hasAttr(mlir_edsl::kBlockedAttrName) ||
-            op->hasAttr(kSkipAttrName))
-          return mlir::WalkResult::advance();
-        next = op;
-        return mlir::WalkResult::interrupt();
-      });
-      if (!next)
-        break;
-
-      auto strategy = mlir_edsl::chooseStrategy(next, ov);
-      if (mlir::failed(strategy)) {
-        // Guard rejected it: leave it for the existing pipeline.
-        next->setAttr(kSkipAttrName, rewriter.getUnitAttr());
-        continue;
-      }
-      if (mlir::failed(blockMatmul(rewriter, func, next, *strategy, tileId))) {
+    for (mlir::linalg::MatmulOp op : candidates) {
+      auto strategy = mlir_edsl::chooseStrategy(op, ov);
+      if (mlir::failed(strategy))
+        continue; // Guard rejected it: leave it for the existing pipeline.
+      if (mlir::failed(blockMatmul(rewriter, op, *strategy))) {
         // Do NOT signalPassFailure — a partially tiled matmul is still
         // correct, and the remaining passes can lower whatever is left. The
         // op may be gone by now (a failure part-way through packing), so
@@ -568,10 +507,7 @@ struct LinalgMatmulBlockedPass
         func->emitWarning(
             "linalg-matmul-blocked: blocking failed, leaving matmul as-is");
       }
-      ++tileId;
     }
-
-    func.walk([&](mlir::linalg::MatmulOp op) { op->removeAttr(kSkipAttrName); });
   }
 };
 } // namespace

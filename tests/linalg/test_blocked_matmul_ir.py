@@ -100,3 +100,23 @@ class TestBlockedMatmulFallback:
         check_lowered_ir("""
         // CHECK-NOT: mlir_edsl.blocked
         """, after="linalg-matmul-blocked")
+
+    def test_chained_producer_is_left_and_consumer_blocked(
+            self, check_lowered_ir):
+        """Blocking one matmul leaves the other candidates intact.
+
+        The inner matmul feeds a linalg op, so the guard rejects it; the outer
+        one is blocked after it, from the same up-front candidate list.
+        """
+        @ml_function
+        def chain_fn(A: Tensor[f32, N, N], B: Tensor[f32, N, N],
+                     C: Tensor[f32, N, N]) -> Tensor[f32, N, N]:
+            return matmul(matmul(A, B), C)
+
+        ones = np.ones((N, N), dtype=np.float32)
+        chain_fn(ones, ones, ones)
+        check_lowered_ir("""
+        // CHECK: linalg.matmul ins({{.*}} : tensor<256x256xf32>, tensor<256x256xf32>)
+        // CHECK: scf.forall
+        // CHECK: linalg.matmul {mlir_edsl.blocked}
+        """, after="linalg-matmul-blocked")
