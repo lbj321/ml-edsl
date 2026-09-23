@@ -226,4 +226,28 @@ bool isBlockedWithoutVectorize(mlir::Operation *op) {
   return mlir::succeeded(config) && !config->strategy.vectorize;
 }
 
+mlir::LogicalResult collectBlockedTilesAtStage(
+    mlir::Operation *root, BlockedStage stage,
+    llvm::SmallVectorImpl<std::pair<mlir::linalg::MatmulOp, MatmulStrategy>>
+        &tiles) {
+  auto result = root->walk([&](mlir::linalg::MatmulOp op) {
+    if (!op->hasAttr(kBlockedAttrName))
+      return mlir::WalkResult::advance();
+    auto config = readBlockedConfig(op);
+    if (mlir::failed(config)) {
+      op->emitError("malformed ") << kBlockedAttrName;
+      return mlir::WalkResult::interrupt();
+    }
+    if (config->stage == stage)
+      tiles.emplace_back(op, config->strategy);
+    return mlir::WalkResult::advance();
+  });
+  return mlir::failure(result.wasInterrupted());
+}
+
+void setBlockedStage(mlir::Operation *tile, BlockedStage stage) {
+  auto config = tile->getAttrOfType<mlir::DictionaryAttr>(kBlockedAttrName);
+  tile->setAttr(kBlockedAttrName, withStage(config, stage));
+}
+
 } // namespace mlir_edsl

@@ -564,9 +564,10 @@ and A-packing flips from -3% to +11%, interleaved single core:
 
 ## Refactor: three passes, handed over by attribute (DONE)
 
-`LinalgMatmulBlockedPass` is now three passes in
-`cpp/src/passes/LinalgMatmulBlockedPasses.cpp`, each followed by
-canonicalize in `buildCPUPipeline`:
+`LinalgMatmulBlockedPass` is now three passes, one file each in
+`cpp/src/passes/` (`LinalgMatmulBlocked{Distribute,TileAndPack,Kernel}.cpp`,
+sharing `tileOneLevel` from `TilingUtils.h` and the attribute helpers in
+`MatmulStrategy.h`), each followed by canonicalize in `buildCPUPipeline`:
 
 | pass | picks up | leaves stage |
 |---|---|---|

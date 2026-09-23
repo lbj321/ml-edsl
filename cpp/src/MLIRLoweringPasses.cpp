@@ -96,8 +96,8 @@ struct LinalgOuterTileAndFusePass
     if (!consumer) {
       // No relu epilogue: fuse fill directly into a bare matmul instead.
       // Blocked tiles are skipped: the blocked matmul passes already placed
-      // them inside their own loop nest and tiled their fill, so wrapping one in
-      // another scf.forall here would double-tile it.
+      // them inside their own loop nest and tiled their fill, so wrapping one
+      // in another scf.forall here would double-tile it.
       func.walk([&](mlir::linalg::MatmulOp op) {
         if (op->hasAttr(mlir_edsl::kBlockedAttrName))
           return;
@@ -672,7 +672,7 @@ std::unique_ptr<mlir::Pass> createLinalgMatmulKTilingPass() {
   return std::make_unique<LinalgMatmulKTilingPass>();
 }
 // The createLinalgMatmulBlocked*Pass factories live in
-// passes/LinalgMatmulBlockedPasses.cpp.
+// passes/LinalgMatmulBlocked{Distribute,TileAndPack,Kernel}.cpp.
 
 #ifdef MLIR_EDSL_CUDA_ENABLED
 std::unique_ptr<mlir::Pass> createLinalgGPUMatmulTilingPass() {

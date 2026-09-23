@@ -92,11 +92,32 @@ struct StrategyOverrides {
 mlir::FailureOr<MatmulStrategy> chooseStrategy(mlir::linalg::MatmulOp op,
                                                const StrategyOverrides &ov);
 
-/// How far the blocked passes have taken a tile. Each pass picks up tiles at
+/// How far the blocked passes have taken a tile.
+///
+/// The fast path for f32 matmuls chooseStrategy accepts is three passes
+/// (cpp/src/passes/LinalgMatmulBlocked*.cpp), run in this order and each
+/// followed by canonicalize in buildCPUPipeline. Each picks up the tiles at
 /// the stage the previous one left them in:
+///
 ///   linalg-matmul-blocked-distribute     → Distributed (inside the ic x jc forall)
 ///   linalg-matmul-blocked-tile-and-pack  → Tiled (MR x NR x KC, operands packed)
 ///   linalg-matmul-blocked-kernel         → Kernel (MR x NR x 1)
+///
+/// Together they produce the BLIS loop nest
+///
+///   jc (N/NC) → pc (K/KC) → ic (M/MC) → jr (NC/NR) → ir (MC/MR) → k (KC/1)
+///
+/// with jc and ic fused into one forall. The MR x NR x 1 linalg.matmul left
+/// at the bottom is the microkernel, but these passes do not build it:
+/// LinalgMatmulToContractPass turns it into a vector.contract,
+/// LinalgVectorizationPass handles the fill, LoopInvariantSubsetHoisting lifts
+/// the C accumulator into the k-loop's iter_args, and
+/// VectorContractToOuterProductPass lowers the contract to FMAs.
+///
+/// Tiles pass from one stage to the next only through kBlockedAttrName: the
+/// distribute pass records the strategy there, and each pass advances the
+/// stage. No pass relies on a loop an earlier one created, because
+/// canonicalize removes single-iteration loops, forall included, in between.
 enum class BlockedStage { Distributed, Tiled, Kernel };
 
 llvm::StringRef stringifyBlockedStage(BlockedStage stage);
@@ -124,5 +145,15 @@ mlir::FailureOr<BlockedConfig> readBlockedConfig(mlir::Operation *op);
 /// True when `op` is a blocked tile whose strategy has vectorize = false, so
 /// it must be left for convert-linalg-to-loops as scalar code.
 bool isBlockedWithoutVectorize(mlir::Operation *op);
+
+/// Appends the blocked tiles under `root` at `stage`, with their strategy.
+/// Emits an error and fails on a malformed kBlockedAttrName.
+mlir::LogicalResult collectBlockedTilesAtStage(
+    mlir::Operation *root, BlockedStage stage,
+    llvm::SmallVectorImpl<std::pair<mlir::linalg::MatmulOp, MatmulStrategy>>
+        &tiles);
+
+/// Advances `tile`'s kBlockedAttrName to `stage`, keeping the strategy.
+void setBlockedStage(mlir::Operation *tile, BlockedStage stage);
 
 } // namespace mlir_edsl
