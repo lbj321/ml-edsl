@@ -43,13 +43,20 @@ namespace {
 // is the register tile's NR so the stores line up with the microkernel.
 constexpr int64_t kFillTileRows = 8;
 
+// The tile op one tiling level produced and the loops generated around it,
+// outermost first.
+struct TiledLevel {
+  mlir::Operation *op;
+  llvm::SmallVector<mlir::LoopLikeOpInterface> loops;
+};
+
 // Tiles one level of a loop nest with scf.for, replacing `op` with the tiled
-// result and returning the newly created tile op. Exactly one entry of `sizes`
-// is expected to be non-zero per call: issuing one call per level is what
-// fixes the resulting loop order, which a single multi-dimensional
-// tile_using_for would not (see PLAN.md Stage 2 — [6,16,0] gives ir-outer/
-// jr-inner, the opposite of what the macro-kernel wants).
-static mlir::FailureOr<mlir::Operation *>
+// result. Exactly one entry of `sizes` is expected to be non-zero per call:
+// issuing one call per level is what fixes the resulting loop order, which a
+// single multi-dimensional tile_using_for would not (see PLAN.md Stage 2 —
+// [6,16,0] gives ir-outer/jr-inner, the opposite of what the macro-kernel
+// wants).
+static mlir::FailureOr<TiledLevel>
 tileOneLevel(mlir::IRRewriter &rewriter, mlir::Operation *op,
              llvm::ArrayRef<int64_t> sizes,
              mlir::scf::SCFTilingOptions::LoopType loopType =
@@ -73,7 +80,26 @@ tileOneLevel(mlir::IRRewriter &rewriter, mlir::Operation *op,
     return mlir::failure();
 
   rewriter.replaceOp(op, result->mergeResult.replacements);
-  return result->tiledOps.front();
+  return TiledLevel{result->tiledOps.front(), std::move(result->loops)};
+}
+
+// The BLIS loop nest around one register tile. The loop handles stay valid
+// through packing because C is never padded: padding it would make
+// hoistPaddingOnTensors rebuild the loops to carry the pad through iter_args.
+struct BlockedNest {
+  mlir::scf::ForallOp forall; // ic x jc
+  mlir::scf::ForOp pc, jr, ir;
+  mlir::Operation *tile; // MR x NR x KC, before k-tiling
+};
+
+// Number of scf.for loops enclosing `op` strictly inside `outer`.
+static int64_t loopsBetween(mlir::Operation *op, mlir::Operation *outer) {
+  int64_t count = 0;
+  for (mlir::Operation *p = op->getParentOp(); p && p != outer;
+       p = p->getParentOp())
+    if (llvm::isa<mlir::scf::ForOp>(p))
+      ++count;
+  return count;
 }
 
 // Temporary id attached to the register tile so the packing phases can
@@ -124,18 +150,15 @@ static mlir::LogicalResult applyPatternSet(mlir::func::FuncOp func,
 //   B~ : tensor<(NC/NR) x KC x NR>     contiguous NR-wide rows
 //   A~ : tensor<(MC/MR) x KC x MR>     k-major, via a [1, 0] transpose
 //
-// numLoops is 2, not the 3 the integration notes assumed: this pass fuses ic
-// and jc into a single 2-D scf.forall, and hoistPaddingOnTensors only hoists
-// across scf.for, so the loops between the tile and the pc body are just ir
-// and jr. Both panels therefore land in the pc body, which is where BLIS
-// wants them — B~ reused across ir, A~ across jr and ir.
+// Both panels are hoisted to the pc body (hoistDepth loops up), which is
+// where BLIS wants them — B~ reused across ir, A~ across jr and ir.
 //
 // Returns the (re-found) register tile, whose operands now read from the
 // packed panels.
 static mlir::FailureOr<mlir::Operation *>
 packOperands(mlir::IRRewriter &rewriter, mlir::func::FuncOp func,
              mlir::Operation *tile, const mlir_edsl::MatmulStrategy &s,
-             int64_t tileId) {
+             int64_t hoistDepth, int64_t tileId) {
   mlir::MLIRContext *ctx = func->getContext();
 
   // Every tiling level slices the previous level's slice, so the tile's
@@ -191,7 +214,7 @@ packOperands(mlir::IRRewriter &rewriter, mlir::func::FuncOp func,
     mlir::tensor::PadOp hoistedPad;
     llvm::SmallVector<mlir::linalg::TransposeOp> transposeOps;
     auto packed = mlir::linalg::hoistPaddingOnTensors(
-        rewriter, padB, /*numLoops=*/2, /*transposeVector=*/{}, hoistedPad,
+        rewriter, padB, hoistDepth, /*transposeVector=*/{}, hoistedPad,
         transposeOps);
     if (mlir::failed(packed))
       return mlir::failure();
@@ -205,12 +228,12 @@ packOperands(mlir::IRRewriter &rewriter, mlir::func::FuncOp func,
         tileOneLevel(rewriter, hoistedPad.getOperation(), {kPackTileRows, 0});
     if (mlir::failed(padTile))
       return mlir::failure();
-    rewriter.setInsertionPoint(*padTile);
+    rewriter.setInsertionPoint(padTile->op);
     // inputScalableVecDims must be given whenever inputVectorSizes is (the
     // vectorizer asserts on a length mismatch); nothing here is scalable.
     const llvm::SmallVector<bool> notScalable = {false, false};
     if (mlir::failed(mlir::linalg::vectorize(
-            rewriter, *padTile, /*inputVectorSizes=*/{kPackTileRows, s.nr},
+            rewriter, padTile->op, /*inputVectorSizes=*/{kPackTileRows, s.nr},
             notScalable)))
       return mlir::failure();
 
@@ -239,7 +262,7 @@ packOperands(mlir::IRRewriter &rewriter, mlir::func::FuncOp func,
     mlir::tensor::PadOp hoistedPad;
     llvm::SmallVector<mlir::linalg::TransposeOp> transposeOps;
     auto packed = mlir::linalg::hoistPaddingOnTensors(
-        rewriter, padA, /*numLoops=*/2, /*transposeVector=*/{1, 0}, hoistedPad,
+        rewriter, padA, hoistDepth, /*transposeVector=*/{1, 0}, hoistedPad,
         transposeOps);
     if (mlir::failed(packed))
       return mlir::failure();
@@ -279,7 +302,7 @@ packOperands(mlir::IRRewriter &rewriter, mlir::func::FuncOp func,
     auto trTile = tileOneLevel(rewriter, packTranspose, {kPackTileRows, 0});
     if (mlir::failed(trTile))
       return mlir::failure();
-    (*trTile)->removeAttr(kPackTransposeAttrName);
+    trTile->op->removeAttr(kPackTransposeAttrName);
 
     tile = findTileById(func, tileId);
     if (!tile)
@@ -340,12 +363,25 @@ static mlir::LogicalResult blockMatmul(mlir::IRRewriter &rewriter,
   }};
 
   mlir::Operation *current = op.getOperation();
-  for (const auto &[sizes, loopType] : levels) {
+  std::array<mlir::Operation *, 4> levelLoops{};
+  for (auto [i, level] : llvm::enumerate(levels)) {
+    const auto &[sizes, loopType] = level;
     auto tiled = tileOneLevel(rewriter, current, sizes, loopType);
-    if (mlir::failed(tiled))
+    if (mlir::failed(tiled) || tiled->loops.size() != 1)
       return mlir::failure();
-    current = *tiled;
+    current = tiled->op;
+    levelLoops[i] = tiled->loops.front().getOperation();
   }
+
+  BlockedNest nest;
+  nest.forall = llvm::dyn_cast<mlir::scf::ForallOp>(levelLoops[0]);
+  nest.pc = llvm::dyn_cast<mlir::scf::ForOp>(levelLoops[1]);
+  nest.jr = llvm::dyn_cast<mlir::scf::ForOp>(levelLoops[2]);
+  nest.ir = llvm::dyn_cast<mlir::scf::ForOp>(levelLoops[3]);
+  nest.tile = current;
+  if (!nest.forall || !nest.pc || !nest.jr || !nest.ir)
+    return mlir::failure();
+  const int64_t hoistDepth = loopsBetween(nest.tile, nest.pc);
 
   // Mark the tile now rather than after k-tiling: every later tiling clones
   // the op and carries the attributes along, the marker keeps the outer walk
@@ -370,7 +406,7 @@ static mlir::LogicalResult blockMatmul(mlir::IRRewriter &rewriter,
   }
 
   if (s.packA || s.packB) {
-    auto packed = packOperands(rewriter, func, current, s, tileId);
+    auto packed = packOperands(rewriter, func, current, s, hoistDepth, tileId);
     if (mlir::failed(packed))
       return mlir::failure();
     current = *packed;
@@ -411,7 +447,7 @@ static mlir::LogicalResult blockMatmul(mlir::IRRewriter &rewriter,
     auto tiled = tileOneLevel(rewriter, current, {0, 0, 1});
     if (mlir::failed(tiled))
       return mlir::failure();
-    kernel = *tiled;
+    kernel = tiled->op;
   }
 
   kernel->removeAttr(kTileIdAttrName);
