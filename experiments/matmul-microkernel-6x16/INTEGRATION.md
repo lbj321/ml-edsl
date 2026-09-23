@@ -562,6 +562,47 @@ and A-packing flips from -3% to +11%, interleaved single core:
   Microkernel unchanged at 8 `vfmadd231ps`, 4 `vbroadcastss`, 0 spills. Max
   RSS flat over 10 vs 1000 calls. **712 passed, 16 skipped.**
 
+## Refactor: three passes, handed over by attribute (DONE)
+
+`LinalgMatmulBlockedPass` is now three passes in
+`cpp/src/passes/LinalgMatmulBlockedPasses.cpp`, each followed by
+canonicalize in `buildCPUPipeline`:
+
+| pass | picks up | leaves stage |
+|---|---|---|
+| `linalg-matmul-blocked-distribute` | any matmul `chooseStrategy` accepts | `distributed` |
+| `linalg-matmul-blocked-tile-and-pack` | `distributed` | `tiled` |
+| `linalg-matmul-blocked-kernel` | `tiled` | `kernel` |
+
+- **Hand-over.** `mlir_edsl.blocked` is a dictionary of the strategy
+  (mr, nr, mc, nc, kc, pack_a, pack_b, vectorize) plus `stage`. Only
+  distribute has options; the other two read the strategy back.
+  `mlir_edsl.no_vectorize` is gone, folded into `vectorize`.
+- **Why tiling and packing share a pass.** Packing hoists to the pc body, so it
+  needs pc, jr and ir by identity. Canonicalize removes single-iteration loops
+  between passes — the forall too — so a boundary there would lose them. No
+  pass depends on a loop an earlier one created; tile-and-pack finds the slice
+  chains by walking back from the tile's operands.
+- **Patterns are scoped** (`applyOpPatternsGreedily`, `ExistingAndNewOps`) to
+  the ops each step rewrites, which is what made the tile id, the transpose
+  marker and the per-matmul re-walk unnecessary.
+- **Failure policy.** Distribute failing before it rewrites a matmul is a
+  warning and the matmul stays on the old path. After that the attribute keeps
+  the old passes off the tile, so a later failure is a pass error.
+- **Fill** stays a strip-mined loop outside the forall. Fusing it into the
+  forall measured +13% at 256^3 but -9% at 1024^3 single-thread (interleaved,
+  3 rounds); rejected without finding the cause.
+
+Every snapshot from the canonicalize after the kernel pass onward is
+byte-identical to the single pass's at 128^3 (one-iteration forall), 256^3 and
+1024^3, apart from the `stage` field. **719 passed, 16 skipped.**
+
+Standalone:
+
+    mlir-edsl-opt in.mlir '-linalg-matmul-blocked-distribute=mr=6 nr=16' -cpu-pipeline
+
+Pass options are space-separated; `mr=6,nr=16` is rejected.
+
 ## Next
 
 1. **Targeted hoisting**, which un-skips the ten crashers. Now the largest

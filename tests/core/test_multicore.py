@@ -80,7 +80,7 @@ class TestMulticoreDenseLayer:
 
     @pytest.mark.skip(
         reason=(
-            "LinalgMatmulBlockedPass is wired into buildCPUPipeline, and "
+            "the blocked matmul passes are wired into buildCPUPipeline, and "
             "the LoopInvariantSubsetHoisting it needs is applied to every "
             "loop in the function. chooseStrategy rejects matmuls with a "
             "linalg consumer, so epilogue chains stay on the old path — "
@@ -103,7 +103,7 @@ class TestMulticoreDenseLayer:
 
     @pytest.mark.skip(
         reason=(
-            "LinalgMatmulBlockedPass is wired into buildCPUPipeline, and "
+            "the blocked matmul passes are wired into buildCPUPipeline, and "
             "the LoopInvariantSubsetHoisting it needs is applied to every "
             "loop in the function. chooseStrategy rejects matmuls with a "
             "linalg consumer, so epilogue chains stay on the old path — "
@@ -137,7 +137,7 @@ class TestMulticoreDenseLayer:
 
     @pytest.mark.skip(
         reason=(
-            "LinalgMatmulBlockedPass is wired into buildCPUPipeline, and "
+            "the blocked matmul passes are wired into buildCPUPipeline, and "
             "the LoopInvariantSubsetHoisting it needs is applied to every "
             "loop in the function. chooseStrategy rejects matmuls with a "
             "linalg consumer, so epilogue chains stay on the old path — "

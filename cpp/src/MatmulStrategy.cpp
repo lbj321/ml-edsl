@@ -140,8 +140,29 @@ mlir::FailureOr<MatmulStrategy> chooseStrategy(mlir::linalg::MatmulOp op,
   return strategy;
 }
 
+llvm::StringRef stringifyBlockedStage(BlockedStage stage) {
+  switch (stage) {
+  case BlockedStage::Distributed:
+    return "distributed";
+  case BlockedStage::Tiled:
+    return "tiled";
+  case BlockedStage::Kernel:
+    return "kernel";
+  }
+  llvm_unreachable("unknown BlockedStage");
+}
+
+std::optional<BlockedStage> symbolizeBlockedStage(llvm::StringRef str) {
+  for (BlockedStage stage : {BlockedStage::Distributed, BlockedStage::Tiled,
+                             BlockedStage::Kernel})
+    if (str == stringifyBlockedStage(stage))
+      return stage;
+  return std::nullopt;
+}
+
 mlir::DictionaryAttr buildBlockedConfig(mlir::MLIRContext *ctx,
-                                        const MatmulStrategy &s) {
+                                        const MatmulStrategy &s,
+                                        BlockedStage stage) {
   mlir::Builder b(ctx);
   return b.getDictionaryAttr({
       b.getNamedAttr("mr", b.getI64IntegerAttr(s.mr)),
@@ -152,15 +173,57 @@ mlir::DictionaryAttr buildBlockedConfig(mlir::MLIRContext *ctx,
       b.getNamedAttr("pack_a", b.getBoolAttr(s.packA)),
       b.getNamedAttr("pack_b", b.getBoolAttr(s.packB)),
       b.getNamedAttr("vectorize", b.getBoolAttr(s.vectorize)),
+      b.getNamedAttr("stage", b.getStringAttr(stringifyBlockedStage(stage))),
   });
 }
 
-bool isBlockedWithoutVectorize(mlir::Operation *op) {
+mlir::DictionaryAttr withStage(mlir::DictionaryAttr config,
+                               BlockedStage stage) {
+  mlir::NamedAttrList attrs(config);
+  attrs.set("stage", mlir::StringAttr::get(config.getContext(),
+                                           stringifyBlockedStage(stage)));
+  return attrs.getDictionary(config.getContext());
+}
+
+mlir::FailureOr<BlockedConfig> readBlockedConfig(mlir::Operation *op) {
   auto config = op->getAttrOfType<mlir::DictionaryAttr>(kBlockedAttrName);
   if (!config)
-    return false;
-  auto vectorize = config.getAs<mlir::BoolAttr>("vectorize");
-  return vectorize && !vectorize.getValue();
+    return mlir::failure();
+
+  auto getInt = [&](llvm::StringRef name, int64_t &out) {
+    auto attr = config.getAs<mlir::IntegerAttr>(name);
+    if (attr)
+      out = attr.getInt();
+    return static_cast<bool>(attr);
+  };
+  auto getBool = [&](llvm::StringRef name, bool &out) {
+    auto attr = config.getAs<mlir::BoolAttr>(name);
+    if (attr)
+      out = attr.getValue();
+    return static_cast<bool>(attr);
+  };
+
+  BlockedConfig result;
+  MatmulStrategy &s = result.strategy;
+  if (!getInt("mr", s.mr) || !getInt("nr", s.nr) || !getInt("mc", s.mc) ||
+      !getInt("nc", s.nc) || !getInt("kc", s.kc) ||
+      !getBool("pack_a", s.packA) || !getBool("pack_b", s.packB) ||
+      !getBool("vectorize", s.vectorize))
+    return mlir::failure();
+
+  auto stageAttr = config.getAs<mlir::StringAttr>("stage");
+  if (!stageAttr)
+    return mlir::failure();
+  auto stage = symbolizeBlockedStage(stageAttr.getValue());
+  if (!stage)
+    return mlir::failure();
+  result.stage = *stage;
+  return result;
+}
+
+bool isBlockedWithoutVectorize(mlir::Operation *op) {
+  auto config = readBlockedConfig(op);
+  return mlir::succeeded(config) && !config->strategy.vectorize;
 }
 
 } // namespace mlir_edsl

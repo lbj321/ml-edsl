@@ -5,14 +5,17 @@
 #include "llvm/ADT/StringRef.h"
 
 #include <cstdint>
+#include <optional>
 
 namespace mlir_edsl {
 
-/// Discardable attribute set by LinalgMatmulBlockedPass on every linalg.matmul
-/// tile it produces. Its value is a dictionary of the strategy that produced
-/// the tile (see buildBlockedConfig), so IR dumps show which blocking was used.
+/// Discardable attribute set by the blocked matmul passes on every
+/// linalg.matmul tile they produce. Its value is a dictionary of the strategy
+/// that produced the tile and its stage (see buildBlockedConfig), so IR dumps
+/// show which blocking was used and each pass can pick up the previous one's
+/// tiles.
 ///
-/// The blocked pass leaves MR x NR x 1 tiles behind that the older matmul
+/// The blocked passes leave MR x NR x 1 tiles behind that the older matmul
 /// passes would happily re-tile: LinalgOuterTileAndFusePass would wrap one in
 /// another scf.forall, the 8x8x8 LinalgMatmulTilingPass would split a 4x16
 /// tile into 4x8 halves, and the 64x64 parallel tiling would grab them too.
@@ -59,7 +62,7 @@ struct MatmulStrategy {
   bool parallel = true;
 };
 
-/// Caller-supplied knobs, populated from LinalgMatmulBlockedPass's pass
+/// Caller-supplied knobs, populated from the blocked distribute pass's
 /// options. The mc/nc/kc entries are *upper bounds* on the corresponding
 /// cache block, not the block itself: chooseStrategy searches downward from
 /// them for a size that is both a multiple of the register tile and a divisor
@@ -89,10 +92,34 @@ struct StrategyOverrides {
 mlir::FailureOr<MatmulStrategy> chooseStrategy(mlir::linalg::MatmulOp op,
                                                const StrategyOverrides &ov);
 
-/// The kBlockedAttrName value recording `s`: mr, nr, mc, nc, kc (i64) and
-/// pack_a, pack_b, vectorize (bool).
+/// How far the blocked passes have taken a tile. Each pass picks up tiles at
+/// the stage the previous one left them in:
+///   linalg-matmul-blocked-distribute     → Distributed (inside the ic x jc forall)
+///   linalg-matmul-blocked-tile-and-pack  → Tiled (MR x NR x KC, operands packed)
+///   linalg-matmul-blocked-kernel         → Kernel (MR x NR x 1)
+enum class BlockedStage { Distributed, Tiled, Kernel };
+
+llvm::StringRef stringifyBlockedStage(BlockedStage stage);
+std::optional<BlockedStage> symbolizeBlockedStage(llvm::StringRef str);
+
+/// The kBlockedAttrName value recording `s` at `stage`: mr, nr, mc, nc, kc
+/// (i64), pack_a, pack_b, vectorize (bool) and stage (string).
 mlir::DictionaryAttr buildBlockedConfig(mlir::MLIRContext *ctx,
-                                        const MatmulStrategy &s);
+                                        const MatmulStrategy &s,
+                                        BlockedStage stage);
+
+/// `config` with its stage replaced.
+mlir::DictionaryAttr withStage(mlir::DictionaryAttr config, BlockedStage stage);
+
+/// A kBlockedAttrName value read back.
+struct BlockedConfig {
+  MatmulStrategy strategy;
+  BlockedStage stage;
+};
+
+/// Reads `op`'s kBlockedAttrName. Fails when the attribute is absent, not a
+/// dictionary, missing a field, or carries an unknown stage.
+mlir::FailureOr<BlockedConfig> readBlockedConfig(mlir::Operation *op);
 
 /// True when `op` is a blocked tile whose strategy has vectorize = false, so
 /// it must be left for convert-linalg-to-loops as scalar code.

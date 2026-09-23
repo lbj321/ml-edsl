@@ -43,10 +43,14 @@ void registerCPUPasses() {
   mlir::registerPass([] { return createLinalgMatmulParallelTilingPass(); });
   mlir::registerPass([] { return createLinalgMatmulKTilingPass(); });
   mlir::registerPass([] { return createLinalgGenericTilingPass(); });
-  // Runs first inside -cpu-pipeline with its defaults. Registered separately
-  // so a non-default strategy can be composed ahead of it:
-  //   mlir-edsl-opt in.mlir -linalg-matmul-blocked=mr=6,nr=16 -cpu-pipeline
-  mlir::registerPass([] { return createLinalgMatmulBlockedPass(); });
+  // Run first inside -cpu-pipeline with their defaults. Registered separately
+  // so a non-default strategy can be composed ahead of it (pass options are
+  // space-separated):
+  //   mlir-edsl-opt in.mlir '-linalg-matmul-blocked-distribute=mr=6 nr=16' \
+  //       -cpu-pipeline
+  mlir::registerPass([] { return createLinalgMatmulBlockedDistributePass(); });
+  mlir::registerPass([] { return createLinalgMatmulBlockedTileAndPackPass(); });
+  mlir::registerPass([] { return createLinalgMatmulBlockedKernelPass(); });
 
   mlir::PassPipelineRegistration<>(
       "cpu-pipeline",

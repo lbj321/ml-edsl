@@ -78,6 +78,20 @@ class TestMatmulExecution:
 
         np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-4)
 
+    def test_matmul_128x128_single_blocked_tile(self, backend):
+        """128x128 is blocked with MC = NC = 128: one forall iteration, which
+        canonicalize removes between the blocked passes."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128]) -> Tensor[f32, 128, 128]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.random((128, 128), dtype=np.float32)
+        B = rng.random((128, 128), dtype=np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-3)
+
     def test_matmul_zeros(self, backend):
         """A @ 0 == 0"""
         @ml_function

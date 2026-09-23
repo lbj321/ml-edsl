@@ -25,7 +25,7 @@ class TestEpilogueFusionExecution:
 
     @pytest.mark.skip(
         reason=(
-            "LinalgMatmulBlockedPass is wired into buildCPUPipeline, and "
+            "the blocked matmul passes are wired into buildCPUPipeline, and "
             "the LoopInvariantSubsetHoisting it needs is applied to every "
             "loop in the function. chooseStrategy rejects matmuls with a "
             "linalg consumer, so epilogue chains stay on the old path — "
@@ -69,7 +69,7 @@ class TestEpilogueFusionExecution:
 
     @pytest.mark.skip(
         reason=(
-            "LinalgMatmulBlockedPass is wired into buildCPUPipeline, and "
+            "the blocked matmul passes are wired into buildCPUPipeline, and "
             "the LoopInvariantSubsetHoisting it needs is applied to every "
             "loop in the function. chooseStrategy rejects matmuls with a "
             "linalg consumer, so epilogue chains stay on the old path — "
@@ -97,7 +97,7 @@ class TestEpilogueFusionExecution:
 
     @pytest.mark.skip(
         reason=(
-            "LinalgMatmulBlockedPass is wired into buildCPUPipeline, and "
+            "the blocked matmul passes are wired into buildCPUPipeline, and "
             "the LoopInvariantSubsetHoisting it needs is applied to every "
             "loop in the function. chooseStrategy rejects matmuls with a "
             "linalg consumer, so epilogue chains stay on the old path — "
@@ -143,7 +143,7 @@ class TestFallbackMatmulTilingExecution:
 
     @pytest.mark.skip(
         reason=(
-            "LinalgMatmulBlockedPass is wired into buildCPUPipeline, and "
+            "the blocked matmul passes are wired into buildCPUPipeline, and "
             "the LoopInvariantSubsetHoisting it needs is applied to every "
             "loop in the function. chooseStrategy rejects matmuls with a "
             "linalg consumer, so epilogue chains stay on the old path — "
@@ -181,7 +181,7 @@ class TestEpilogueFusionIR:
 
     @pytest.mark.skip(
         reason=(
-            "LinalgMatmulBlockedPass is wired into buildCPUPipeline, and "
+            "the blocked matmul passes are wired into buildCPUPipeline, and "
             "the LoopInvariantSubsetHoisting it needs is applied to every "
             "loop in the function. chooseStrategy rejects matmuls with a "
             "linalg consumer, so epilogue chains stay on the old path — "
@@ -211,7 +211,7 @@ class TestEpilogueFusionIR:
 
     @pytest.mark.skip(
         reason=(
-            "LinalgMatmulBlockedPass is wired into buildCPUPipeline, and "
+            "the blocked matmul passes are wired into buildCPUPipeline, and "
             "the LoopInvariantSubsetHoisting it needs is applied to every "
             "loop in the function. chooseStrategy rejects matmuls with a "
             "linalg consumer, so epilogue chains stay on the old path — "
@@ -236,7 +236,7 @@ class TestEpilogueFusionIR:
 
     @pytest.mark.skip(
         reason=(
-            "LinalgMatmulBlockedPass is wired into buildCPUPipeline, and "
+            "the blocked matmul passes are wired into buildCPUPipeline, and "
             "the LoopInvariantSubsetHoisting it needs is applied to every "
             "loop in the function. chooseStrategy rejects matmuls with a "
             "linalg consumer, so epilogue chains stay on the old path — "
@@ -269,7 +269,7 @@ class TestEpilogueFusionIR:
     @pytest.mark.skip(
         reason=(
             "Asserts the pre-blocked-path tiling structure. Bare matmuls "
-            "now go through LinalgMatmulBlockedPass (4x16 register tile, "
+            "now go through the blocked matmul passes (4x16 register tile, "
             "serial loop nest), so there is no 64x64 scf.forall, no 8x8 "
             "extract_slice and no omp.parallel to find. Needs rewriting "
             "against the blocked path rather than un-skipping. "
@@ -299,7 +299,7 @@ class TestFallbackMatmulTilingIR:
 
     @pytest.mark.skip(
         reason=(
-            "LinalgMatmulBlockedPass is wired into buildCPUPipeline, and "
+            "the blocked matmul passes are wired into buildCPUPipeline, and "
             "the LoopInvariantSubsetHoisting it needs is applied to every "
             "loop in the function. chooseStrategy rejects matmuls with a "
             "linalg consumer, so epilogue chains stay on the old path — "
@@ -328,7 +328,7 @@ class TestFallbackMatmulTilingIR:
     @pytest.mark.skip(
         reason=(
             "Asserts the pre-blocked-path tiling structure. Bare matmuls "
-            "now go through LinalgMatmulBlockedPass (4x16 register tile, "
+            "now go through the blocked matmul passes (4x16 register tile, "
             "serial loop nest), so there is no 64x64 scf.forall, no 8x8 "
             "extract_slice and no omp.parallel to find. Needs rewriting "
             "against the blocked path rather than un-skipping. "

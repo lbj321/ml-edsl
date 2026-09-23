@@ -177,7 +177,7 @@ void registerCPUDialects(mlir::DialectRegistry &registry) {
   mlir::vector::registerSubsetOpInterfaceExternalModels(registry);
   mlir::linalg::registerTilingInterfaceExternalModels(registry);
   // tensor.pad's TilingInterface is an external model too. Without it,
-  // LinalgMatmulBlockedPass's packing phase cannot tile the hoisted pad that
+  // the blocked tile-and-pack pass cannot tile the hoisted pad that
   // builds B~ — the dyn_cast<TilingInterface> simply fails, with no
   // diagnostic to point at the missing registration. That tiling in turn
   // reifies the pad's result shape, which needs the InferType models.
@@ -268,8 +268,15 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   // leaves carry mlir_edsl.blocked, which keeps those passes off them.
   // Anything the guard rejects — non-f32, dynamic or non-divisible shapes, or
   // a matmul feeding another linalg op — is untouched here and lowers exactly
-  // as before.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedPass());
+  // as before. The three stages hand tiles over through that attribute, so
+  // canonicalize between them is safe.
+  pm.addNestedPass<mlir::func::FuncOp>(
+      createLinalgMatmulBlockedDistributePass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      createLinalgMatmulBlockedTileAndPackPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedKernelPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgOuterTileAndFusePass());
@@ -408,7 +415,7 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   pm.addPass(mlir::createCanonicalizerPass());
 
   // Hoist buffer allocations out of the loops that produced them, *before*
-  // deallocation is inserted. LinalgMatmulBlockedPass's packed A~/B~ buffers
+  // deallocation is inserted. The blocked matmul's packed A~/B~ buffers
   // bufferize to a memref.alloc inside the pc loop; hoisted, each thread
   // allocates them once per call instead of once per pc iteration. Running
   // the ownership-based dealloc pass first would instead pin an alloc/free
