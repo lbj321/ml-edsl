@@ -92,6 +92,32 @@ class TestMatmulExecution:
 
         np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-3)
 
+    def test_matmul_4x512x256_one_register_loop(self, backend):
+        """M = MR folds ir before packing; A and B are hoisted out of jr only."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 4, 512], B: Tensor[f32, 512, 256]) -> Tensor[f32, 4, 256]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.random((4, 512), dtype=np.float32)
+        B = rng.random((512, 256), dtype=np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-3)
+
+    def test_matmul_4x64x16_no_register_loop(self, backend):
+        """M = MR and N = NR fold both register loops, so nothing is packed."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 4, 64], B: Tensor[f32, 64, 16]) -> Tensor[f32, 4, 16]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.random((4, 64), dtype=np.float32)
+        B = rng.random((64, 16), dtype=np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-3)
+
     def test_matmul_zeros(self, backend):
         """A @ 0 == 0"""
         @ml_function

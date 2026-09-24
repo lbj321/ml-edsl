@@ -24,6 +24,17 @@ N = 256
 # canonicalize removes it between the distribute and tile passes.
 N_SINGLE_TILE = 128
 
+# (M, K, N) with M = MR, so ir folds and jr is the only register loop left
+# to hoist out of. K = 2 * KC keeps A a real slice.
+SHAPE_ONE_REGISTER_LOOP = (4, 512, 256)
+
+# M = MR and N = NR: both register loops fold, so nothing is packed.
+SHAPE_NO_REGISTER_LOOP = (4, 64, 16)
+
+# N = NC = NR and K = KC: B's slice is the whole of B, which canonicalize
+# folds away, so only A is packed.
+N_WHOLE_B = 16
+
 # 24 fails the cache-block search (no MC multiple of MR=4 divides it that also
 # satisfies the NR=16 column block), so it falls back to the old path.
 N_REJECTED = 24
@@ -31,11 +42,16 @@ N_REJECTED = 24
 
 def _run(n):
     """Compile and call an NxN bare matmul, returning nothing."""
+    _run_mkn(n, n, n)
+
+
+def _run_mkn(m, k, n):
+    """Compile and call an (MxK) @ (KxN) bare matmul, returning nothing."""
     @ml_function
-    def mm_fn(A: Tensor[f32, n, n], B: Tensor[f32, n, n]) -> Tensor[f32, n, n]:
+    def mm_fn(A: Tensor[f32, m, k], B: Tensor[f32, k, n]) -> Tensor[f32, m, n]:
         return matmul(A, B)
 
-    mm_fn(np.ones((n, n), dtype=np.float32), np.ones((n, n), dtype=np.float32))
+    mm_fn(np.ones((m, k), dtype=np.float32), np.ones((k, n), dtype=np.float32))
 
 
 class TestBlockedMatmulStructure:
@@ -106,6 +122,19 @@ class TestBlockedMatmulStructure:
 class TestBlockedMatmulStages:
     """Each pass picks up the tiles the previous one left, by stage."""
 
+    def test_tile_marks_register_loops_and_does_not_pack(
+            self, check_lowered_ir):
+        """jr and ir carry the hoist marker; packing is left to the pack pass."""
+        _run(N)
+        check_lowered_ir("""
+        // CHECK-NOT: tensor.pad
+        // CHECK: linalg.matmul {mlir_edsl.blocked = {{{.*}}stage = "tiled"
+        // CHECK-SAME: tensor<4x256xf32>, tensor<256x16xf32>
+        // CHECK: } {mlir_edsl.blocked_hoist}
+        // CHECK: } {mlir_edsl.blocked_hoist}
+        // CHECK-NOT: mlir_edsl.blocked_hoist
+        """, after=TILE)
+
     def test_pack_advances_every_tiled_tile(self, check_lowered_ir):
         """No tile is left at the tiled stage after pack."""
         _run(N)
@@ -114,6 +143,13 @@ class TestBlockedMatmulStages:
         // CHECK: linalg.matmul {mlir_edsl.blocked = {{{.*}}stage = "packed"
         // CHECK-SAME: tensor<4x256xf32>, tensor<256x16xf32>
         // CHECK-NOT: stage = "tiled"
+        """, after=PACK)
+
+    def test_pack_removes_hoist_markers(self, check_lowered_ir):
+        """The markers are a tile-to-pack hand-over and go no further."""
+        _run(N)
+        check_lowered_ir("""
+        // CHECK-NOT: mlir_edsl.blocked_hoist
         """, after=PACK)
 
     def test_single_iteration_forall_still_reaches_the_kernel(
@@ -128,6 +164,58 @@ class TestBlockedMatmulStages:
         // CHECK: linalg.matmul {mlir_edsl.blocked = {{{.*}}stage = "kernel"
         // CHECK-SAME: tensor<4x1xf32>, tensor<1x16xf32>
         """, after=KERNEL)
+
+
+class TestBlockedMatmulPackingDecisions:
+    """The pack pass hoists out of the register loops canonicalize left."""
+
+    def test_one_register_loop_still_packs_both_operands(
+            self, check_lowered_ir):
+        """With only jr left, A and B are still packed, hoisted out of jr."""
+        _run_mkn(*SHAPE_ONE_REGISTER_LOOP)
+        check_lowered_ir("""
+        // CHECK-DAG: vector.transfer_write {{.*}} vector<8x16xf32>
+        // CHECK-DAG: linalg.transpose ins({{.*}} : tensor<4x8xf32>)
+        // CHECK: linalg.matmul {mlir_edsl.blocked = {{{.*}}stage = "packed"
+        """, after=PACK)
+
+    def test_one_register_loop_fuses_the_untranspose(self, check_lowered_ir):
+        """The kernel pass finds the un-transpose packing A left behind."""
+        _run_mkn(*SHAPE_ONE_REGISTER_LOOP)
+        check_lowered_ir("""
+        // CHECK: linalg.transpose ins({{.*}} : tensor<1x4xf32>)
+        // CHECK-SAME: outs({{.*}} : tensor<4x1xf32>)
+        """, after=KERNEL)
+
+    def test_no_register_loop_skips_packing(self, check_lowered_ir):
+        """Each panel would feed a single microtile, so nothing is packed."""
+        _run_mkn(*SHAPE_NO_REGISTER_LOOP)
+        check_lowered_ir("""
+        // CHECK-NOT: tensor.pad
+        // CHECK-NOT: linalg.transpose
+        // CHECK: linalg.matmul {mlir_edsl.blocked = {{{.*}}stage = "packed"
+        // CHECK-NOT: tensor.pad
+        // CHECK-NOT: linalg.transpose
+        """, after=PACK)
+
+    def test_no_register_loop_reaches_the_kernel(self, check_lowered_ir):
+        """An unpacked tile is still k-tiled, with no un-transpose to fuse."""
+        _run_mkn(*SHAPE_NO_REGISTER_LOOP)
+        check_lowered_ir("""
+        // CHECK-NOT: linalg.transpose
+        // CHECK: linalg.matmul {mlir_edsl.blocked = {{{.*}}stage = "kernel"
+        // CHECK-SAME: tensor<4x1xf32>, tensor<1x16xf32>
+        """, after=KERNEL)
+
+    def test_whole_tensor_operand_is_not_packed(self, check_lowered_ir):
+        """B's full-size slice folds away, so only A is packed."""
+        _run(N_WHOLE_B)
+        check_lowered_ir("""
+        // CHECK-NOT: vector.transfer_write
+        // CHECK: linalg.transpose ins({{.*}} : tensor<4x8xf32>)
+        // CHECK-NOT: vector.transfer_write
+        // CHECK: linalg.matmul {mlir_edsl.blocked = {{{.*}}stage = "packed"
+        """, after=PACK)
 
 
 class TestBlockedMatmulFallback:
