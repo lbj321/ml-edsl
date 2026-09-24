@@ -158,6 +158,14 @@ class TestLinalgMatmulTilingPass:
     Matrices with any dim <= 8 are left untouched for direct vectorization.
     """
 
+    @pytest.mark.skip(
+        reason=(
+            "f32 matmuls no longer reach the old path: the distribute pass "
+            "pads every static f32 shape onto the blocked matmul passes, "
+            "which need padded buffers and tile differently. Remove with the "
+            "old passes. "
+        )
+    )
     def test_large_matmul_tiled_to_scf_for(self, check_lowered_ir):
         """16x16 matmul is replaced by three nested scf.for loops (M, N, K tiled to 8)."""
         @ml_function
@@ -172,6 +180,14 @@ class TestLinalgMatmulTilingPass:
         // CHECK: linalg.matmul
         """, after="linalg-tile-matmul")
 
+    @pytest.mark.skip(
+        reason=(
+            "f32 matmuls no longer reach the old path: the distribute pass "
+            "pads every static f32 shape onto the blocked matmul passes, "
+            "which need padded buffers and tile differently. Remove with the "
+            "old passes. "
+        )
+    )
     def test_large_matmul_tile_step_is_8(self, check_lowered_ir):
         """Tiling uses step size 8 for both M and N dimensions."""
         @ml_function
@@ -210,6 +226,14 @@ class TestLinalgMatmulTilingPass:
         // CHECK: tensor.extract_slice {{.*}} [8, 8] [1, 1]
         """, after="linalg-tile-matmul")
 
+    @pytest.mark.skip(
+        reason=(
+            "f32 matmuls no longer reach the old path: the distribute pass "
+            "pads every static f32 shape onto the blocked matmul passes, "
+            "which need padded buffers and tile differently. Remove with the "
+            "old passes. "
+        )
+    )
     def test_boundary_8x8_matmul_tiled(self, check_lowered_ir):
         """8x8 matmul is tiled into a single 8x8 tile (one-iteration scf.for loops)."""
         @ml_function
@@ -223,6 +247,14 @@ class TestLinalgMatmulTilingPass:
         // CHECK: linalg.matmul
         """, after="linalg-tile-matmul")
 
+    @pytest.mark.skip(
+        reason=(
+            "f32 matmuls no longer reach the old path: the distribute pass "
+            "pads every static f32 shape onto the blocked matmul passes, "
+            "which need padded buffers and tile differently. Remove with the "
+            "old passes. "
+        )
+    )
     def test_small_matmul_tiled(self, check_lowered_ir):
         """2x2 matmul is tiled — produces scf.for loops with a partial tile."""
         @ml_function

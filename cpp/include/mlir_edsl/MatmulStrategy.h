@@ -41,8 +41,9 @@ struct MatmulStrategy {
   int64_t nr = 16;
 
   /// Cache blocks, resolved by chooseStrategy from the register tile and the
-  /// op's shape. Always satisfy mc % mr == 0, nc % nr == 0, kc % 8 == 0, and
-  /// divide M, N and K respectively.
+  /// op's shape. Always satisfy mc % mr == 0, nc % nr == 0 and kc % 8 == 0.
+  /// They need not divide M, N and K: the distribute pass pads each extent up
+  /// to a multiple of its block.
   int64_t mc = 0;
   int64_t nc = 0;
   int64_t kc = 0;
@@ -68,9 +69,8 @@ struct MatmulStrategy {
 
 /// Caller-supplied knobs, populated from the blocked distribute pass's
 /// options. The mc/nc/kc entries are *upper bounds* on the corresponding
-/// cache block, not the block itself: chooseStrategy searches downward from
-/// them for a size that is both a multiple of the register tile and a divisor
-/// of the matmul's extent.
+/// cache block, not the block itself: chooseStrategy picks a multiple of the
+/// register tile at or below them that pads the matmul's extent least.
 struct StrategyOverrides {
   int64_t mr = 4;
   int64_t nr = 16;
@@ -84,17 +84,24 @@ struct StrategyOverrides {
 
 /// Decide how (or whether) to block `op`.
 ///
-/// This is the fast-path guard: failure is the normal way a matmul opts out
-/// and stays on the existing 64x64 / 8x8x8 pipeline. There is no remainder
-/// handling, so every loop level must divide evenly.
+/// Failure is the way a matmul opts out and stays on the existing 64x64 /
+/// 8x8x8 pipeline. Extents that no block divides are padded rather than
+/// rejected (see paddedExtent), so every static f32 matmul is accepted unless
+/// the overrides themselves are invalid.
 ///
 /// Rejects, in order: non-f32 element types; non-tensor or dynamically shaped
 /// operands; ops already marked kBlockedAttrName; register tiles that overflow
-/// the 16 available ymm registers; and shapes for which no valid cache block
-/// exists. A matmul's consumers do not matter: an epilogue (bias, relu) runs as
+/// the 16 available ymm registers; and cache-block caps below the register
+/// tile. A matmul's consumers do not matter: an epilogue (bias, relu) runs as
 /// its own linalg op after the blocked matmul, unfused.
 mlir::FailureOr<MatmulStrategy> chooseStrategy(mlir::linalg::MatmulOp op,
                                                const StrategyOverrides &ov);
+
+/// `dim` rounded up to a multiple of `block`: the extent the blocked passes
+/// tile once the distribute pass has padded the matmul.
+inline int64_t paddedExtent(int64_t dim, int64_t block) {
+  return (dim + block - 1) / block * block;
+}
 
 /// How far the blocked passes have taken a tile.
 ///

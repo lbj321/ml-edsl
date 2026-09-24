@@ -7,6 +7,7 @@ Post-lowering / pass-level IR tests live in test_lowering_ir.py.
 """
 
 import numpy as np
+import pytest
 from mlir_edsl import ml_function, Tensor, f32, dot, matmul, tensor_map, tensor_sum, relu, leaky_relu
 
 
@@ -135,6 +136,14 @@ class TestDirectOutputBuffer:
         // CHECK-NOT: tensor<
         """, after="one-shot-bufferize")
 
+    @pytest.mark.skip(
+        reason=(
+            "f32 matmuls no longer reach the old path: the distribute pass "
+            "pads every static f32 shape onto the blocked matmul passes, "
+            "which need padded buffers and tile differently. Remove with the "
+            "old passes. "
+        )
+    )
     def test_matmul_bufferizes_to_direct_write(self, check_lowered_ir):
         """After one-shot-bufferize: linalg.matmul is fully vectorized — vectorization
         and vector.contract → outerproduct lowering both now run pre-bufferize, so
@@ -156,6 +165,14 @@ class TestDirectOutputBuffer:
         // CHECK-NOT: tensor<
         """, after="one-shot-bufferize")
 
+    @pytest.mark.skip(
+        reason=(
+            "f32 matmuls no longer reach the old path: the distribute pass "
+            "pads every static f32 shape onto the blocked matmul passes, "
+            "which need padded buffers and tile differently. Remove with the "
+            "old passes. "
+        )
+    )
     def test_bias_relu_fused_and_no_copy(self, check_lowered_ir):
         """bias+relu is fused with the matmul and fully vectorized into straight-line
         vector/arith ops (vectorization and contract-to-outerproduct lowering both now

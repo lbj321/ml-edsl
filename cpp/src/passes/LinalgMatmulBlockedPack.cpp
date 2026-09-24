@@ -27,25 +27,13 @@
 
 namespace {
 
+using mlir_edsl::applyPatternSetTo;
 using mlir_edsl::BlockedStage;
 using mlir_edsl::tileOneLevel;
 
 // Rows of B packed per iteration of the B~ packing loop. 8 is one f32 ymm
 // register: each iteration copies an 8 x NR block with two vector transfers.
 constexpr int64_t kPackTileRows = 8;
-
-// Runs one pattern set greedily over `ops` only, plus the ops the patterns
-// create. Scoping is what lets the caller keep holding handles: ops outside
-// the set are never folded, rewritten or erased as dead. Kept deliberately
-// narrow — no canonicalizer — because canonicalization at the wrong moment
-// undoes two of the rewrites below (see packB).
-static mlir::LogicalResult
-applyPatternSetTo(llvm::ArrayRef<mlir::Operation *> ops,
-                  mlir::RewritePatternSet &&patterns) {
-  mlir::GreedyRewriteConfig config;
-  config.setStrictness(mlir::GreedyRewriteStrictness::ExistingAndNewOps);
-  return mlir::applyOpPatternsGreedily(ops, std::move(patterns), config);
-}
 
 // The marked register loops directly around `tile`, innermost first. The tile
 // pass marks jr and ir; canonicalize removes the ones with a single
@@ -142,28 +130,9 @@ static mlir::LogicalResult packB(mlir::IRRewriter &rewriter,
       tileOneLevel(rewriter, hoistedPad.getOperation(), {kPackTileRows, 0});
   if (mlir::failed(padTile) || padTile->loops.size() != 1)
     return mlir::failure();
-  rewriter.setInsertionPoint(padTile->op);
-  // inputScalableVecDims must be given whenever inputVectorSizes is (the
-  // vectorizer asserts on a length mismatch); nothing here is scalable.
-  const llvm::SmallVector<bool> notScalable = {false, false};
-  if (mlir::failed(mlir::linalg::vectorize(
-          rewriter, padTile->op, /*inputVectorSizes=*/{kPackTileRows, s.nr},
-          notScalable)))
-    return mlir::failure();
-
-  // Fold the insert_slice into the transfer_write *now*. Left alone, the
-  // transfer_read/transfer_write round trip through a fresh tensor.empty
-  // folds back to insert_slice(extract_slice(B)), which bufferizes to a
-  // strided memref.copy — a call to the memrefCopy runtime helper, which is
-  // an undefined symbol in the JIT.
-  llvm::SmallVector<mlir::Operation *> packLoopOps;
-  padTile->loops.front()->walk([&](mlir::Operation *op) {
-    if (op != padTile->loops.front().getOperation())
-      packLoopOps.push_back(op);
-  });
-  mlir::RewritePatternSet patterns(rewriter.getContext());
-  mlir::tensor::populateFoldTensorSubsetIntoVectorTransferPatterns(patterns);
-  return applyPatternSetTo(packLoopOps, std::move(patterns));
+  return mlir_edsl::vectorizeCopyTile(rewriter, padTile->op,
+                                      padTile->loops.front().getOperation(),
+                                      /*vectorSizes=*/{kPackTileRows, s.nr});
 }
 
 // A~ = (MC/MR) x KC x MR: hoists A's pad out of the register loops with a

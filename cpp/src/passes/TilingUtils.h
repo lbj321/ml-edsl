@@ -28,4 +28,23 @@ tileOneLevel(mlir::IRRewriter &rewriter, mlir::Operation *op,
              mlir::scf::SCFTilingOptions::LoopType loopType =
                  mlir::scf::SCFTilingOptions::LoopType::ForOp);
 
+/// Runs one pattern set greedily over `ops` only, plus the ops the patterns
+/// create. Scoping is what lets the caller keep holding handles: ops outside
+/// the set are never folded, rewritten or erased as dead. Kept deliberately
+/// narrow — no canonicalizer — because canonicalization at the wrong moment
+/// undoes a vectorized copy (see vectorizeCopyTile).
+mlir::LogicalResult applyPatternSetTo(llvm::ArrayRef<mlir::Operation *> ops,
+                                      mlir::RewritePatternSet &&patterns);
+
+/// Vectorizes `tile`, a static-shape copy, pad or fill tile inside `loop`, and
+/// folds the insert_slice storing it into the vector.transfer_write, scoped to
+/// the ops in `loop`. Left for later, canonicalize folds the transfer_read /
+/// transfer_write round trip back to insert_slice(extract_slice), which
+/// bufferizes to a strided memref.copy: a call to the memrefCopy runtime
+/// helper, a generic element-by-element loop.
+mlir::LogicalResult vectorizeCopyTile(mlir::IRRewriter &rewriter,
+                                      mlir::Operation *tile,
+                                      mlir::Operation *loop,
+                                      llvm::ArrayRef<int64_t> vectorSizes = {});
+
 } // namespace mlir_edsl

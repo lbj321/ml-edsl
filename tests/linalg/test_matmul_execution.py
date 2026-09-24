@@ -9,7 +9,7 @@ Validates that matmul(A, B) compiles through the full pipeline:
 
 import pytest
 import numpy as np
-from mlir_edsl import ml_function, Tensor, f32, i32, matmul
+from mlir_edsl import ml_function, Tensor, f32, i32, matmul, relu
 
 
 # ==================== BASIC MATMUL ====================
@@ -117,6 +117,62 @@ class TestMatmulExecution:
         result = mm_fn(A, B)
 
         np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-3)
+
+    def test_matmul_1000x1000_padded(self, backend):
+        """No NC that is a multiple of 16 divides 1000, so N is padded."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 1000, 1000], B: Tensor[f32, 1000, 1000]) -> Tensor[f32, 1000, 1000]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.random((1000, 1000), dtype=np.float32)
+        B = rng.random((1000, 1000), dtype=np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-2)
+
+    def test_matmul_98x100x100_all_extents_padded(self, backend):
+        """M, K and N are each padded up to their block."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 98, 100], B: Tensor[f32, 100, 100]) -> Tensor[f32, 98, 100]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((98, 100)).astype(np.float32)
+        B = rng.standard_normal((100, 100)).astype(np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-3)
+
+    def test_matmul_prime_extents_padded(self, backend):
+        """97x101x103: prime extents, so the padding copies fall back to
+        width-1 column tiles."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 97, 101], B: Tensor[f32, 101, 103]) -> Tensor[f32, 97, 103]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((97, 101)).astype(np.float32)
+        B = rng.standard_normal((101, 103)).astype(np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-3)
+
+    def test_padded_dense_layer(self, backend):
+        """The epilogue reads the result sliced back out of the padded C."""
+        @ml_function
+        def dense(A: Tensor[f32, 100, 100], B: Tensor[f32, 100, 100],
+                  b: Tensor[f32, 100]) -> Tensor[f32, 100, 100]:
+            return relu(matmul(A, B) + b)
+
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((100, 100)).astype(np.float32)
+        B = rng.standard_normal((100, 100)).astype(np.float32)
+        bias = rng.standard_normal(100).astype(np.float32)
+        result = dense(A, B, bias)
+
+        np.testing.assert_allclose(result, np.maximum(A @ B + bias, 0),
+                                   rtol=1e-4, atol=1e-3)
 
     def test_matmul_zeros(self, backend):
         """A @ 0 == 0"""

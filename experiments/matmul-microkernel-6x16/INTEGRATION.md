@@ -684,8 +684,8 @@ also fused the fill into 64x64 tiles for matmuls `chooseStrategy` rejects.
 Without it, their fill is vectorized whole: at 1000x1000 (no NC that is a
 multiple of 16 divides N) it becomes a `vector<1000x1000xf32>` and a 4 MB
 `memref.alloca`. The result is still correct at 1000; shapes past the 8 MB
-stack were not tried. The padding pass (below) moves every f32 shape onto the
-blocked path, which leaves only non-f32 matmuls exposed.
+stack were not tried. Padding (next section) has since moved every static f32
+shape onto the blocked path, so only non-f32 matmuls are still exposed.
 
 **Padding experiment** (hand-padded MLIR through `mlir-edsl-opt -cpu-pipeline`
 and `harness/bench_matmul.c`, 1000^3, GFLOPS, two runs):
@@ -703,20 +703,65 @@ and `harness/bench_matmul.c`, 1000^3, GFLOPS, two runs):
   are sliced off) and every variant was correct.
 - `tensor.pad` and the final `extract_slice` bufferize to strided
   `memref.copy` → `memrefCopy`. That is not a correctness problem in the JIT:
-  `MLIRExecutor` loads `mlir_c_runner_utils`, which provides it (the "undefined
-  symbol in the JIT" comment in `packB` is stale — it only fails in a
-  standalone `.so`). It is slow, though.
+  `MLIRExecutor` loads `mlir_c_runner_utils`, which provides it (it only
+  fails to link in a standalone `.so`; `packB`'s old comment said otherwise).
+  It is slow, though.
 - Pad only the dimensions whose block search fails.
 - The copies are now the bottleneck: the generic copies are serial loops
   while the matmul uses every core (46% of 1024^3 multithreaded against
   70–80% single-threaded). The whole padded B was also zeroed where only the
   pad strip needs it.
 
+## Padding in the distribute pass (DONE — correctness)
+
+Every static f32 matmul is now blocked; only non-f32 (i32) matmuls reach the
+old passes.
+
+- **Block choice** (`chooseBlock`, MatmulStrategy.cpp). An extent that fits one
+  block gets one, rounded up to the register-tile multiple. Otherwise the
+  block is the multiple in [cap/2, cap] that pads least, preferring the larger
+  one on ties. A tiny exact divisor is no longer taken over a few rows of
+  padding (M = 148: MC 4 → 76). Shapes with an exact divisor in that range
+  keep their blocks, so 128^3, 256^3 and 1024^3 are byte-identical.
+- **Padding** (`passes/MatmulPadding.{h,cpp}`, called first in `distribute`).
+  Only the extents that need it are padded (`paddedExtent`). A and B are
+  copied into zero-padded buffers with only the pad strips zeroed; a
+  `linalg.fill` C becomes a fill of the padded C; the result is copied back
+  out of the padded C, and empty-tensor elimination lets that copy write
+  straight into the output.
+- **The copies are vectorized immediately**, in row-strip `scf.forall`s over
+  static tiles of up to 8 x 16 (`tileCopyLike` → `vectorizeCopyTile`,
+  `TilingUtils.h`, shared with `packB`). Vectorized later, canonicalize folds
+  them back into strided `memref.copy` → `memrefCopy`, which is correct in
+  the JIT (it loads `mlir_c_runner_utils`) but a slow element loop. Copies use
+  `linalg.copy`, not an identity `linalg.generic`, which canonicalize erases.
+- **Tests:** padding IR tests (all three extents, N only, no padding when
+  blocks divide), an i32 matmul replacing the old "rejected shape" test, and
+  execution tests for 1000^2, 98x100x100, prime 97x101x103 and a padded dense
+  layer. Six IR tests of old-path structure for f32 shapes (the 8x8x8
+  `linalg-tile-matmul` tests and two allocation-free 2x2 bufferization
+  tests) are skipped: f32 no longer reaches that path. **737 passed, 15
+  skipped.**
+- **Performance, measured but not tuned** (`harness/bench_matmul.c`, best of
+  10, GFLOPS):
+
+  | shape | all threads | 1 thread |
+  |---|---|---|
+  | 1000^3, old fallback | 41 | 5.5 |
+  | 1000^3, padded | 330–342 | 84 |
+  | 1000x1000x1008, same blocks, no padding | 561–569 | 85–86 |
+  | 1024^3 | 576–612 | 99–101 |
+
+  Single-threaded the copies cost ~2%; multithreaded ~40% (about 2.3 ms). It
+  grows with threads, which rules out plain copy bandwidth. Untested theory:
+  page faults on the 4 MB padded buffers, which glibc `mmap`s fresh on every
+  call.
+
 ## Next
 
-1. **Padding pass** for f32 shapes the block search rejects: pad only the
-   failing dimensions, copy in and out with parallel vectorized loops, zero
-   only the pad region.
+1. **The multithreaded padding overhead** above, if padded shapes matter for
+   speed. Folding the padding into the pack step (PLAN.md Stage 5) would also
+   remove the copy of B that packing repeats anyway.
 2. **Rewrite the three stale IR assertions** against the blocked path
    (`test_bare_matmul_fused`, `test_bare_matmul_not_retiled`,
    `test_large_matmul_produces_extract_slices`,

@@ -2,11 +2,13 @@
 //
 // linalg-matmul-blocked-distribute: the first of the four blocked matmul
 // passes (see BlockedStage in MatmulStrategy.h). Chooses the strategy for
-// every matmul chooseStrategy accepts, distributes it over an ic x jc
-// scf.forall, and leaves the tile at stage Distributed.
+// every matmul chooseStrategy accepts, pads the extents its blocks do not
+// divide (MatmulPadding.h), distributes it over an ic x jc scf.forall, and
+// leaves the tile at stage Distributed.
 //
 //===----------------------------------------------------------------------===//
 
+#include "MatmulPadding.h"
 #include "TilingUtils.h"
 
 #include "mlir_edsl/MLIRLoweringPasses.h"
@@ -17,6 +19,7 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 
@@ -45,7 +48,11 @@ static mlir::LogicalResult distribute(mlir::IRRewriter &rewriter,
                                       mlir::linalg::MatmulOp op,
                                       const mlir_edsl::MatmulStrategy &s,
                                       bool &committed) {
-  committed = false;
+  auto padded = mlir_edsl::padToBlocks(rewriter, op, s, committed);
+  if (mlir::failed(padded))
+    return mlir::failure();
+  op = *padded;
+
   // Captured before tiling rewrites the operand. Handling it is not
   // optional: no other pass tiles a blocked matmul's fill, so an untiled
   // fill would reach LinalgVectorizationPass as one MxN vector, which
@@ -124,9 +131,11 @@ struct LinalgMatmulBlockedDistributePass
       llvm::cl::desc("Let the register tile reach the vectorizing passes"),
       llvm::cl::init(true)};
 
+  // Padding builds vector transfers for its copies (MatmulPadding.h).
   void getDependentDialects(mlir::DialectRegistry &registry) const override {
     registry.insert<mlir::scf::SCFDialect, mlir::linalg::LinalgDialect,
-                    mlir::tensor::TensorDialect, mlir::arith::ArithDialect>();
+                    mlir::tensor::TensorDialect, mlir::arith::ArithDialect,
+                    mlir::vector::VectorDialect>();
   }
 
   llvm::StringRef getArgument() const override {

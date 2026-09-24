@@ -45,6 +45,7 @@ add_library(mlir_edsl_core STATIC
     src/passes/LinalgMatmulBlockedPack.cpp
     src/passes/LinalgMatmulBlockedKernel.cpp
     src/passes/TilingUtils.cpp
+    src/passes/MatmulPadding.cpp
     src/ShapeUtils.cpp
     src/builders/ArithBuilder.cpp
     src/builders/SCFBuilder.cpp
@@ -71,6 +72,8 @@ if(NOT LLVM_ENABLE_RTTI)
     set_source_files_properties(src/passes/LinalgMatmulBlockedKernel.cpp
         PROPERTIES COMPILE_OPTIONS "-fno-rtti")
     set_source_files_properties(src/passes/TilingUtils.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(src/passes/MatmulPadding.cpp
         PROPERTIES COMPILE_OPTIONS "-fno-rtti")
     if(MLIR_EDSL_CUDA)
         set_source_files_properties(src/MLIRExecutor.cpp

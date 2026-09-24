@@ -3,12 +3,13 @@
 A bare f32 matmul whose shape chooseStrategy accepts is distributed over an
 ic x jc forall, tiled into a BLIS loop nest over a 4x16 register tile with A
 and B packed into contiguous panels, and k-tiled into the register kernel —
-one pass per stage. Shapes the guard rejects must keep the old 64x64 / 8x8x8
+one pass per stage. Extents no cache block divides are padded up to one.
+Non-f32 matmuls, which the guard rejects, must keep the old 64x64 / 8x8x8
 structure instead.
 """
 
 import numpy as np
-from mlir_edsl import ml_function, Tensor, f32, matmul, relu
+from mlir_edsl import ml_function, Tensor, f32, i32, matmul, relu
 
 DISTRIBUTE = "linalg-matmul-blocked-distribute"
 TILE = "linalg-matmul-blocked-tile"
@@ -35,9 +36,12 @@ SHAPE_NO_REGISTER_LOOP = (4, 64, 16)
 # folds away, so only A is packed.
 N_WHOLE_B = 16
 
-# 24 fails the cache-block search (no MC multiple of MR=4 divides it that also
-# satisfies the NR=16 column block), so it falls back to the old path.
-N_REJECTED = 24
+# (M, K, N) that pads every extent: M 98 -> 100 (MR = 4), K 100 -> 104 (8),
+# N 100 -> 112 (NR = 16), each a single block.
+SHAPE_PADDED = (98, 100, 100)
+
+# Only N needs padding (100 -> 112); M and K divide their blocks.
+SHAPE_PADDED_N = (128, 128, 100)
 
 
 def _run(n):
@@ -259,12 +263,54 @@ class TestBlockedMatmulConsumers:
         """, after=KERNEL)
 
 
-class TestBlockedMatmulFallback:
-    """Shapes chooseStrategy rejects must not be touched by the passes."""
+class TestBlockedMatmulPadding:
+    """Extents no cache block divides are padded up to one, not rejected."""
 
-    def test_rejected_shape_is_left_for_the_old_path(self, check_lowered_ir):
-        """No blocked marker and no 2-D forall for a non-divisible shape."""
-        _run(N_REJECTED)
+    def test_every_extent_padded_to_its_block(self, check_lowered_ir):
+        """A and B are copied into padded buffers, the forall covers the
+        padded C, and the result is sliced back out of it."""
+        _run_mkn(*SHAPE_PADDED)
+        check_lowered_ir("""
+        // CHECK: tensor.empty() : tensor<100x104xf32>
+        // CHECK: tensor.empty() : tensor<104x112xf32>
+        // CHECK: scf.forall ({{.*}}, {{.*}}) = (0, 0) to (100, 112)
+        // CHECK: linalg.matmul {mlir_edsl.blocked = {kc = 104 : i64, mc = 100 : i64
+        // CHECK: tensor.extract_slice {{.*}}[0, 0] [98, 100] [1, 1] : tensor<100x112xf32> to tensor<98x100xf32>
+        """, after=DISTRIBUTE)
+
+    def test_only_the_failing_extent_is_padded(self, check_lowered_ir):
+        """With only N padded, A is used as it is and only B and C get
+        padded buffers."""
+        _run_mkn(*SHAPE_PADDED_N)
+        check_lowered_ir("""
+        // CHECK-NOT: tensor<128x128xf32> to tensor
+        // CHECK: tensor.empty() : tensor<128x112xf32>
+        // CHECK: scf.forall ({{.*}}, {{.*}}) = (0, 0) to (128, 112)
+        """, after=DISTRIBUTE)
+
+    def test_divisible_shape_is_not_padded(self, check_lowered_ir):
+        """Blocks that divide every extent leave the operands untouched: the
+        only tensor.empty is the one the EDSL's C fill writes into."""
+        _run(N)
+        check_lowered_ir("""
+        // CHECK: tensor.empty() : tensor<256x256xf32>
+        // CHECK-NOT: tensor.empty
+        // CHECK: scf.forall ({{.*}}, {{.*}}) = (0, 0) to (256, 256)
+        // CHECK-NOT: tensor.empty
+        """, after=DISTRIBUTE)
+
+
+class TestBlockedMatmulFallback:
+    """Matmuls chooseStrategy rejects must not be touched by the passes."""
+
+    def test_non_f32_matmul_is_left_for_the_old_path(self, check_lowered_ir):
+        """An i32 matmul gets no blocked marker."""
+        @ml_function
+        def mm_fn(A: Tensor[i32, N, N], B: Tensor[i32, N, N]) -> Tensor[i32, N, N]:
+            return matmul(A, B)
+
+        ones = np.ones((N, N), dtype=np.int32)
+        mm_fn(ones, ones)
         check_lowered_ir("""
         // CHECK-NOT: mlir_edsl.blocked
         """, after=DISTRIBUTE)

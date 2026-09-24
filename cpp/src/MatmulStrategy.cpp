@@ -20,26 +20,35 @@ constexpr int64_t kVectorWidth = 8;
 // Total ymm registers available to the microkernel.
 constexpr int64_t kNumVectorRegisters = 16;
 
-/// Largest b <= min(cap, dim) such that b % multiple == 0 and dim % b == 0.
+/// The block for one extent: a multiple of `multiple`, at most `cap`, chosen
+/// to pad `dim` (up to paddedExtent(dim, b)) as little as possible.
 ///
-/// This is what makes the cache blocking follow the microkernel rather than
-/// being hardcoded: raising mr from 4 to 6 moves MC from 128 to 96 on M=768
-/// with no other input. It also subsumes a separate divisibility check —
-/// "there is no remainder at any loop level" is exactly "this search
-/// succeeded for all three dimensions".
+/// An extent that fits one block gets exactly one, padded by less than
+/// `multiple`. Otherwise the search stays within [cap/2, cap]: a divisor below
+/// that would avoid padding at the price of a small cache block (M = 148 has
+/// only MC = 4), and padding a few rows is cheaper. Ties go to the larger
+/// block. This is what makes the cache blocking follow the microkernel rather
+/// than being hardcoded: raising mr from 4 to 6 moves MC from 128 to 96 on
+/// M=768 with no other input.
 ///
-/// Linear scan downward: `dim` is a matmul extent (thousands at most) and this
-/// runs once per matmul at compile time, so there is no reason to be clever.
+/// Linear scan: `dim` is a matmul extent (thousands at most) and this runs
+/// once per matmul at compile time, so there is no reason to be clever.
 mlir::FailureOr<int64_t> chooseBlock(int64_t dim, int64_t cap,
                                      int64_t multiple) {
-  if (dim <= 0 || cap <= 0 || multiple <= 0)
+  if (dim <= 0 || cap < multiple || multiple <= 0)
     return mlir::failure();
 
-  for (int64_t b = std::min(cap, dim); b >= multiple; --b) {
-    if (b % multiple == 0 && dim % b == 0)
-      return b;
-  }
-  return mlir::failure();
+  const int64_t whole = paddedExtent(dim, multiple);
+  if (whole <= cap)
+    return whole;
+
+  const int64_t hi = cap / multiple * multiple;
+  const int64_t lo = std::max(multiple, cap / 2 / multiple * multiple);
+  int64_t best = hi;
+  for (int64_t b = hi; b >= lo; b -= multiple)
+    if (paddedExtent(dim, b) < paddedExtent(dim, best))
+      best = b;
+  return best;
 }
 
 /// True if an MR x NR f32 register tile fits in the vector register file:
