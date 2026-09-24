@@ -107,17 +107,8 @@ mlir::FailureOr<MatmulStrategy> chooseStrategy(mlir::linalg::MatmulOp op,
   if ((*bShape)[0] != k || (*cShape)[0] != m || (*cShape)[1] != n)
     return mlir::failure();
 
-  // An epilogue-fused matmul (matmul → bias_add → relu) stays on
-  // LinalgOuterTileAndFusePass, which fuses the whole producer chain onto one
-  // tile. Blocking it here would tile the matmul away from its consumers and
-  // lose that fusion; applying the epilogue to the MR x NR accumulator is
-  // Step 4 work.
   if (op->getNumResults() != 1)
     return mlir::failure();
-  for (mlir::Operation *user : op->getResult(0).getUsers()) {
-    if (llvm::isa<mlir::linalg::LinalgOp>(user))
-      return mlir::failure();
-  }
 
   if (!fitsRegisterBudget(ov.mr, ov.nr))
     return mlir::failure();

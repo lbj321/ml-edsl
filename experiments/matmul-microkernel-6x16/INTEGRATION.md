@@ -61,7 +61,7 @@ k-loop.
 | `LinalgMatmulParallelTilingPass` (64×64 forall, CPU) | **superseded** for guarded matmuls | delete once nothing falls back (see "Endgame") |
 | `LinalgMatmulKTilingPass` | **superseded** | same |
 | `LinalgMatmulTilingPass` 8×8×8 (CPU instance) | **superseded** | same. The struct stays: the GPU pipeline uses it (`createLinalgGPUMatmulTilingPass`, 32×32) |
-| `LinalgOuterTileAndFusePass` (CPU use) | bare-matmul branch **superseded**; relu-epilogue branch until Step 4 | the struct stays: the GPU pipeline uses it (`MLIRLowering.cpp:498/500`) |
+| `LinalgOuterTileAndFusePass` (CPU use) | **CPU call commented out** (see "Guard narrowed, CPU epilogue fusion disabled") | the struct stays: the GPU pipeline uses it |
 
 ### Marking: keep the superseded passes away from our tiles until they're deleted
 
@@ -366,7 +366,11 @@ in turbo, sustained AVX2 FMA load settles at the offset clock. Use at least
 25 timed calls and report the spread; several conclusions in this file were
 wrong the first time for exactly this reason.
 
-## Known breakage: 13 skipped tests
+## Known breakage: skipped tests
+
+Updated by "Guard narrowed, CPU epilogue fusion disabled" below: the epilogue
+crashers are gone and 9 tests are skipped, 5 fused-epilogue IR assertions
+plus the 4 stale ones below. What follows is the state before that.
 
 Ten **crashes**, all epilogue chains. `chooseStrategy` rejects matmuls with a
 linalg consumer, so they stay on the old path, which the global hoisting
@@ -648,10 +652,71 @@ stage and its markers, and the three packing decisions at 4x512x256 (jr
 only), 4x64x16 (no register loop) and 16^2 (whole B), with execution tests
 for the first two. **728 passed, 16 skipped.**
 
+## Guard narrowed, CPU epilogue fusion disabled (DONE)
+
+The goal is now for the blocked strategy to *replace* the old CPU matmul
+passes, not sit in front of them. First step:
+
+- **`chooseStrategy` no longer rejects matmuls with a linalg consumer.** Dense
+  layers and matmul chains are blocked. The rejection existed so
+  `LinalgOuterTileAndFusePass` could fuse matmul → bias → relu, and that path
+  was what the global `LoopInvariantSubsetHoisting` miscompiled.
+- **`LinalgOuterTileAndFusePass` is commented out of `buildCPUPipeline`.**
+  Bias and relu run as their own ops after the blocked matmul, tiled by
+  `LinalgGenericTilingPass` (serial strips of 8). Fusing the epilogue into the
+  blocked accumulator is still Step 4.
+- **Tests:** the 7 dense-layer execution tests that were skipped as crashers
+  pass. The 5 IR tests asserting the old fused 64x64 structure stay skipped
+  with a new reason. **736 passed, 9 skipped.**
+- **Snapshots:** bare matmuls at 128^3, 256^3 and 1024^3 are byte-identical,
+  apart from the removed pass and its canonicalize.
+- **Measured** (1024, all threads, 50 calls, two runs, median):
+
+  | | before | after |
+  |---|---|---|
+  | dense `relu(A@B + b)` | 9.7 / 10.3 ms | **5.3 / 5.2 ms** |
+  | bare matmul | 4.5 / 5.8 ms | 3.6 / 3.8 ms (same IR: noise) |
+
+  The unfused, serial epilogue costs about 1.5 ms over the bare matmul.
+
+**Known regression: untiled fill for rejected shapes.** The commented-out pass
+also fused the fill into 64x64 tiles for matmuls `chooseStrategy` rejects.
+Without it, their fill is vectorized whole: at 1000x1000 (no NC that is a
+multiple of 16 divides N) it becomes a `vector<1000x1000xf32>` and a 4 MB
+`memref.alloca`. The result is still correct at 1000; shapes past the 8 MB
+stack were not tried. The padding pass (below) moves every f32 shape onto the
+blocked path, which leaves only non-f32 matmuls exposed.
+
+**Padding experiment** (hand-padded MLIR through `mlir-edsl-opt -cpu-pipeline`
+and `harness/bench_matmul.c`, 1000^3, GFLOPS, two runs):
+
+| variant | all threads | 1 thread |
+|---|---|---|
+| today's fallback | 41 / 41 | 5.5 / 5.6 |
+| `tensor.pad` on N only | 172 / 172 | 71 / 71 |
+| N only, copies as parallel-map generics (x + 0.0) | 281 / 279 | 70 / 82 |
+| every dim to 1024, `tensor.pad` | 83 / 120 | 56 / 56 |
+| every dim to 1024, generics | 133 / 174 | 69 / 68 |
+| 1024^3 blocked, reference | 612 / 609 | 101 / 102 |
+
+- Padding is exact (zero K padding adds nothing; extra M/N rows and columns
+  are sliced off) and every variant was correct.
+- `tensor.pad` and the final `extract_slice` bufferize to strided
+  `memref.copy` → `memrefCopy`. That is not a correctness problem in the JIT:
+  `MLIRExecutor` loads `mlir_c_runner_utils`, which provides it (the "undefined
+  symbol in the JIT" comment in `packB` is stale — it only fails in a
+  standalone `.so`). It is slow, though.
+- Pad only the dimensions whose block search fails.
+- The copies are now the bottleneck: the generic copies are serial loops
+  while the matmul uses every core (46% of 1024^3 multithreaded against
+  70–80% single-threaded). The whole padded B was also zeroed where only the
+  pad strip needs it.
+
 ## Next
 
-1. **Targeted hoisting**, which un-skips the ten crashers. Now the largest
-   item: a dense layer with a relu is miscompiled today.
+1. **Padding pass** for f32 shapes the block search rejects: pad only the
+   failing dimensions, copy in and out with parallel vectorized loops, zero
+   only the pad region.
 2. **Rewrite the three stale IR assertions** against the blocked path
    (`test_bare_matmul_fused`, `test_bare_matmul_not_retiled`,
    `test_large_matmul_produces_extract_slices`,

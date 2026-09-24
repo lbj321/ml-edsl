@@ -8,16 +8,16 @@ structure instead.
 """
 
 import numpy as np
-from mlir_edsl import ml_function, Tensor, f32, matmul
+from mlir_edsl import ml_function, Tensor, f32, matmul, relu
 
 DISTRIBUTE = "linalg-matmul-blocked-distribute"
 TILE = "linalg-matmul-blocked-tile"
 PACK = "linalg-matmul-blocked-pack"
 KERNEL = "linalg-matmul-blocked-kernel"
 
-# 256 is accepted by chooseStrategy: f32, static, square, power of two, no
-# linalg consumer. Large enough for the forall, jr and ir to survive; pc has
-# one iteration (K == KC).
+# 256 is accepted by chooseStrategy: f32, static, and every block divides.
+# Large enough for the forall, jr and ir to survive; pc has one iteration
+# (K == KC).
 N = 256
 
 # 128 gives MC = NC = 128, so the forall has a single iteration and
@@ -218,23 +218,12 @@ class TestBlockedMatmulPackingDecisions:
         """, after=PACK)
 
 
-class TestBlockedMatmulFallback:
-    """Shapes chooseStrategy rejects must not be touched by the passes."""
+class TestBlockedMatmulConsumers:
+    """A matmul's consumers do not keep it off the blocked path."""
 
-    def test_rejected_shape_is_left_for_the_old_path(self, check_lowered_ir):
-        """No blocked marker and no 2-D forall for a non-divisible shape."""
-        _run(N_REJECTED)
-        check_lowered_ir("""
-        // CHECK-NOT: mlir_edsl.blocked
-        """, after=DISTRIBUTE)
-
-    def test_chained_producer_is_left_and_consumer_blocked(
-            self, check_lowered_ir):
-        """Blocking one matmul leaves the other candidates intact.
-
-        The inner matmul feeds a linalg op, so the guard rejects it; the outer
-        one is blocked after it, from the same up-front candidate list.
-        """
+    def test_both_matmuls_in_a_chain_are_blocked(self, check_lowered_ir):
+        """Blocking the inner matmul leaves the outer candidate intact, and
+        both are blocked from the same up-front candidate list."""
         @ml_function
         def chain_fn(A: Tensor[f32, N, N], B: Tensor[f32, N, N],
                      C: Tensor[f32, N, N]) -> Tensor[f32, N, N]:
@@ -243,7 +232,39 @@ class TestBlockedMatmulFallback:
         ones = np.ones((N, N), dtype=np.float32)
         chain_fn(ones, ones, ones)
         check_lowered_ir("""
-        // CHECK: linalg.matmul ins({{.*}} : tensor<256x256xf32>, tensor<256x256xf32>)
-        // CHECK: scf.forall
-        // CHECK: linalg.matmul {mlir_edsl.blocked =
+        // CHECK-NOT: linalg.matmul ins(
+        // CHECK-COUNT-2: linalg.matmul {mlir_edsl.blocked =
+        // CHECK-NOT: linalg.matmul ins(
+        """, after=DISTRIBUTE)
+
+    def test_dense_layer_matmul_is_blocked_and_epilogue_unfused(
+            self, check_lowered_ir):
+        """relu(matmul + b) blocks the matmul down to the register kernel;
+        bias and relu run after it as their own ops."""
+        @ml_function
+        def dense(A: Tensor[f32, N_SINGLE_TILE, N_SINGLE_TILE],
+                  B: Tensor[f32, N_SINGLE_TILE, N_SINGLE_TILE],
+                  b: Tensor[f32, N_SINGLE_TILE]
+                  ) -> Tensor[f32, N_SINGLE_TILE, N_SINGLE_TILE]:
+            return relu(matmul(A, B) + b)
+
+        n = N_SINGLE_TILE
+        dense(np.ones((n, n), dtype=np.float32),
+              np.ones((n, n), dtype=np.float32),
+              np.ones(n, dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: linalg.matmul {mlir_edsl.blocked = {{{.*}}stage = "kernel"
+        // CHECK: library_call = "bias_add"
+        // CHECK: library_call = "relu"
+        """, after=KERNEL)
+
+
+class TestBlockedMatmulFallback:
+    """Shapes chooseStrategy rejects must not be touched by the passes."""
+
+    def test_rejected_shape_is_left_for_the_old_path(self, check_lowered_ir):
+        """No blocked marker and no 2-D forall for a non-divisible shape."""
+        _run(N_REJECTED)
+        check_lowered_ir("""
+        // CHECK-NOT: mlir_edsl.blocked
         """, after=DISTRIBUTE)

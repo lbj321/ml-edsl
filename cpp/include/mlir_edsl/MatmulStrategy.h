@@ -89,10 +89,10 @@ struct StrategyOverrides {
 /// handling, so every loop level must divide evenly.
 ///
 /// Rejects, in order: non-f32 element types; non-tensor or dynamically shaped
-/// operands; ops already marked kBlockedAttrName; ops whose result feeds
-/// another linalg op (epilogue-fused matmuls belong to
-/// LinalgOuterTileAndFusePass); register tiles that overflow the 16 available
-/// ymm registers; and shapes for which no valid cache block exists.
+/// operands; ops already marked kBlockedAttrName; register tiles that overflow
+/// the 16 available ymm registers; and shapes for which no valid cache block
+/// exists. A matmul's consumers do not matter: an epilogue (bias, relu) runs as
+/// its own linalg op after the blocked matmul, unfused.
 mlir::FailureOr<MatmulStrategy> chooseStrategy(mlir::linalg::MatmulOp op,
                                                const StrategyOverrides &ov);
 

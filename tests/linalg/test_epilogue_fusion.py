@@ -1,16 +1,11 @@
-"""Tests for CPU epilogue fusion.
+"""Tests for matmul -> bias_add -> relu chains on CPU.
 
-LinalgOuterTileAndFusePass tiles a matmul -> bias_add -> relu chain (found
-via the "relu" library_call attribute set by LinalgBuilder) into a single
-64x64 scf.forall, fusing bias_add/matmul/fill in as producers so the whole
-epilogue runs on one tile without round-tripping through DRAM.
-
-For matmuls with no relu epilogue, that pass instead uses the bare
-linalg.matmul itself as the fusion root, pulling in just its linalg.fill
-producer into the same 64x64 scf.forall. createLinalgMatmulParallelTilingPass
-(the "fallback" pass) then skips it entirely — see the guard in
-LinalgMatmulTilingPass that skips matmuls already nested in an scf.forall,
-so the two passes never double-tile the same op.
+Epilogue fusion is disabled on CPU for now: LinalgOuterTileAndFusePass is
+commented out of buildCPUPipeline, so the matmul goes through the blocked
+matmul passes and bias_add/relu run as their own ops afterwards. The
+execution tests check that chains still compute the right values. The IR
+tests describe the old fused 64x64 structure and stay skipped until
+INTEGRATION.md Step 4 fuses the epilogue into the blocked accumulator.
 """
 
 import numpy as np
@@ -23,18 +18,6 @@ from mlir_edsl import ml_function, Tensor, f32, matmul, relu
 class TestEpilogueFusionExecution:
     """Correctness of matmul -> bias_add -> relu chains, tile-aligned and not."""
 
-    @pytest.mark.skip(
-        reason=(
-            "the blocked matmul passes are wired into buildCPUPipeline, and "
-            "the LoopInvariantSubsetHoisting it needs is applied to every "
-            "loop in the function. chooseStrategy rejects matmuls with a "
-            "linalg consumer, so epilogue chains stay on the old path — "
-            "which that hoisting miscompiles into an abort. Un-skip once "
-            "hoisting is restricted to the blocked k-loops, or once "
-            "INTEGRATION.md Step 4 applies the epilogue to the MR x NR "
-            "accumulator and retires this path. "
-        )
-    )
     def test_matmul_bias_relu_tile_aligned(self, backend):
         """128x128 is an exact multiple of the 64x64 outer tile."""
         @ml_function
@@ -67,18 +50,6 @@ class TestEpilogueFusionExecution:
         expected = np.maximum(A @ B + bias, 0)
         np.testing.assert_allclose(result, expected, rtol=1e-3, atol=1e-3)
 
-    @pytest.mark.skip(
-        reason=(
-            "the blocked matmul passes are wired into buildCPUPipeline, and "
-            "the LoopInvariantSubsetHoisting it needs is applied to every "
-            "loop in the function. chooseStrategy rejects matmuls with a "
-            "linalg consumer, so epilogue chains stay on the old path — "
-            "which that hoisting miscompiles into an abort. Un-skip once "
-            "hoisting is restricted to the blocked k-loops, or once "
-            "INTEGRATION.md Step 4 applies the epilogue to the MR x NR "
-            "accumulator and retires this path. "
-        )
-    )
     def test_matmul_bias_relu_smaller_than_tile(self, backend):
         """32x32 is smaller than the 64x64 outer tile: a single partial tile."""
         @ml_function
@@ -95,18 +66,6 @@ class TestEpilogueFusionExecution:
         expected = np.maximum(A @ B + bias, 0)
         np.testing.assert_allclose(result, expected, rtol=1e-3, atol=1e-3)
 
-    @pytest.mark.skip(
-        reason=(
-            "the blocked matmul passes are wired into buildCPUPipeline, and "
-            "the LoopInvariantSubsetHoisting it needs is applied to every "
-            "loop in the function. chooseStrategy rejects matmuls with a "
-            "linalg consumer, so epilogue chains stay on the old path — "
-            "which that hoisting miscompiles into an abort. Un-skip once "
-            "hoisting is restricted to the blocked k-loops, or once "
-            "INTEGRATION.md Step 4 applies the epilogue to the MR x NR "
-            "accumulator and retires this path. "
-        )
-    )
     def test_relu_actually_clamps_negatives(self, backend):
         """Sanity check that relu is applied, not just bias_add: an
         all-negative pre-activation must come out as all zeros."""
@@ -124,9 +83,7 @@ class TestEpilogueFusionExecution:
 
 
 class TestFallbackMatmulTilingExecution:
-    """Correctness of matmuls with no relu epilogue: LinalgOuterTileAndFusePass
-    fuses these using the bare matmul itself as the fusion root, so the
-    fallback outer-tiling pass never touches them."""
+    """Correctness of matmuls with no relu epilogue."""
 
     def test_bare_matmul_no_epilogue(self, backend):
         """128x128 matmul alone (no bias/relu) still tiles and executes correctly."""
@@ -141,23 +98,9 @@ class TestFallbackMatmulTilingExecution:
         result = mm_fn(A, B)
         np.testing.assert_allclose(result, A @ B, rtol=1e-3, atol=1e-3)
 
-    @pytest.mark.skip(
-        reason=(
-            "the blocked matmul passes are wired into buildCPUPipeline, and "
-            "the LoopInvariantSubsetHoisting it needs is applied to every "
-            "loop in the function. chooseStrategy rejects matmuls with a "
-            "linalg consumer, so epilogue chains stay on the old path — "
-            "which that hoisting miscompiles into an abort. Un-skip once "
-            "hoisting is restricted to the blocked k-loops, or once "
-            "INTEGRATION.md Step 4 applies the epilogue to the MR x NR "
-            "accumulator and retires this path. "
-        )
-    )
     def test_matmul_bias_without_relu(self, backend):
-        """bias_add with no relu: the fusion pass finds no "relu" consumer,
-        so it falls back to using the bare matmul as its fusion root
-        (fusing in just fill) while bias_add is tiled separately further
-        down the pipeline."""
+        """bias_add with no relu: the matmul is blocked and bias_add is
+        tiled separately further down the pipeline."""
         @ml_function
         def biased(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128],
                    b: Tensor[f32, 128]) -> Tensor[f32, 128, 128]:
@@ -181,14 +124,10 @@ class TestEpilogueFusionIR:
 
     @pytest.mark.skip(
         reason=(
-            "the blocked matmul passes are wired into buildCPUPipeline, and "
-            "the LoopInvariantSubsetHoisting it needs is applied to every "
-            "loop in the function. chooseStrategy rejects matmuls with a "
-            "linalg consumer, so epilogue chains stay on the old path — "
-            "which that hoisting miscompiles into an abort. Un-skip once "
-            "hoisting is restricted to the blocked k-loops, or once "
-            "INTEGRATION.md Step 4 applies the epilogue to the MR x NR "
-            "accumulator and retires this path. "
+            "epilogue fusion is disabled on CPU: LinalgOuterTileAndFusePass "
+            "is commented out of buildCPUPipeline, and dense layers go "
+            "through the blocked matmul passes with the epilogue unfused. "
+            "Revisit with INTEGRATION.md Step 4. "
         )
     )
     def test_relu_epilogue_fused_into_one_forall(self, check_lowered_ir):
@@ -211,14 +150,10 @@ class TestEpilogueFusionIR:
 
     @pytest.mark.skip(
         reason=(
-            "the blocked matmul passes are wired into buildCPUPipeline, and "
-            "the LoopInvariantSubsetHoisting it needs is applied to every "
-            "loop in the function. chooseStrategy rejects matmuls with a "
-            "linalg consumer, so epilogue chains stay on the old path — "
-            "which that hoisting miscompiles into an abort. Un-skip once "
-            "hoisting is restricted to the blocked k-loops, or once "
-            "INTEGRATION.md Step 4 applies the epilogue to the MR x NR "
-            "accumulator and retires this path. "
+            "epilogue fusion is disabled on CPU: LinalgOuterTileAndFusePass "
+            "is commented out of buildCPUPipeline, and dense layers go "
+            "through the blocked matmul passes with the epilogue unfused. "
+            "Revisit with INTEGRATION.md Step 4. "
         )
     )
     def test_outer_tile_size_is_64(self, check_lowered_ir):
@@ -236,14 +171,10 @@ class TestEpilogueFusionIR:
 
     @pytest.mark.skip(
         reason=(
-            "the blocked matmul passes are wired into buildCPUPipeline, and "
-            "the LoopInvariantSubsetHoisting it needs is applied to every "
-            "loop in the function. chooseStrategy rejects matmuls with a "
-            "linalg consumer, so epilogue chains stay on the old path — "
-            "which that hoisting miscompiles into an abort. Un-skip once "
-            "hoisting is restricted to the blocked k-loops, or once "
-            "INTEGRATION.md Step 4 applies the epilogue to the MR x NR "
-            "accumulator and retires this path. "
+            "epilogue fusion is disabled on CPU: LinalgOuterTileAndFusePass "
+            "is commented out of buildCPUPipeline, and dense layers go "
+            "through the blocked matmul passes with the epilogue unfused. "
+            "Revisit with INTEGRATION.md Step 4. "
         )
     )
     def test_fused_matmul_keeps_full_k(self, check_lowered_ir):
@@ -299,14 +230,10 @@ class TestFallbackMatmulTilingIR:
 
     @pytest.mark.skip(
         reason=(
-            "the blocked matmul passes are wired into buildCPUPipeline, and "
-            "the LoopInvariantSubsetHoisting it needs is applied to every "
-            "loop in the function. chooseStrategy rejects matmuls with a "
-            "linalg consumer, so epilogue chains stay on the old path — "
-            "which that hoisting miscompiles into an abort. Un-skip once "
-            "hoisting is restricted to the blocked k-loops, or once "
-            "INTEGRATION.md Step 4 applies the epilogue to the MR x NR "
-            "accumulator and retires this path. "
+            "epilogue fusion is disabled on CPU: LinalgOuterTileAndFusePass "
+            "is commented out of buildCPUPipeline, and dense layers go "
+            "through the blocked matmul passes with the epilogue unfused. "
+            "Revisit with INTEGRATION.md Step 4. "
         )
     )
     def test_fused_matmul_not_retiled(self, check_lowered_ir):

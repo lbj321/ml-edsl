@@ -1,17 +1,13 @@
 """CPU multicore matmul and dense layer correctness tests.
 
-LinalgOuterTileAndFusePass tiles the fused bias+relu linalg.generic [64x64] with
-scf.forall and fuses fill+matmul producers upward (epilogue fusion, pre-bufferization).
-LinalgMatmulTilingPass then adds 8x8 inner serial tiles for vectorization.
-scf.forall is converted to omp.parallel via forall-to-parallel + convert-scf-to-openmp.
-
-Sizes < 64: no outer tiling fires (matrix smaller than one tile).
-Sizes >= 64: at least one outer forall iteration; true parallelism.
-Non-multiples of 64: boundary tiles handled by fallback scf.for.
+Matmuls chooseStrategy accepts go through the blocked matmul passes (an
+ic x jc scf.forall over a BLIS loop nest); the rest take the 64x64 forall +
+8x8 fallback tiling. scf.forall is converted to omp.parallel via
+forall-to-parallel + convert-scf-to-openmp. Dense-layer epilogues (bias,
+relu) run unfused after the matmul while CPU epilogue fusion is disabled.
 """
 
 import numpy as np
-import pytest
 
 from mlir_edsl import ml_function, Tensor, f32, relu
 
@@ -71,27 +67,11 @@ class TestMulticoreMatmul:
 
 
 class TestMulticoreDenseLayer:
-    """Correctness tests for matmul+bias+relu using the tile-and-fuse epilogue fusion pipeline.
+    """Correctness tests for matmul+bias+relu: a blocked matmul followed by an
+    unfused epilogue."""
 
-    LinalgOuterTileAndFusePass tiles the fused bias+relu linalg.generic [64x64]
-    and fuses fill+matmul producers upward into scf.forall loops before bufferization.
-    These tests verify the fusion produces correct values at the sizes that trigger it.
-    """
-
-    @pytest.mark.skip(
-        reason=(
-            "the blocked matmul passes are wired into buildCPUPipeline, and "
-            "the LoopInvariantSubsetHoisting it needs is applied to every "
-            "loop in the function. chooseStrategy rejects matmuls with a "
-            "linalg consumer, so epilogue chains stay on the old path — "
-            "which that hoisting miscompiles into an abort. Un-skip once "
-            "hoisting is restricted to the blocked k-loops, or once "
-            "INTEGRATION.md Step 4 applies the epilogue to the MR x NR "
-            "accumulator and retires this path. "
-        )
-    )
     def test_dense_relu_64x64(self, backend):
-        """Minimum tile size — exactly one 64x64 outer tile, full fusion fires."""
+        """64x64 dense layer with relu."""
         @ml_function
         def dense(X: Tensor[f32, 64, 64], W: Tensor[f32, 64, 64], b: Tensor[f32, 64]) -> Tensor[f32, 64, 64]:
             return relu(X @ W + b)
@@ -101,20 +81,8 @@ class TestMulticoreDenseLayer:
         b = np.random.rand(64).astype(np.float32)
         np.testing.assert_allclose(dense(X, W, b), np.maximum(X @ W + b, 0.0), rtol=1e-3, atol=1e-3)
 
-    @pytest.mark.skip(
-        reason=(
-            "the blocked matmul passes are wired into buildCPUPipeline, and "
-            "the LoopInvariantSubsetHoisting it needs is applied to every "
-            "loop in the function. chooseStrategy rejects matmuls with a "
-            "linalg consumer, so epilogue chains stay on the old path — "
-            "which that hoisting miscompiles into an abort. Un-skip once "
-            "hoisting is restricted to the blocked k-loops, or once "
-            "INTEGRATION.md Step 4 applies the epilogue to the MR x NR "
-            "accumulator and retires this path. "
-        )
-    )
     def test_dense_relu_128x128(self, backend):
-        """2x2 outer tile grid — multiple fused tiles in parallel."""
+        """128x128 dense layer with relu."""
         @ml_function
         def dense(X: Tensor[f32, 128, 128], W: Tensor[f32, 128, 128], b: Tensor[f32, 128]) -> Tensor[f32, 128, 128]:
             return relu(X @ W + b)
@@ -125,7 +93,7 @@ class TestMulticoreDenseLayer:
         np.testing.assert_allclose(dense(X, W, b), np.maximum(X @ W + b, 0.0), rtol=1e-3, atol=1e-3)
 
     def test_dense_relu_non_multiple(self, backend):
-        """Non-multiple of 64 — boundary tiles exercise the fallback path alongside fused tiles."""
+        """96x96 dense layer with relu (MC = NC = 96)."""
         @ml_function
         def dense(X: Tensor[f32, 96, 96], W: Tensor[f32, 96, 96], b: Tensor[f32, 96]) -> Tensor[f32, 96, 96]:
             return relu(X @ W + b)
@@ -135,20 +103,8 @@ class TestMulticoreDenseLayer:
         b = np.random.rand(96).astype(np.float32)
         np.testing.assert_allclose(dense(X, W, b), np.maximum(X @ W + b, 0.0), rtol=1e-3, atol=1e-3)
 
-    @pytest.mark.skip(
-        reason=(
-            "the blocked matmul passes are wired into buildCPUPipeline, and "
-            "the LoopInvariantSubsetHoisting it needs is applied to every "
-            "loop in the function. chooseStrategy rejects matmuls with a "
-            "linalg consumer, so epilogue chains stay on the old path — "
-            "which that hoisting miscompiles into an abort. Un-skip once "
-            "hoisting is restricted to the blocked k-loops, or once "
-            "INTEGRATION.md Step 4 applies the epilogue to the MR x NR "
-            "accumulator and retires this path. "
-        )
-    )
     def test_dense_no_relu_64x64(self, backend):
-        """Bias-only (no relu) at tile size — verifies fusion doesn't corrupt the non-relu path."""
+        """Bias-only (no relu) 64x64 dense layer."""
         @ml_function
         def dense(X: Tensor[f32, 64, 64], W: Tensor[f32, 64, 64], b: Tensor[f32, 64]) -> Tensor[f32, 64, 64]:
             return X @ W + b

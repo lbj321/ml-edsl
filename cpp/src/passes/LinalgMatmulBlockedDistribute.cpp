@@ -47,7 +47,7 @@ static mlir::LogicalResult distribute(mlir::IRRewriter &rewriter,
                                       bool &committed) {
   committed = false;
   // Captured before tiling rewrites the operand. Handling it is not
-  // optional: LinalgOuterTileAndFusePass skips blocked matmuls, so an untiled
+  // optional: no other pass tiles a blocked matmul's fill, so an untiled
   // fill would reach LinalgVectorizationPass as one MxN vector, which
   // convert-vector-to-scf makes a 4 MB stack temporary at 1024^2. Fusing it
   // into the forall was measured and rejected (-9% at 1024^3, 1 thread).

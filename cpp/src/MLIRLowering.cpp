@@ -257,18 +257,12 @@ bool MLIRLowering::runPipeline(mlir::PassManager &pm, mlir::ModuleOp module) {
 void MLIRLowering::addCPUPasses(mlir::PassManager &pm) { buildCPUPipeline(pm); }
 
 void buildCPUPipeline(mlir::OpPassManager &pm) {
-  // Outer 64×64 tile-and-fuse epilogue fusion, run on tensor semantics
-  // (pre-bufferize). LinalgOuterTileAndFusePass tiles the relu generic (when
-  // present) via the TilingInterface and fuses bias_add/matmul/fill into the
-  // resulting scf.forall via tileConsumerAndFuseProducersUsingSCF — fusion
-  // legality is straightforward on tensor SSA values but hard to prove once
-  // operands are aliasing memrefs, hence doing this before bufferization.
   // BLIS-style cache and register blocking, first so it claims every matmul
   // chooseStrategy accepts before the older tiling passes see it. The tiles it
   // leaves carry mlir_edsl.blocked, which keeps those passes off them.
-  // Anything the guard rejects — non-f32, dynamic or non-divisible shapes, or
-  // a matmul feeding another linalg op — is untouched here and lowers exactly
-  // as before. The four stages hand tiles over through that attribute (and
+  // Anything the guard rejects — non-f32, dynamic or non-divisible shapes —
+  // is untouched here and lowers exactly as before. The four stages hand
+  // tiles over through that attribute (and
   // the register loops through kBlockedHoistAttrName), so canonicalize
   // between them is safe.
   pm.addNestedPass<mlir::func::FuncOp>(
@@ -281,27 +275,25 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedKernelPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgOuterTileAndFusePass());
-  pm.addPass(mlir::createCanonicalizerPass());
+  // Epilogue fusion is disabled on CPU until INTEGRATION.md Step 4 fuses the
+  // epilogue into the blocked accumulator; bias/relu run as their own ops.
+  // pm.addNestedPass<mlir::func::FuncOp>(createLinalgOuterTileAndFusePass());
+  // pm.addPass(mlir::createCanonicalizerPass());
 
-  // Outer 64×64 parallel tiling for any matmul not already covered by the
-  // fusion above (e.g. a bare matmul with no relu epilogue). Matmuls already
-  // nested inside the scf.forall the fusion pass produced are skipped — see
-  // the guard in LinalgMatmulTilingPass — so this never double-tiles a
-  // fused matmul.
+  // Outer 64×64 parallel tiling for every matmul the blocked passes rejected.
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulParallelTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
   // Cache-block K into serial 256-wide chunks for matmuls whose K is large
-  // (a no-op below that threshold). Targets both the epilogue-fusion path and
-  // the fallback above, since both leave the matmul's K full-length inside
-  // the outer forall. See LinalgMatmulKTilingPass for why this matters — CPU
-  // cache sizes, not correctness.
+  // (a no-op below that threshold). Targets the fallback above, which leaves
+  // the matmul's K full-length inside the outer forall. See
+  // LinalgMatmulKTilingPass for why this matters — CPU cache sizes, not
+  // correctness.
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulKTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Inner 8x8 serial tiling, also run on tensor semantics (pre-bufferize) for
-  // the same reason as the outer tiling above. Nesting inside the outer
+  // Inner 8x8 serial tiling, also run on tensor semantics (pre-bufferize).
+  // Nesting inside the outer
   // forall's boundary tile (e.g. the 32-wide remainder on a 96x96 matmul)
   // requires ValueBoundsOpInterface support for affine ops — see the
   // affine::registerValueBoundsOpInterfaceExternalModels registration in

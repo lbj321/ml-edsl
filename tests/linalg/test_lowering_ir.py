@@ -123,14 +123,10 @@ class TestLinalgMatmulLargeIR:
 
     @pytest.mark.skip(
         reason=(
-            "the blocked matmul passes are wired into buildCPUPipeline, and "
-            "the LoopInvariantSubsetHoisting it needs is applied to every "
-            "loop in the function. chooseStrategy rejects matmuls with a "
-            "linalg consumer, so epilogue chains stay on the old path — "
-            "which that hoisting miscompiles into an abort. Un-skip once "
-            "hoisting is restricted to the blocked k-loops, or once "
-            "INTEGRATION.md Step 4 applies the epilogue to the MR x NR "
-            "accumulator and retires this path. "
+            "epilogue fusion is disabled on CPU: LinalgOuterTileAndFusePass "
+            "is commented out of buildCPUPipeline, and dense layers go "
+            "through the blocked matmul passes with the epilogue unfused. "
+            "Revisit with INTEGRATION.md Step 4. "
         )
     )
     def test_dense_layer_large_k_cache_blocked(self, check_lowered_ir):
