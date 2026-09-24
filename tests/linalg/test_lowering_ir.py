@@ -123,10 +123,11 @@ class TestLinalgMatmulLargeIR:
 
     @pytest.mark.skip(
         reason=(
-            "epilogue fusion is disabled on CPU: LinalgOuterTileAndFusePass "
-            "is commented out of buildCPUPipeline, and dense layers go "
-            "through the blocked matmul passes with the epilogue unfused. "
-            "Revisit with INTEGRATION.md Step 4. "
+            "asserts the old CPU path's fused 64x64 epilogue, which was "
+            "removed: LinalgOuterTileAndFusePass and the old matmul tiling "
+            "passes are GPU-only now, and dense layers go through the blocked "
+            "matmul passes with the epilogue unfused. Revisit with "
+            "INTEGRATION.md Step 4. "
         )
     )
     def test_dense_layer_large_k_cache_blocked(self, check_lowered_ir):
@@ -149,124 +150,6 @@ class TestLinalgMatmulLargeIR:
         // CHECK-SAME: tensor<64x256xf32>
         // CHECK-SAME: tensor<256x64xf32>
         """, after="linalg-tile-matmul-k")
-
-
-class TestLinalgMatmulTilingPass:
-    """IR tests for LinalgMatmulTilingPass (linalg-tile-matmul).
-
-    Matrices with all dims > 8 are tiled into scf.for loops over 8x8 tiles.
-    Matrices with any dim <= 8 are left untouched for direct vectorization.
-    """
-
-    @pytest.mark.skip(
-        reason=(
-            "f32 matmuls no longer reach the old path: the distribute pass "
-            "pads every static f32 shape onto the blocked matmul passes, "
-            "which need padded buffers and tile differently. Remove with the "
-            "old passes. "
-        )
-    )
-    def test_large_matmul_tiled_to_scf_for(self, check_lowered_ir):
-        """16x16 matmul is replaced by three nested scf.for loops (M, N, K tiled to 8)."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((16, 16), dtype=np.float32),
-              np.ones((16, 16), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.for
-        // CHECK: scf.for
-        // CHECK: linalg.matmul
-        """, after="linalg-tile-matmul")
-
-    @pytest.mark.skip(
-        reason=(
-            "f32 matmuls no longer reach the old path: the distribute pass "
-            "pads every static f32 shape onto the blocked matmul passes, "
-            "which need padded buffers and tile differently. Remove with the "
-            "old passes. "
-        )
-    )
-    def test_large_matmul_tile_step_is_8(self, check_lowered_ir):
-        """Tiling uses step size 8 for both M and N dimensions."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((16, 16), dtype=np.float32),
-              np.ones((16, 16), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: arith.constant 8 : index
-        // CHECK: scf.for
-        """, after="linalg-tile-matmul")
-
-    @pytest.mark.skip(
-        reason=(
-            "Asserts the pre-blocked-path tiling structure. Bare matmuls "
-            "now go through the blocked matmul passes (4x16 register tile, "
-            "serial loop nest), so there is no 64x64 scf.forall, no 8x8 "
-            "extract_slice and no omp.parallel to find. Needs rewriting "
-            "against the blocked path rather than un-skipping. "
-        )
-    )
-    def test_large_matmul_produces_extract_slices(self, check_lowered_ir):
-        """Tiled matmul slices all three operands into 8x8 tensor slices (M, N, K all
-        tiled). Runs pre-bufferize (tensor semantics), so slices are
-        tensor.extract_slice, not memref.subview."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((16, 16), dtype=np.float32),
-              np.ones((16, 16), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: tensor.extract_slice {{.*}} [8, 8] [1, 1]
-        // CHECK: tensor.extract_slice {{.*}} [8, 8] [1, 1]
-        // CHECK: tensor.extract_slice {{.*}} [8, 8] [1, 1]
-        """, after="linalg-tile-matmul")
-
-    @pytest.mark.skip(
-        reason=(
-            "f32 matmuls no longer reach the old path: the distribute pass "
-            "pads every static f32 shape onto the blocked matmul passes, "
-            "which need padded buffers and tile differently. Remove with the "
-            "old passes. "
-        )
-    )
-    def test_boundary_8x8_matmul_tiled(self, check_lowered_ir):
-        """8x8 matmul is tiled into a single 8x8 tile (one-iteration scf.for loops)."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((8, 8), dtype=np.float32),
-              np.ones((8, 8), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.for
-        // CHECK: linalg.matmul
-        """, after="linalg-tile-matmul")
-
-    @pytest.mark.skip(
-        reason=(
-            "f32 matmuls no longer reach the old path: the distribute pass "
-            "pads every static f32 shape onto the blocked matmul passes, "
-            "which need padded buffers and tile differently. Remove with the "
-            "old passes. "
-        )
-    )
-    def test_small_matmul_tiled(self, check_lowered_ir):
-        """2x2 matmul is tiled — produces scf.for loops with a partial tile."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
-            return matmul(A, B)
-
-        mm_fn(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
-              np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.for
-        // CHECK: linalg.matmul
-        """, after="linalg-tile-matmul")
 
 
 class TestVectorCleanupPass:
@@ -384,22 +267,6 @@ class TestLinalgMatmulToContractPass:
         // CHECK-NOT: linalg.matmul
         """, after="linalg-matmul-to-contract")
 
-    def test_int_matmul_lowered_with_correct_element_type(self, check_lowered_ir):
-        """An integer matmul must not be padded/read as f32 — the pass reads
-        each operand's actual element type instead of assuming float."""
-        @ml_function
-        def mm_fn(A: Tensor[i32, 2, 2], B: Tensor[i32, 2, 2]) -> Tensor[i32, 2, 2]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((2, 2), dtype=np.int32),
-              np.ones((2, 2), dtype=np.int32))
-        check_lowered_ir("""
-        // CHECK: vector.contract
-        // CHECK-SAME: vector<2x2xi32>
-        // CHECK-NOT: linalg.matmul
-        """, after="linalg-matmul-to-contract")
-
-
 class TestVectorContractToOuterProductPass:
     """IR tests for VectorContractToOuterProductPass (vector-contract-to-outerproduct).
 
@@ -449,26 +316,17 @@ class TestAllocaScopeCleanupPass:
     (e.g. 1024x1024) with 'expects region #0 to have 0 or 1 blocks'.
     """
 
-    @pytest.mark.skip(
-        reason=(
-            "Asserts the pre-blocked-path tiling structure. Bare matmuls "
-            "now go through the blocked matmul passes (4x16 register tile, "
-            "serial loop nest), so there is no 64x64 scf.forall, no 8x8 "
-            "extract_slice and no omp.parallel to find. Needs rewriting "
-            "against the blocked path rather than un-skipping. "
-        )
-    )
     def test_omp_loop_body_has_no_alloca_scope(self, check_lowered_ir):
-        """128x128 matmul fires the outer parallel tile as a real multi-iteration
-        omp.parallel (a 2x2 tile grid — a single-iteration 64x64 tile gets
-        canonicalized away before this checkpoint). Its loop body must not
-        retain the vacuous memref.alloca_scope ConvertSCFToOpenMPPass wraps it in."""
+        """256x256 matmul: the blocked ic x jc forall has two iterations (MC =
+        128), so it survives canonicalize as a real omp.parallel. Its loop body
+        must not retain the vacuous memref.alloca_scope ConvertSCFToOpenMPPass
+        wraps it in."""
         @ml_function
-        def mm_fn(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128]) -> Tensor[f32, 128, 128]:
+        def mm_fn(A: Tensor[f32, 256, 256], B: Tensor[f32, 256, 256]) -> Tensor[f32, 256, 256]:
             return matmul(A, B)
 
-        mm_fn(np.ones((128, 128), dtype=np.float32),
-              np.ones((128, 128), dtype=np.float32))
+        mm_fn(np.ones((256, 256), dtype=np.float32),
+              np.ones((256, 256), dtype=np.float32))
         check_lowered_ir("""
         // CHECK: omp.parallel
         // CHECK-NOT: memref.alloca_scope

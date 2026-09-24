@@ -198,6 +198,20 @@ class TestMatmulExecution:
 
         np.testing.assert_array_equal(result, [[5, 6], [7, 8]])
 
+    @pytest.mark.parametrize("m, k, n", [(100, 100, 100), (256, 256, 256)])
+    def test_matmul_integer_scalar_loops(self, backend, m, k, n):
+        """i32 matmuls are not blocked; they lower to scalar loops."""
+        @ml_function
+        def matmul_int(A: Tensor[i32, m, k], B: Tensor[i32, k, n]) -> Tensor[i32, m, n]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.integers(-8, 8, (m, k), dtype=np.int32)
+        B = rng.integers(-8, 8, (k, n), dtype=np.int32)
+        result = matmul_int(A, B)
+
+        np.testing.assert_array_equal(result, A @ B)
+
 
 # ==================== CHAINED MATMUL ====================
 

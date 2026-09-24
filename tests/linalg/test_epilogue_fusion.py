@@ -1,8 +1,7 @@
 """Tests for matmul -> bias_add -> relu chains on CPU.
 
-Epilogue fusion is disabled on CPU for now: LinalgOuterTileAndFusePass is
-commented out of buildCPUPipeline, so the matmul goes through the blocked
-matmul passes and bias_add/relu run as their own ops afterwards. The
+Epilogue fusion is disabled on CPU for now: the matmul goes through the
+blocked matmul passes and bias_add/relu run as their own ops afterwards. The
 execution tests check that chains still compute the right values. The IR
 tests describe the old fused 64x64 structure and stay skipped until
 INTEGRATION.md Step 4 fuses the epilogue into the blocked accumulator.
@@ -124,10 +123,11 @@ class TestEpilogueFusionIR:
 
     @pytest.mark.skip(
         reason=(
-            "epilogue fusion is disabled on CPU: LinalgOuterTileAndFusePass "
-            "is commented out of buildCPUPipeline, and dense layers go "
-            "through the blocked matmul passes with the epilogue unfused. "
-            "Revisit with INTEGRATION.md Step 4. "
+            "asserts the old CPU path's fused 64x64 epilogue, which was "
+            "removed: LinalgOuterTileAndFusePass and the old matmul tiling "
+            "passes are GPU-only now, and dense layers go through the blocked "
+            "matmul passes with the epilogue unfused. Revisit with "
+            "INTEGRATION.md Step 4. "
         )
     )
     def test_relu_epilogue_fused_into_one_forall(self, check_lowered_ir):
@@ -150,10 +150,11 @@ class TestEpilogueFusionIR:
 
     @pytest.mark.skip(
         reason=(
-            "epilogue fusion is disabled on CPU: LinalgOuterTileAndFusePass "
-            "is commented out of buildCPUPipeline, and dense layers go "
-            "through the blocked matmul passes with the epilogue unfused. "
-            "Revisit with INTEGRATION.md Step 4. "
+            "asserts the old CPU path's fused 64x64 epilogue, which was "
+            "removed: LinalgOuterTileAndFusePass and the old matmul tiling "
+            "passes are GPU-only now, and dense layers go through the blocked "
+            "matmul passes with the epilogue unfused. Revisit with "
+            "INTEGRATION.md Step 4. "
         )
     )
     def test_outer_tile_size_is_64(self, check_lowered_ir):
@@ -171,10 +172,11 @@ class TestEpilogueFusionIR:
 
     @pytest.mark.skip(
         reason=(
-            "epilogue fusion is disabled on CPU: LinalgOuterTileAndFusePass "
-            "is commented out of buildCPUPipeline, and dense layers go "
-            "through the blocked matmul passes with the epilogue unfused. "
-            "Revisit with INTEGRATION.md Step 4. "
+            "asserts the old CPU path's fused 64x64 epilogue, which was "
+            "removed: LinalgOuterTileAndFusePass and the old matmul tiling "
+            "passes are GPU-only now, and dense layers go through the blocked "
+            "matmul passes with the epilogue unfused. Revisit with "
+            "INTEGRATION.md Step 4. "
         )
     )
     def test_fused_matmul_keeps_full_k(self, check_lowered_ir):
@@ -197,43 +199,17 @@ class TestEpilogueFusionIR:
         // CHECK-SAME: tensor<128x64xf32>
         """, after="canonicalize")
 
-    @pytest.mark.skip(
-        reason=(
-            "Asserts the pre-blocked-path tiling structure. Bare matmuls "
-            "now go through the blocked matmul passes (4x16 register tile, "
-            "serial loop nest), so there is no 64x64 scf.forall, no 8x8 "
-            "extract_slice and no omp.parallel to find. Needs rewriting "
-            "against the blocked path rather than un-skipping. "
-        )
-    )
-    def test_bare_matmul_fused(self, check_lowered_ir):
-        """With no relu epilogue, LinalgOuterTileAndFusePass uses the bare
-        matmul itself as the fusion root, pulling its fill producer into
-        the same scf.forall."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128]) -> Tensor[f32, 128, 128]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((128, 128), dtype=np.float32),
-              np.ones((128, 128), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.forall (
-        // CHECK: linalg.fill
-        // CHECK: linalg.matmul
-        // CHECK: scf.forall.in_parallel
-        """, after="linalg-outer-tile-and-fuse")
-
-
 class TestFallbackMatmulTilingIR:
     """IR structure after linalg-tile-matmul-forall: verifies the fallback
     pass tiles matmuls the fusion pass didn't touch, and skips ones it did."""
 
     @pytest.mark.skip(
         reason=(
-            "epilogue fusion is disabled on CPU: LinalgOuterTileAndFusePass "
-            "is commented out of buildCPUPipeline, and dense layers go "
-            "through the blocked matmul passes with the epilogue unfused. "
-            "Revisit with INTEGRATION.md Step 4. "
+            "asserts the old CPU path's fused 64x64 epilogue, which was "
+            "removed: LinalgOuterTileAndFusePass and the old matmul tiling "
+            "passes are GPU-only now, and dense layers go through the blocked "
+            "matmul passes with the epilogue unfused. Revisit with "
+            "INTEGRATION.md Step 4. "
         )
     )
     def test_fused_matmul_not_retiled(self, check_lowered_ir):
@@ -247,30 +223,6 @@ class TestFallbackMatmulTilingIR:
         dense(np.ones((128, 128), dtype=np.float32),
               np.ones((128, 128), dtype=np.float32),
               np.ones(128, dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.forall (
-        // CHECK-NOT: scf.forall (
-        """, after="linalg-tile-matmul-forall")
-
-    @pytest.mark.skip(
-        reason=(
-            "Asserts the pre-blocked-path tiling structure. Bare matmuls "
-            "now go through the blocked matmul passes (4x16 register tile, "
-            "serial loop nest), so there is no 64x64 scf.forall, no 8x8 "
-            "extract_slice and no omp.parallel to find. Needs rewriting "
-            "against the blocked path rather than un-skipping. "
-        )
-    )
-    def test_bare_matmul_not_retiled(self, check_lowered_ir):
-        """A matmul with no epilogue is already fused into an scf.forall by
-        LinalgOuterTileAndFusePass, so the fallback pass must not wrap it
-        in a second, redundant outer-tiling forall."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128]) -> Tensor[f32, 128, 128]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((128, 128), dtype=np.float32),
-              np.ones((128, 128), dtype=np.float32))
         check_lowered_ir("""
         // CHECK: scf.forall (
         // CHECK-NOT: scf.forall (

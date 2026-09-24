@@ -36,12 +36,6 @@ void registerCPUPasses() {
   mlir::registerPass([] { return createAllocaScopeCleanupPass(); });
   mlir::registerPass(
       [] { return createVectorContractToOuterProductPass(); });
-  // LinalgMatmulTilingPass backs two distinct pass-argument names depending
-  // on its (tileM, tileN, tileK, loopType) configuration — see getArgument()
-  // in MLIRLoweringPasses.cpp — so both factories must be registered.
-  mlir::registerPass([] { return createLinalgMatmulTilingPass(); });
-  mlir::registerPass([] { return createLinalgMatmulParallelTilingPass(); });
-  mlir::registerPass([] { return createLinalgMatmulKTilingPass(); });
   mlir::registerPass([] { return createLinalgGenericTilingPass(); });
   // Run first inside -cpu-pipeline with their defaults. Registered separately
   // so a non-default strategy can be composed ahead of it (pass options are

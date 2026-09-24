@@ -314,3 +314,19 @@ class TestBlockedMatmulFallback:
         check_lowered_ir("""
         // CHECK-NOT: mlir_edsl.blocked
         """, after=DISTRIBUTE)
+
+    def test_unblocked_matmul_is_left_for_scalar_loops(self, check_lowered_ir):
+        """Neither the matmul nor its fill is vectorized whole: both reach
+        convert-linalg-to-loops as they are."""
+        @ml_function
+        def mm_fn(A: Tensor[i32, N, N], B: Tensor[i32, N, N]) -> Tensor[i32, N, N]:
+            return matmul(A, B)
+
+        ones = np.ones((N, N), dtype=np.int32)
+        mm_fn(ones, ones)
+        check_lowered_ir("""
+        // CHECK-NOT: vector<256x256xi32>
+        // CHECK: linalg.fill
+        // CHECK: linalg.matmul
+        // CHECK-NOT: vector.contract
+        """, after="linalg-vectorize")

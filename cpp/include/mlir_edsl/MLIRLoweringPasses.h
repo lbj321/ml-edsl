@@ -18,9 +18,6 @@ std::unique_ptr<mlir::Pass> createVectorTransposeLoweringPass();
 std::unique_ptr<mlir::Pass> createAllocaScopeCleanupPass();
 std::unique_ptr<mlir::Pass> createVectorContractToOuterProductPass();
 std::unique_ptr<mlir::Pass> createLinalgGenericTilingPass();
-std::unique_ptr<mlir::Pass> createLinalgMatmulTilingPass();
-std::unique_ptr<mlir::Pass> createLinalgMatmulParallelTilingPass();
-std::unique_ptr<mlir::Pass> createLinalgMatmulKTilingPass();
 
 /// BLIS-style cache and register blocking (jc/pc/ic/jr/ir over an MR x NR
 /// register tile), as four passes that run in this order at the start of

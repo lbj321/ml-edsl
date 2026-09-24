@@ -15,14 +15,10 @@ namespace mlir_edsl {
 /// show which blocking was used and each pass can pick up the previous one's
 /// tiles.
 ///
-/// The blocked passes leave MR x NR x 1 tiles behind that the older matmul
-/// passes would happily re-tile: LinalgOuterTileAndFusePass would wrap one in
-/// another scf.forall, the 8x8x8 LinalgMatmulTilingPass would split a 4x16
-/// tile into 4x8 halves, and the 64x64 parallel tiling would grab them too.
-/// Those three passes skip any op carrying this attribute; the passes that
-/// *build* the microkernel (LinalgMatmulToContractPass,
-/// LinalgVectorizationPass) deliberately do not, unless the strategy turned
-/// vectorization off (see isBlockedWithoutVectorize).
+/// It is also what the passes that build the microkernel
+/// (LinalgMatmulToContractPass, LinalgVectorizationPass) key on: a matmul
+/// without it, or with vectorization turned off, is left for scalar loops
+/// (see isLeftForScalarLowering).
 constexpr llvm::StringLiteral kBlockedAttrName = "mlir_edsl.blocked";
 
 /// Unit attribute the tile pass sets on the register loops (jr, ir) of a
@@ -56,7 +52,7 @@ struct MatmulStrategy {
   bool packB = false;
 
   /// When false LinalgMatmulToContractPass and LinalgVectorizationPass skip
-  /// the produced tiles (see isBlockedWithoutVectorize) and they fall through to
+  /// the produced tiles (see isLeftForScalarLowering) and they fall through to
   /// convert-linalg-to-loops. For a meaningful scalar comparison LLVM's own
   /// loop/SLP vectorizers must be disabled too, or O2/O3 re-vectorizes them.
   bool vectorize = true;
@@ -157,9 +153,12 @@ struct BlockedConfig {
 /// dictionary, missing a field, or carries an unknown stage.
 mlir::FailureOr<BlockedConfig> readBlockedConfig(mlir::Operation *op);
 
-/// True when `op` is a blocked tile whose strategy has vectorize = false, so
-/// it must be left for convert-linalg-to-loops as scalar code.
-bool isBlockedWithoutVectorize(mlir::Operation *op);
+/// True when `op` is a linalg.matmul that must be left for
+/// convert-linalg-to-loops as scalar code: one the blocked passes did not
+/// take (a non-f32 matmul, or invalid overrides), or a blocked tile whose
+/// strategy has vectorize = false. Vectorizing an unblocked matmul whole
+/// would build one vector the size of the matrix.
+bool isLeftForScalarLowering(mlir::Operation *op);
 
 /// Appends the blocked tiles under `root` at `stage`, with their strategy.
 /// Emits an error and fails on a malformed kBlockedAttrName.

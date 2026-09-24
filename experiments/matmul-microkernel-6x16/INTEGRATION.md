@@ -58,10 +58,10 @@ k-loop.
 | `AllocaScopeCleanupPass` | **reuse** | after `convert-scf-to-openmp` (`-canonicalize` also works, Stage 6, but the narrow pass is deliberate, see its comment) |
 | `LinalgGenericTilingPass` | keep | elementwise/epilogue generics; unrelated |
 | `VectorCleanupPass` | keep | serves the fallback path and reductions (`linalg.reduce`/dot); the new path doesn't need it |
-| `LinalgMatmulParallelTilingPass` (64×64 forall, CPU) | **superseded** for guarded matmuls | delete once nothing falls back (see "Endgame") |
-| `LinalgMatmulKTilingPass` | **superseded** | same |
-| `LinalgMatmulTilingPass` 8×8×8 (CPU instance) | **superseded** | same. The struct stays: the GPU pipeline uses it (`createLinalgGPUMatmulTilingPass`, 32×32) |
-| `LinalgOuterTileAndFusePass` (CPU use) | **CPU call commented out** (see "Guard narrowed, CPU epilogue fusion disabled") | the struct stays: the GPU pipeline uses it |
+| `LinalgMatmulParallelTilingPass` (64×64 forall, CPU) | **deleted** | see "Old CPU matmul passes deleted" |
+| `LinalgMatmulKTilingPass` | **deleted** | same |
+| `LinalgMatmulTilingPass` 8×8×8 (CPU instance) | **deleted** | the struct stays: the GPU pipeline uses it (`createLinalgGPUMatmulTilingPass`, 32×32) |
+| `LinalgOuterTileAndFusePass` (CPU use) | **CPU call deleted** (see "Guard narrowed, CPU epilogue fusion disabled") | the struct stays: the GPU pipeline uses it |
 
 ### Marking: keep the superseded passes away from our tiles until they're deleted
 
@@ -226,7 +226,7 @@ comes with a toggle, so you can always measure what that step contributed.
 - **Stage 7 tuning:** A-pack transpose via shuffles, the 512³ dip, KC/MC sweep,
   β=0 instead of the fill.
 
-### Endgame: what can be deleted, and when
+### Endgame: what can be deleted, and when (DONE — see "Old CPU matmul passes deleted")
 - **After Step 3, if the fallback is still needed** (odd shapes, non-f32):
   delete nothing. The superseded passes *are* the fallback.
 - **After Step 4 covers epilogues and remainders:** delete the CPU instances
@@ -756,6 +756,37 @@ old passes.
   grows with threads, which rules out plain copy bandwidth. Untested theory:
   page faults on the 4 MB padded buffers, which glibc `mmap`s fresh on every
   call.
+
+## Old CPU matmul passes deleted (DONE)
+
+Padding put every static f32 matmul on the blocked path, so the old CPU
+matmul passes only served i32. i32 speed does not matter for now, so the
+Endgame's "alternative if remainders never matter" was taken for non-f32
+only:
+
+- **Deleted:** the CPU calls of `LinalgMatmulParallelTilingPass` (64x64
+  forall) and the 8x8x8 `LinalgMatmulTilingPass`, all of
+  `LinalgMatmulKTilingPass`, the commented-out `LinalgOuterTileAndFusePass`
+  call, their `mlir-edsl-opt` registrations, and the `mlir_edsl.blocked`
+  skips in the two structs the GPU pipeline keeps.
+- **Unblocked matmuls lower to scalar loops.** `isLeftForScalarLowering`
+  (was `isBlockedWithoutVectorize`) is true for a matmul without
+  `mlir_edsl.blocked` as well as a `vectorize=false` tile.
+  `LinalgMatmulToContractPass` and `LinalgVectorizationPass` skip it, and the
+  latter also skips the fill initializing it, so neither becomes one
+  matrix-sized vector; `convert-linalg-to-loops` lowers both. This covers
+  i32, invalid `mlir-edsl-opt` overrides and transposed matmuls.
+- **Tests:** deleted the old-path structure tests (the 8x8x8
+  `linalg-tile-matmul` class, the i32-to-contract test, the two
+  allocation-free 2x2 bufferization tests, and the two bare-matmul
+  fusion/retiling tests). `test_omp_loop_body_has_no_alloca_scope` now uses
+  a blocked 256^2 matmul instead of being deleted, since
+  `AllocaScopeCleanupPass` still matters. New: an IR test that an i32 matmul
+  and its fill reach loop lowering whole, and i32 execution at 100^2 and
+  256^2. The 5 fused-epilogue IR tests stay skipped as the Step 4 reminder.
+  **740 passed, 5 skipped.**
+- Snapshots at 128^3, 256^3 and 1024^3 are byte-identical apart from the
+  deleted passes and their canonicalizes.
 
 ## Next
 

@@ -95,14 +95,7 @@ struct LinalgOuterTileAndFusePass
 
     if (!consumer) {
       // No relu epilogue: fuse fill directly into a bare matmul instead.
-      // Blocked tiles are skipped: the blocked matmul passes already placed
-      // them inside their own loop nest and tiled their fill, so wrapping one
-      // in another scf.forall here would double-tile it.
-      func.walk([&](mlir::linalg::MatmulOp op) {
-        if (op->hasAttr(mlir_edsl::kBlockedAttrName))
-          return;
-        consumer = op;
-      });
+      func.walk([&](mlir::linalg::MatmulOp op) { consumer = op; });
     }
 
     if (!consumer)
@@ -180,10 +173,10 @@ struct LinalgMatmulToContractPass
     func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
 
     for (mlir::linalg::MatmulOp matmul : matmuls) {
-      // The blocked strategy's vectorize=false toggle: leave the register
-      // tile for convert-linalg-to-loops so a scalar baseline can be measured
-      // against the vectorized one.
-      if (mlir_edsl::isBlockedWithoutVectorize(matmul))
+      // Only blocked register tiles become contracts. A matmul the blocked
+      // passes did not take, or a tile with vectorize=false, is left whole
+      // for convert-linalg-to-loops.
+      if (mlir_edsl::isLeftForScalarLowering(matmul))
         continue;
 
       mlir::Value A = matmul.getInputs()[0];
@@ -268,6 +261,16 @@ struct LinalgMatmulToContractPass
   }
 };
 
+// True when `op` is a linalg.fill whose result initializes a matmul that is
+// left for scalar lowering (see mlir_edsl::isLeftForScalarLowering).
+static bool initializesScalarMatmul(mlir::Operation *op) {
+  if (!llvm::isa<mlir::linalg::FillOp>(op) || op->getNumResults() != 1)
+    return false;
+  return llvm::any_of(op->getResult(0).getUsers(), [](mlir::Operation *user) {
+    return mlir_edsl::isLeftForScalarLowering(user);
+  });
+}
+
 struct LinalgVectorizationPass
     : public mlir::PassWrapper<LinalgVectorizationPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
@@ -297,9 +300,10 @@ struct LinalgVectorizationPass
                   // vectorized outer)
       if (!mlir::linalg::hasVectorizationImpl(op))
         continue;
-      // See the matching skip in LinalgMatmulToContractPass — the blocked
-      // pass's vectorize=false toggle.
-      if (mlir_edsl::isBlockedWithoutVectorize(op))
+      // See the matching skip in LinalgMatmulToContractPass. The fill that
+      // initializes such a matmul is untiled too, and would become one
+      // matrix-sized vector.
+      if (mlir_edsl::isLeftForScalarLowering(op) || initializesScalarMatmul(op))
         continue;
       rewriter.setInsertionPoint(op);
       if (mlir::failed(mlir::linalg::vectorize(rewriter, op)))
@@ -408,14 +412,10 @@ struct VectorContractToOuterProductPass
   }
 };
 
-// Tiles linalg.matmul into scf loops with configurable tile sizes and loop type.
-//
-// Inner vectorization (createLinalgMatmulTilingPass):
-//   {8,8,8} ForOp — K tiling required for square vector<8x8x8> contracts that
-//   the OuterProduct strategy decomposes into vector.outerproduct → vector.fma.
-//
-// Outer parallelism (createLinalgMatmulParallelTilingPass / createLinalgGPUMatmulTilingPass):
-//   {64,64,0} or {32,32,0} ForallOp — K untiled to avoid reduction races.
+// Tiles linalg.matmul into scf loops with configurable tile sizes and loop
+// type. Only the GPU pipeline uses it (createLinalgGPUMatmulTilingPass:
+// {32,32,0} ForallOp, K untiled to avoid reduction races); the CPU pipeline
+// tiles matmuls with the blocked passes.
 struct LinalgMatmulTilingPass
     : public mlir::PassWrapper<LinalgMatmulTilingPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
@@ -458,11 +458,6 @@ struct LinalgMatmulTilingPass
       if (loopType == LoopType::ForallOp &&
           op->getParentOfType<mlir::scf::ForallOp>())
         return;
-      // Blocked tiles are already at the register tile size chosen by
-      // MatmulStrategy; the 8x8x8 ForOp configuration would split a 4x16 tile
-      // into 4x8 halves, and the 64x64 ForallOp one would re-tile it entirely.
-      if (op->hasAttr(mlir_edsl::kBlockedAttrName))
-        return;
       matmuls.push_back(op);
     });
 
@@ -487,87 +482,6 @@ struct LinalgMatmulTilingPass
     }
   }
 };
-
-// Cache-blocks the K (reduction) dimension of linalg.matmul ops whose K is
-// large. Runs after the outer 64x64 parallel tiling (LinalgOuterTileAndFuse-
-// Pass's fusion path and LinalgMatmulTilingPass's ForallOp fallback both
-// leave K untiled/full-length on the matmul they place inside the
-// scf.forall, to avoid reduction races) and before the 8x8x8 inner
-// vectorization tiling. Without this, the inner loop streams the *entire*
-// K-length A-row-panel and B-column-panel through every 64x64 output tile;
-// once K is large those panels no longer fit L1/L2, and each tile re-fetches
-// from L3/memory on every pass instead of reusing cache — this is what turns
-// into a >400ms 2048x2048 matmul (17x slower than a naive NumPy baseline)
-// despite the vectorized inner kernel.
-//
-// kKcTileSize=256 comes directly from this project's dev-machine cache sizes
-// (32KiB L1d / core): with the existing 8-wide (Mr=Nr=8) register tile, a
-// Kc x 8 panel of each operand is (Kc*8 + Kc*8)*4 bytes, which stays within
-// half of L1d up to Kc=256.
-struct LinalgMatmulKTilingPass
-    : public mlir::PassWrapper<LinalgMatmulKTilingPass,
-                               mlir::OperationPass<mlir::func::FuncOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulKTilingPass)
-
-  static constexpr int64_t kKcTileSize = 256;
-
-  llvm::StringRef getArgument() const override {
-    return "linalg-tile-matmul-k";
-  }
-  llvm::StringRef getDescription() const override {
-    return "Cache-block the K reduction dimension of large-K linalg.matmul ops";
-  }
-
-  void runOnOperation() override {
-    mlir::func::FuncOp func = getOperation();
-    mlir::IRRewriter rewriter(func->getContext());
-
-    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
-    func.walk([&](mlir::linalg::MatmulOp op) {
-      // Only touch matmuls already placed inside an outer parallel tile (by
-      // the epilogue-fusion pass or the parallel-tiling fallback) — those
-      // are exactly the ones left with full-length K. A matmul with no
-      // forall parent hasn't reached outer tiling yet and will shortly, so
-      // skip it here rather than cache-block a shape that's about to change.
-      if (!op->getParentOfType<mlir::scf::ForallOp>())
-        return;
-
-      // A blocked tile has K=1 and so is already below the threshold below;
-      // the explicit skip is insurance for Step 3, where jc becomes an
-      // scf.forall and the parent check above starts passing.
-      if (op->hasAttr(mlir_edsl::kBlockedAttrName))
-        return;
-
-      auto lhsType = llvm::cast<mlir::ShapedType>(op.getInputs()[0].getType());
-      int64_t k = lhsType.getShape().back();
-      if (mlir::ShapedType::isDynamic(k) || k <= kKcTileSize)
-        return;
-
-      matmuls.push_back(op);
-    });
-
-    for (mlir::linalg::MatmulOp op : matmuls) {
-      // Named variable required — setTileSizes captures a non-owning ArrayRef.
-      llvm::SmallVector<mlir::OpFoldResult> tileSizes =
-          mlir::getAsIndexOpFoldResult(op->getContext(), {0, 0, kKcTileSize});
-      mlir::scf::SCFTilingOptions opts;
-      opts.setTileSizes(tileSizes);
-      opts.setLoopType(mlir::scf::SCFTilingOptions::LoopType::ForOp);
-      rewriter.setInsertionPoint(op);
-      auto result = mlir::scf::tileUsingSCF(
-          rewriter, llvm::cast<mlir::TilingInterface>(op.getOperation()), opts);
-      if (mlir::failed(result)) {
-        op->emitWarning("linalg-tile-matmul-k: tiling failed, skipping op");
-        continue;
-      }
-      if (op->getNumResults() == 0)
-        rewriter.eraseOp(op);
-      else
-        rewriter.replaceOp(op, result->mergeResult.replacements);
-    }
-  }
-};
-
 
 // Tiles linalg.generic ops along the innermost loop dimension to `tileSize`.
 // All outer dims are left untiled (size 0). This keeps vectorization from
@@ -660,16 +574,6 @@ std::unique_ptr<mlir::Pass> createVectorContractToOuterProductPass() {
 }
 std::unique_ptr<mlir::Pass> createLinalgGenericTilingPass() {
   return std::make_unique<LinalgGenericTilingPass>(8);
-}
-std::unique_ptr<mlir::Pass> createLinalgMatmulTilingPass() {
-  return std::make_unique<LinalgMatmulTilingPass>(8, 8, 8);
-}
-std::unique_ptr<mlir::Pass> createLinalgMatmulParallelTilingPass() {
-  using LoopType = mlir::scf::SCFTilingOptions::LoopType;
-  return std::make_unique<LinalgMatmulTilingPass>(64, 64, 0, LoopType::ForallOp);
-}
-std::unique_ptr<mlir::Pass> createLinalgMatmulKTilingPass() {
-  return std::make_unique<LinalgMatmulKTilingPass>();
 }
 // The createLinalgMatmulBlocked*Pass factories live in
 // passes/LinalgMatmulBlocked{Distribute,Tile,Pack,Kernel}.cpp.

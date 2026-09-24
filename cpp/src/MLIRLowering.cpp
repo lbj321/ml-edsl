@@ -275,32 +275,6 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedKernelPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Epilogue fusion is disabled on CPU until INTEGRATION.md Step 4 fuses the
-  // epilogue into the blocked accumulator; bias/relu run as their own ops.
-  // pm.addNestedPass<mlir::func::FuncOp>(createLinalgOuterTileAndFusePass());
-  // pm.addPass(mlir::createCanonicalizerPass());
-
-  // Outer 64×64 parallel tiling for every matmul the blocked passes rejected.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulParallelTilingPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-
-  // Cache-block K into serial 256-wide chunks for matmuls whose K is large
-  // (a no-op below that threshold). Targets the fallback above, which leaves
-  // the matmul's K full-length inside the outer forall. See
-  // LinalgMatmulKTilingPass for why this matters — CPU cache sizes, not
-  // correctness.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulKTilingPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-
-  // Inner 8x8 serial tiling, also run on tensor semantics (pre-bufferize).
-  // Nesting inside the outer
-  // forall's boundary tile (e.g. the 32-wide remainder on a 96x96 matmul)
-  // requires ValueBoundsOpInterface support for affine ops — see the
-  // affine::registerValueBoundsOpInterfaceExternalModels registration in
-  // registerRequiredDialects.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulTilingPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-
   // Tile linalg.generic ops (elementwise, bias, relu, etc.) to strips of 8
   // along the innermost dimension before vectorization, also on tensor
   // semantics (pre-bufferize) — same TilingInterface-based pass, no memref
@@ -310,56 +284,39 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgGenericTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Lower static 8x8 linalg.matmul tiles to vector.contract with standard
-  // 2D indexing maps (m,k)x(k,n)->(m,n), on tensor semantics (pre-bufferize).
-  // Must run before LinalgVectorizationPass (which stays post-bufferize
-  // below) — linalg::vectorize always produces a 3D double-broadcast form
-  // that the OuterProduct lowering cannot decompose into vector.fma, so
-  // matmul must never reach it. Running this pass earlier still guarantees
-  // that ordering since it consumes/erases every linalg.matmul it touches.
-  // Bufferizing the vector.transfer_read/write this produces requires
-  // vector::registerBufferizableOpInterfaceExternalModels (see
-  // registerRequiredDialects).
+  // Lower the blocked MR x NR x 1 register tiles to vector.contract with
+  // standard 2D indexing maps (m,k)x(k,n)->(m,n), on tensor semantics
+  // (pre-bufferize). Must run before LinalgVectorizationPass: linalg::vectorize
+  // always produces a 3D double-broadcast form that the OuterProduct lowering
+  // cannot decompose into vector.fma, so a matmul must never reach it.
+  // Matmuls the blocked passes did not take (non-f32) are left untouched by
+  // both, whole, and convert-linalg-to-loops lowers them to scalar loops (see
+  // isLeftForScalarLowering). Bufferizing the vector.transfer_read/write this
+  // produces requires vector::registerBufferizableOpInterfaceExternalModels
+  // (see registerRequiredDialects).
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulToContractPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
   // Vectorize remaining linalg structured ops → vector dialect, on tensor
   // semantics (pre-bufferize). linalg::vectorize is dialect-agnostic
   // upstream (the standard "vectorize before bufferize" pattern), so no
-  // rewrite was needed here, unlike LinalgMatmulToContractPass above.
-  // (linalg.matmul is already handled by LinalgMatmulToContractPass above,
-  // so this only ever sees generic/fill ops.)
+  // rewrite was needed here, unlike LinalgMatmulToContractPass above. It
+  // skips the matmuls left for scalar loops and the fills initializing them.
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgVectorizationPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Hoist loop-invariant tensor/vector subset reads and writes out of the
-  // loops around them — specifically the accumulator tile's transfer_read and
-  // transfer_write around a reduction loop, which become iter_args on the
-  // loop instead. Without this the innermost k-loop reloads and restores its
-  // C tile on every step; with it, C stays in registers as a
-  // vector<MRxNRxf32> for the whole reduction.
-  //
   // Hoist loop-invariant subset reads/writes — specifically the accumulator
   // tile's transfer_read/transfer_write around a reduction loop, which become
   // iter_args on the loop. Without it the innermost k-loop reloads and
   // restores its C tile every step; with it C stays in registers as a
   // vector<MRxNRxf32> for the whole reduction (1024^3: 38.3 vs 16.7 GFLOPS).
   //
-  // Must run here, pre-bufferization, where the C tile is still tensor SSA.
-  // Moving it after bufferization makes it hoist nothing for the blocked
-  // path. But here it also rewrites the fused matmul+bias+relu epilogue's
-  // extract_slice/insert_slice chain into tensor iter_args, which defeats
-  // one-shot-bufferize's in-place analysis: bufferization falls back to
-  // out-of-place and emits memrefCopy calls, and the result aborts at run
-  // time (test_epilogue_fusion.py::test_matmul_bias_relu_tile_aligned).
-  //
-  // KNOWN BREAKAGE, accepted deliberately: matmul chains with an epilogue are
-  // rejected by chooseStrategy and stay on the old path, which this pass now
-  // miscompiles — so matmul+bias+relu aborts at run time. The tests covering
-  // it are skipped (see tests/linalg/test_epilogue_fusion.py). The fix is
-  // either to hoist only the blocked k-loops instead of every loop, or
-  // INTEGRATION.md Step 4, which applies the epilogue to the MR x NR
-  // accumulator and retires the fusion path entirely.
+  // Must run here, pre-bufferization, where the C tile is still tensor SSA:
+  // after bufferization it hoists nothing for the blocked path. It applies to
+  // every loop in the function; it used to miscompile the old path's fused
+  // matmul+bias+relu forall, which no longer exists. Fusing an epilogue into
+  // the blocked accumulator (INTEGRATION.md Step 4) must be checked against
+  // it.
   pm.addNestedPass<mlir::func::FuncOp>(
       mlir::createLoopInvariantSubsetHoistingPass());
 

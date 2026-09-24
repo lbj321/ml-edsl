@@ -7,7 +7,6 @@ Post-lowering / pass-level IR tests live in test_lowering_ir.py.
 """
 
 import numpy as np
-import pytest
 from mlir_edsl import ml_function, Tensor, f32, dot, matmul, tensor_map, tensor_sum, relu, leaky_relu
 
 
@@ -134,79 +133,6 @@ class TestDirectOutputBuffer:
         // CHECK: vector.transfer_write {{.*}}, %arg1
         // CHECK-NOT: memref.alloc
         // CHECK-NOT: tensor<
-        """, after="one-shot-bufferize")
-
-    @pytest.mark.skip(
-        reason=(
-            "f32 matmuls no longer reach the old path: the distribute pass "
-            "pads every static f32 shape onto the blocked matmul passes, "
-            "which need padded buffers and tile differently. Remove with the "
-            "old passes. "
-        )
-    )
-    def test_matmul_bufferizes_to_direct_write(self, check_lowered_ir):
-        """After one-shot-bufferize: linalg.matmul is fully vectorized — vectorization
-        and vector.contract → outerproduct lowering both now run pre-bufferize, so
-        vector.contract is consumed before this checkpoint too (this 2x2 shape isn't
-        8x8-aligned, so it decomposes to scalar extract/mulf/reduction/insert rather
-        than vector.fma) — and writes directly into the out-param, no alloc, no copy."""
-        @ml_function
-        def mm(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
-            return matmul(A, B)
-
-        mm(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
-           np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: func.func @mm_{{[0-9]+}}(%arg0: memref<2x2xf32>, %arg1: memref<2x2xf32>, %arg2: memref<2x2xf32>)
-        // CHECK-NOT: linalg.matmul
-        // CHECK-NOT: vector.contract
-        // CHECK: vector.transfer_write {{.*}}, %arg2
-        // CHECK-NOT: memref.alloc
-        // CHECK-NOT: tensor<
-        """, after="one-shot-bufferize")
-
-    @pytest.mark.skip(
-        reason=(
-            "f32 matmuls no longer reach the old path: the distribute pass "
-            "pads every static f32 shape onto the blocked matmul passes, "
-            "which need padded buffers and tile differently. Remove with the "
-            "old passes. "
-        )
-    )
-    def test_bias_relu_fused_and_no_copy(self, check_lowered_ir):
-        """bias+relu is fused with the matmul and fully vectorized into straight-line
-        vector/arith ops (vectorization and contract-to-outerproduct lowering both now
-        run pre-bufferize) — no linalg.generic or vector.contract survives, and the
-        result writes directly into the out-param.
-
-        No separate arith.addf for the bias: since LinalgMatmulToContractPass now
-        produces a clean 2D-map vector.contract for this (non-8x8) shape too, the
-        contract's zero accumulator plus the following add-bias is folded by
-        canonicalization into a single vector.contract/outerproduct chain whose
-        initial accumulator is the bias itself — an add can only fuse into the
-        contract this way when the contract has the clean 2D form; the 3D
-        double-broadcast form (which this shape hit before the matmul-to-contract
-        pass was generalized beyond 8x8) blocks that fold, so a real arith.addf
-        would remain. vector.outerproduct→vector.fma decomposition is deferred to
-        convert-vector-to-llvm, so it hasn't happened yet at this snapshot."""
-        @ml_function
-        def dense_relu(W: Tensor[f32, 2, 4], x: Tensor[f32, 4, 3], b: Tensor[f32, 3]) -> Tensor[f32, 2, 3]:
-            return relu(matmul(W, x) + b)
-
-        W = np.zeros((2, 4), dtype=np.float32)
-        x = np.zeros((4, 3), dtype=np.float32)
-        b = np.zeros(3, dtype=np.float32)
-        dense_relu(W, x, b)
-
-        check_lowered_ir("""
-        // CHECK: func.func @dense_relu
-        // CHECK-NOT: linalg.generic
-        // CHECK-NOT: vector.contract
-        // CHECK: vector.outerproduct
-        // CHECK: arith.maximumf
-        // CHECK: vector.transfer_write {{.*}}, %arg3
-        // CHECK-NOT: memref.alloc
-        // CHECK: return
         """, after="one-shot-bufferize")
 
 

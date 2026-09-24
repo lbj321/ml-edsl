@@ -223,7 +223,11 @@ mlir::FailureOr<BlockedConfig> readBlockedConfig(mlir::Operation *op) {
   return result;
 }
 
-bool isBlockedWithoutVectorize(mlir::Operation *op) {
+bool isLeftForScalarLowering(mlir::Operation *op) {
+  if (!llvm::isa<mlir::linalg::MatmulOp>(op))
+    return false;
+  if (!op->hasAttr(kBlockedAttrName))
+    return true;
   auto config = readBlockedConfig(op);
   return mlir::succeeded(config) && !config->strategy.vectorize;
 }
