@@ -27,15 +27,16 @@ using mlir_edsl::BlockedStage;
 
 // Reduces the MR x NR x KC tile to the MR x NR x 1 register tile.
 //
-// With packA there is an un-transpose in front of the tile (hoisting with a
-// transpose leaves one behind, see packA in the tile-and-pack pass) which
-// must move inside this loop, or every microtile pays a full MR x KC copy.
-// Fusing the producer into the generated k-loop makes each k step transpose
-// a 1 x MR row of A~ instead — i.e. exactly the contiguous read the packing
-// was for.
+// When A was packed there is an un-transpose in front of the tile (hoisting
+// with a transpose leaves one behind, see packA in the tile-and-pack pass)
+// which must move inside this loop, or every microtile pays a full MR x KC
+// copy. Fusing the producer into the generated k-loop makes each k step
+// transpose a 1 x MR row of A~ instead — i.e. exactly the contiguous read the
+// packing was for. The un-transpose is looked for rather than inferred from
+// the strategy, since packing can be skipped for a tile.
 static mlir::FailureOr<mlir::Operation *>
-tileK(mlir::IRRewriter &rewriter, mlir::Operation *tile, bool packA) {
-  if (!packA) {
+tileK(mlir::IRRewriter &rewriter, mlir::Operation *tile) {
+  if (!tile->getOperand(0).getDefiningOp<mlir::linalg::TransposeOp>()) {
     auto tiled = mlir_edsl::tileOneLevel(rewriter, tile, {0, 0, 1});
     if (mlir::failed(tiled))
       return mlir::failure();
@@ -101,7 +102,7 @@ struct LinalgMatmulBlockedKernelPass
 
     // A blocked tile cannot fall back to the older passes, which skip it.
     for (auto &[tile, strategy] : tiles) {
-      auto kernel = tileK(rewriter, tile, strategy.packA);
+      auto kernel = tileK(rewriter, tile);
       if (mlir::failed(kernel)) {
         func->emitError("linalg-matmul-blocked-kernel failed");
         return signalPassFailure();
