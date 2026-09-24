@@ -628,6 +628,14 @@ canonicalize like the others:
     canonicalize folds the full-size slice (at 16^2, NC == N and KC == K for
     B), and `hoistPaddingOnTensors` needs a slice to pack from. For B that is
     no loss — with N == NR its rows are already contiguous NR-wide rows.
+- **Upstream bug worked around: hoisting A with no packing loop.** When MC ==
+  MR, ir folds before packing and A is hoisted out of jr only, which does not
+  index it. `hoistPaddingOnTensors` then builds no packing loop, and
+  `replaceByPackingResult` slices the *untransposed* hoisted pad for the
+  un-transpose (`HoistPadding.cpp`, `nPackedLoops == 0` branch), which fails
+  verification ("slice along dimension 0 runs out-of-bounds"). `packA` points
+  that slice at the packing transpose's result. The combined pass never hit
+  this, because the single-iteration ir was still there to pack along.
 - **The kernel pass reads the IR, not the flag.** It fuses the un-transpose
   into the k-loop only when operand 0 is a `linalg.transpose`, since `pack_a`
   no longer implies that A was packed.
@@ -635,8 +643,10 @@ canonicalize like the others:
 Snapshots from the kernel pass onward, and the final LLVM IR, are
 byte-identical to the combined pass at 128^3, 256^3 and 1024^3; the canonicalize
 after pack differs from the old one after tile-and-pack only in the `stage`
-field. At 16^2, B is no longer packed (see above). **719 passed, 16 skipped**
-before the new tests.
+field. At 16^2, B is no longer packed (see above). New coverage: the tile
+stage and its markers, and the three packing decisions at 4x512x256 (jr
+only), 4x64x16 (no register loop) and 16^2 (whole B), with execution tests
+for the first two. **728 passed, 16 skipped.**
 
 ## Next
 

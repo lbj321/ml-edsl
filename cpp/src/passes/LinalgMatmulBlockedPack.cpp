@@ -187,9 +187,22 @@ static mlir::LogicalResult packA(mlir::IRRewriter &rewriter,
 
   // transposeOps[0] is the packing transpose, [1] the un-transpose put back
   // in front of the tile.
-  if (transposeOps.empty())
+  if (transposeOps.size() != 2)
     return mlir::failure();
-  mlir::linalg::TransposeOp packTranspose = transposeOps.front();
+  mlir::linalg::TransposeOp packTranspose = transposeOps[0];
+
+  // When no hoisted loop indexes A (MC == MR, so ir was folded and only jr is
+  // hoisted out of), there is no packing loop and upstream's
+  // replaceByPackingResult slices the untransposed hoisted pad instead of
+  // the transpose's result (HoistPadding.cpp, LLVM 21). Point the slice
+  // feeding the un-transpose at the transposed panel.
+  auto unTransposeSrc = transposeOps[1]
+                            .getInput()
+                            .getDefiningOp<mlir::tensor::ExtractSliceOp>();
+  if (unTransposeSrc && unTransposeSrc.getSource() == hoistedPad.getResult())
+    rewriter.modifyOpInPlace(unTransposeSrc, [&] {
+      unTransposeSrc.getSourceMutable().assign(packTranspose.getResult()[0]);
+    });
 
   // A's pad is zero-width — the transpose is the packing copy — and
   // tensor.pad is not destination-style, so it cannot be fused with the
