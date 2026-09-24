@@ -579,11 +579,10 @@ sharing `tileOneLevel` from `TilingUtils.h` and the attribute helpers in
   (mr, nr, mc, nc, kc, pack_a, pack_b, vectorize) plus `stage`. Only
   distribute has options; the other two read the strategy back.
   `mlir_edsl.no_vectorize` is gone, folded into `vectorize`.
-- **Why tiling and packing share a pass.** Packing hoists to the pc body, so it
-  needs pc, jr and ir by identity. Canonicalize removes single-iteration loops
-  between passes — the forall too — so a boundary there would lose them. No
-  pass depends on a loop an earlier one created; tile-and-pack finds the slice
-  chains by walking back from the tile's operands.
+- **Why tiling and packing shared a pass.** Packing hoists to the pc body, so it
+  needed pc, jr and ir by identity. Canonicalize removes single-iteration loops
+  between passes — the forall too — so a boundary there would lose them.
+  Superseded by loop markers; see "Refactor: tile and pack split" below.
 - **Patterns are scoped** (`applyOpPatternsGreedily`, `ExistingAndNewOps`) to
   the ops each step rewrites, which is what made the tile id, the transpose
   marker and the per-matmul re-walk unnecessary.
@@ -603,6 +602,41 @@ Standalone:
     mlir-edsl-opt in.mlir '-linalg-matmul-blocked-distribute=mr=6 nr=16' -cpu-pipeline
 
 Pass options are space-separated; `mr=6,nr=16` is rejected.
+
+## Refactor: tile and pack split (DONE)
+
+`linalg-matmul-blocked-tile-and-pack` is now two passes, each followed by
+canonicalize like the others:
+
+| pass | picks up | leaves stage |
+|---|---|---|
+| `linalg-matmul-blocked-distribute` | any matmul `chooseStrategy` accepts | `distributed` |
+| `linalg-matmul-blocked-tile` | `distributed` | `tiled` |
+| `linalg-matmul-blocked-pack` | `tiled` | `packed` |
+| `linalg-matmul-blocked-kernel` | `packed` | `kernel` |
+
+- **Loop hand-over.** The tile pass sets the unit attribute
+  `mlir_edsl.blocked_hoist` on jr and ir. The pack pass hoists out of the
+  marked loops directly around the tile and removes the markers. Measured with
+  mlir-edsl-opt: a discardable attribute on `scf.for` survives canonicalize
+  whenever the loop does (in-place operand rewrites included) and goes only
+  with a folded single-iteration loop, so the count is the right hoist depth.
+- **When packing is skipped** (the tile still advances to `packed`):
+  - no marked loop is left (MC == MR and NC == NR): each panel would feed
+    one microtile;
+  - per operand, when it is the whole original tensor rather than a slice:
+    canonicalize folds the full-size slice (at 16^2, NC == N and KC == K for
+    B), and `hoistPaddingOnTensors` needs a slice to pack from. For B that is
+    no loss — with N == NR its rows are already contiguous NR-wide rows.
+- **The kernel pass reads the IR, not the flag.** It fuses the un-transpose
+  into the k-loop only when operand 0 is a `linalg.transpose`, since `pack_a`
+  no longer implies that A was packed.
+
+Snapshots from the kernel pass onward, and the final LLVM IR, are
+byte-identical to the combined pass at 128^3, 256^3 and 1024^3; the canonicalize
+after pack differs from the old one after tile-and-pack only in the `stage`
+field. At 16^2, B is no longer packed (see above). **719 passed, 16 skipped**
+before the new tests.
 
 ## Next
 

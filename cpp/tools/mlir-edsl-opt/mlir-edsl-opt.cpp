@@ -49,7 +49,8 @@ void registerCPUPasses() {
   //   mlir-edsl-opt in.mlir '-linalg-matmul-blocked-distribute=mr=6 nr=16' \
   //       -cpu-pipeline
   mlir::registerPass([] { return createLinalgMatmulBlockedDistributePass(); });
-  mlir::registerPass([] { return createLinalgMatmulBlockedTileAndPackPass(); });
+  mlir::registerPass([] { return createLinalgMatmulBlockedTilePass(); });
+  mlir::registerPass([] { return createLinalgMatmulBlockedPackPass(); });
   mlir::registerPass([] { return createLinalgMatmulBlockedKernelPass(); });
 
   mlir::PassPipelineRegistration<>(

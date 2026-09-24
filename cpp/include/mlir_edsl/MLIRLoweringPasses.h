@@ -23,12 +23,13 @@ std::unique_ptr<mlir::Pass> createLinalgMatmulParallelTilingPass();
 std::unique_ptr<mlir::Pass> createLinalgMatmulKTilingPass();
 
 /// BLIS-style cache and register blocking (jc/pc/ic/jr/ir over an MR x NR
-/// register tile), as three passes that run in this order at the start of
+/// register tile), as four passes that run in this order at the start of
 /// buildCPUPipeline. Only the distribute pass has options (see
-/// MatmulStrategy.h), reachable from mlir-edsl-opt; the other two read the
+/// MatmulStrategy.h), reachable from mlir-edsl-opt; the other three read the
 /// strategy from the tiles' mlir_edsl.blocked attribute.
 std::unique_ptr<mlir::Pass> createLinalgMatmulBlockedDistributePass();
-std::unique_ptr<mlir::Pass> createLinalgMatmulBlockedTileAndPackPass();
+std::unique_ptr<mlir::Pass> createLinalgMatmulBlockedTilePass();
+std::unique_ptr<mlir::Pass> createLinalgMatmulBlockedPackPass();
 std::unique_ptr<mlir::Pass> createLinalgMatmulBlockedKernelPass();
 
 #ifdef MLIR_EDSL_CUDA_ENABLED

@@ -11,7 +11,8 @@ import numpy as np
 from mlir_edsl import ml_function, Tensor, f32, matmul
 
 DISTRIBUTE = "linalg-matmul-blocked-distribute"
-TILE_AND_PACK = "linalg-matmul-blocked-tile-and-pack"
+TILE = "linalg-matmul-blocked-tile"
+PACK = "linalg-matmul-blocked-pack"
 KERNEL = "linalg-matmul-blocked-kernel"
 
 # 256 is accepted by chooseStrategy: f32, static, square, power of two, no
@@ -20,7 +21,7 @@ KERNEL = "linalg-matmul-blocked-kernel"
 N = 256
 
 # 128 gives MC = NC = 128, so the forall has a single iteration and
-# canonicalize removes it between the distribute and tile-and-pack passes.
+# canonicalize removes it between the distribute and tile passes.
 N_SINGLE_TILE = 128
 
 # 24 fails the cache-block search (no MC multiple of MR=4 divides it that also
@@ -63,7 +64,7 @@ class TestBlockedMatmulStructure:
         // CHECK: vector.transfer_read
         // CHECK: vector.transfer_write {{.*}} vector<8x16xf32>
         // CHECK-SAME: tensor<256x16xf32>
-        """, after=TILE_AND_PACK)
+        """, after=PACK)
 
     def test_packs_a_into_k_major_panel(self, check_lowered_ir):
         """A~ is (MC/MR) x KC x MR, built by a tiled [1,0] transpose."""
@@ -72,7 +73,7 @@ class TestBlockedMatmulStructure:
         // CHECK: linalg.transpose ins({{.*}} : tensor<4x8xf32>)
         // CHECK-SAME: outs({{.*}} : tensor<8x4xf32>)
         // CHECK-SAME: permutation = [1, 0]
-        """, after=TILE_AND_PACK)
+        """, after=PACK)
 
     def test_a_untranspose_is_fused_into_k_loop(self, check_lowered_ir):
         """The un-transpose hoisting leaves behind becomes a per-k-step 1xMR."""
@@ -105,22 +106,21 @@ class TestBlockedMatmulStructure:
 class TestBlockedMatmulStages:
     """Each pass picks up the tiles the previous one left, by stage."""
 
-    def test_tile_and_pack_advances_every_distributed_tile(
-            self, check_lowered_ir):
-        """No tile is left at the distributed stage after tile-and-pack."""
+    def test_pack_advances_every_tiled_tile(self, check_lowered_ir):
+        """No tile is left at the tiled stage after pack."""
         _run(N)
         check_lowered_ir("""
-        // CHECK-NOT: stage = "distributed"
-        // CHECK: linalg.matmul {mlir_edsl.blocked = {{{.*}}stage = "tiled"
+        // CHECK-NOT: stage = "tiled"
+        // CHECK: linalg.matmul {mlir_edsl.blocked = {{{.*}}stage = "packed"
         // CHECK-SAME: tensor<4x256xf32>, tensor<256x16xf32>
-        // CHECK-NOT: stage = "distributed"
-        """, after=TILE_AND_PACK)
+        // CHECK-NOT: stage = "tiled"
+        """, after=PACK)
 
     def test_single_iteration_forall_still_reaches_the_kernel(
             self, check_lowered_ir):
         """Canonicalize removes a one-tile forall; the later stages still run.
 
-        Tile-and-pack finds the tile by its attribute, not inside the forall.
+        The tile pass finds the tile by its attribute, not inside the forall.
         """
         _run(N_SINGLE_TILE)
         check_lowered_ir("""

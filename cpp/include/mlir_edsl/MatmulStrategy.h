@@ -25,6 +25,10 @@ namespace mlir_edsl {
 /// vectorization off (see isBlockedWithoutVectorize).
 constexpr llvm::StringLiteral kBlockedAttrName = "mlir_edsl.blocked";
 
+/// Unit attribute the tile pass sets on the register loops (jr, ir) of a
+/// blocked tile: the loops the pack pass hoists the packed panels out of.
+constexpr llvm::StringLiteral kBlockedHoistAttrName = "mlir_edsl.blocked_hoist";
+
 /// A complete blocking decision for one linalg.matmul: the register tile (the
 /// microkernel), the cache blocks derived from it, and the feature toggles.
 ///
@@ -94,14 +98,15 @@ mlir::FailureOr<MatmulStrategy> chooseStrategy(mlir::linalg::MatmulOp op,
 
 /// How far the blocked passes have taken a tile.
 ///
-/// The fast path for f32 matmuls chooseStrategy accepts is three passes
+/// The fast path for f32 matmuls chooseStrategy accepts is four passes
 /// (cpp/src/passes/LinalgMatmulBlocked*.cpp), run in this order and each
 /// followed by canonicalize in buildCPUPipeline. Each picks up the tiles at
 /// the stage the previous one left them in:
 ///
-///   linalg-matmul-blocked-distribute     → Distributed (inside the ic x jc forall)
-///   linalg-matmul-blocked-tile-and-pack  → Tiled (MR x NR x KC, operands packed)
-///   linalg-matmul-blocked-kernel         → Kernel (MR x NR x 1)
+///   linalg-matmul-blocked-distribute  → Distributed (inside the ic x jc forall)
+///   linalg-matmul-blocked-tile        → Tiled (MR x NR x KC)
+///   linalg-matmul-blocked-pack        → Packed (A and B operands packed)
+///   linalg-matmul-blocked-kernel      → Kernel (MR x NR x 1)
 ///
 /// Together they produce the BLIS loop nest
 ///
@@ -116,9 +121,12 @@ mlir::FailureOr<MatmulStrategy> chooseStrategy(mlir::linalg::MatmulOp op,
 ///
 /// Tiles pass from one stage to the next only through kBlockedAttrName: the
 /// distribute pass records the strategy there, and each pass advances the
-/// stage. No pass relies on a loop an earlier one created, because
-/// canonicalize removes single-iteration loops, forall included, in between.
-enum class BlockedStage { Distributed, Tiled, Kernel };
+/// stage. Canonicalize removes single-iteration loops, forall included, in
+/// between, so no pass holds on to a loop an earlier one created. The one
+/// loop-level hand-over is kBlockedHoistAttrName: the pack pass hoists out of
+/// the marked loops that survived, and a missing marker means that loop was
+/// folded away.
+enum class BlockedStage { Distributed, Tiled, Packed, Kernel };
 
 llvm::StringRef stringifyBlockedStage(BlockedStage stage);
 std::optional<BlockedStage> symbolizeBlockedStage(llvm::StringRef str);

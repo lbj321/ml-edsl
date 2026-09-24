@@ -146,6 +146,8 @@ llvm::StringRef stringifyBlockedStage(BlockedStage stage) {
     return "distributed";
   case BlockedStage::Tiled:
     return "tiled";
+  case BlockedStage::Packed:
+    return "packed";
   case BlockedStage::Kernel:
     return "kernel";
   }
@@ -154,7 +156,7 @@ llvm::StringRef stringifyBlockedStage(BlockedStage stage) {
 
 std::optional<BlockedStage> symbolizeBlockedStage(llvm::StringRef str) {
   for (BlockedStage stage : {BlockedStage::Distributed, BlockedStage::Tiled,
-                             BlockedStage::Kernel})
+                             BlockedStage::Packed, BlockedStage::Kernel})
     if (str == stringifyBlockedStage(stage))
       return stage;
   return std::nullopt;

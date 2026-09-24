@@ -672,7 +672,7 @@ std::unique_ptr<mlir::Pass> createLinalgMatmulKTilingPass() {
   return std::make_unique<LinalgMatmulKTilingPass>();
 }
 // The createLinalgMatmulBlocked*Pass factories live in
-// passes/LinalgMatmulBlocked{Distribute,TileAndPack,Kernel}.cpp.
+// passes/LinalgMatmulBlocked{Distribute,Tile,Pack,Kernel}.cpp.
 
 #ifdef MLIR_EDSL_CUDA_ENABLED
 std::unique_ptr<mlir::Pass> createLinalgGPUMatmulTilingPass() {

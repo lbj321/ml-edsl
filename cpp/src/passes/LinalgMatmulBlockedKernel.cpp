@@ -1,7 +1,7 @@
 //===- LinalgMatmulBlockedKernel.cpp - k-loop over the register tile ------===//
 //
-// linalg-matmul-blocked-kernel: the last of the three blocked matmul passes
-// (see BlockedStage in MatmulStrategy.h). Tiles each Tiled MR x NR x KC tile
+// linalg-matmul-blocked-kernel: the last of the four blocked matmul passes
+// (see BlockedStage in MatmulStrategy.h). Tiles each Packed MR x NR x KC tile
 // over k into the MR x NR x 1 register tile the microkernel passes build on,
 // and leaves it at stage Kernel.
 //
@@ -28,7 +28,7 @@ using mlir_edsl::BlockedStage;
 // Reduces the MR x NR x KC tile to the MR x NR x 1 register tile.
 //
 // When A was packed there is an un-transpose in front of the tile (hoisting
-// with a transpose leaves one behind, see packA in the tile-and-pack pass)
+// with a transpose leaves one behind, see packA in the pack pass)
 // which must move inside this loop, or every microtile pays a full MR x KC
 // copy. Fusing the producer into the generated k-loop makes each k step
 // transpose a 1 x MR row of A~ instead — i.e. exactly the contiguous read the
@@ -97,7 +97,7 @@ struct LinalgMatmulBlockedKernelPass
         std::pair<mlir::linalg::MatmulOp, mlir_edsl::MatmulStrategy>>
         tiles;
     if (mlir::failed(mlir_edsl::collectBlockedTilesAtStage(
-            func, BlockedStage::Tiled, tiles)))
+            func, BlockedStage::Packed, tiles)))
       return signalPassFailure();
 
     // A blocked tile cannot fall back to the older passes, which skip it.
