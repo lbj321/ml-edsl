@@ -1,0 +1,9 @@
+name: np-mkl
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - numpy
+  - libblas=*=*mkl
+  - threadpoolctl
