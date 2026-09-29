@@ -29,7 +29,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("k", type=int)
     parser.add_argument("--threads", type=int, required=True)
     parser.add_argument("--repeats", type=int, default=None,
-                        help="samples to time (default: common.repeats_for)")
+                        help="samples to time; overrides --min-time")
+    parser.add_argument("--min-time", type=float, default=3.0,
+                        help="seconds of timed calls to cover (default: 3)")
     return parser.parse_args()
 
 
@@ -60,7 +62,7 @@ def main() -> int:
     import numpy as np
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from common import WARMUP, repeats_for, time_call
+    from common import WARMUP, repeats_for_budget, time_call_with_cpu
 
     m, n, k = args.m, args.n, args.k
     rng = np.random.default_rng(0)
@@ -77,11 +79,9 @@ def main() -> int:
 
     for _ in range(WARMUP):
         call()
-    repeats = args.repeats or repeats_for(round((m * n * k) ** (1 / 3)))
-    wall0, cpu0 = time.perf_counter(), time.process_time()
-    timing = time_call(call, repeats)
-    cpu_per_wall = ((time.process_time() - cpu0)
-                    / (time.perf_counter() - wall0))
+    repeats = args.repeats or repeats_for_budget(
+        call, round((m * n * k) ** (1 / 3)), args.min_time)
+    timing, cpu_per_wall = time_call_with_cpu(call, repeats)
 
     result = {
         "framework": "jax",

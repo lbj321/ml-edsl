@@ -32,7 +32,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("k", type=int)
     parser.add_argument("--threads", type=int, required=True)
     parser.add_argument("--repeats", type=int, default=None,
-                        help="samples to time (default: common.repeats_for)")
+                        help="samples to time; overrides --min-time")
+    parser.add_argument("--min-time", type=float, default=3.0,
+                        help="seconds of timed calls to cover (default: 3)")
     return parser.parse_args()
 
 
@@ -61,7 +63,7 @@ def main() -> int:
     import threadpoolctl
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from common import WARMUP, repeats_for, time_call
+    from common import WARMUP, repeats_for_budget, time_call_with_cpu
 
     blas = blas_info(threadpoolctl.threadpool_info())
     if blas["num_threads"] != args.threads:
@@ -75,10 +77,14 @@ def main() -> int:
     b = rng.random((k, n), dtype=np.float32)
 
     # Allocate the output per call, as the EDSL call and bench_matmul.py do.
-    for _ in range(WARMUP):
+    def call() -> None:
         np.matmul(a, b)
-    repeats = args.repeats or repeats_for(round((m * n * k) ** (1 / 3)))
-    timing = time_call(lambda: np.matmul(a, b), repeats)
+
+    for _ in range(WARMUP):
+        call()
+    repeats = args.repeats or repeats_for_budget(
+        call, round((m * n * k) ** (1 / 3)), args.min_time)
+    timing, cpu_per_wall = time_call_with_cpu(call, repeats)
 
     result = {
         "framework": "numpy",
@@ -91,6 +97,7 @@ def main() -> int:
         "m": m, "n": n, "k": k,
         "threads": args.threads,
         "repeats": repeats,
+        "cpu_per_wall": cpu_per_wall,
         "median_s": timing.median,
         "p10_s": timing.p10,
         "p90_s": timing.p90,

@@ -1,11 +1,16 @@
 """Shared helpers for EDSL vs NumPy benchmarks."""
 
+import math
 import statistics
+import time
 import timeit
 from typing import Callable, NamedTuple
 
 SIZES = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
 WARMUP = 5
+# Keeps a min_time budget from turning a microsecond call into millions of
+# samples, where per-sample timeit overhead would dominate the runtime.
+MAX_REPEATS = 100_000
 
 
 class Timing(NamedTuple):
@@ -78,6 +83,31 @@ def repeats_for(N: int) -> int:
     if N <= 512:
         return 150
     return 25
+
+
+def repeats_for_budget(fn: Callable[[], object], N: int,
+                       min_time: float) -> int:
+    """Samples covering at least `min_time` seconds of calls to `fn`, and no
+    fewer than repeats_for(N).
+
+    A fixed count at large N is over in ~0.1 s multithreaded, before the
+    clock has dropped to what it sustains, so short runs report burst rates
+    that differ per library. Call after warmup: the estimate times 3 calls.
+    """
+    t_call = timeit.timeit(fn, number=3) / 3
+    budget = math.ceil(min_time / t_call) if t_call > 0 else MAX_REPEATS
+    return max(repeats_for(N), min(budget, MAX_REPEATS))
+
+
+def time_call_with_cpu(fn: Callable[[], object],
+                       n: int) -> tuple[Timing, float]:
+    """time_call, plus process CPU seconds per wall second over the samples:
+    roughly how many threads were busy, including any spin-waiting."""
+    wall0, cpu0 = time.perf_counter(), time.process_time()
+    timing = time_call(fn, n)
+    cpu_per_wall = ((time.process_time() - cpu0)
+                    / (time.perf_counter() - wall0))
+    return timing, cpu_per_wall
 
 
 def print_section(title: str, rows: list):
