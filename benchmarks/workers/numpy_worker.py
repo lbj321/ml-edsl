@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Time one float32 NumPy matmul and print the result as a JSON line.
+"""Time one float32 NumPy matmul or dense layer and print a JSON line.
 
 Usage:
     <env>/bin/python benchmarks/workers/numpy_worker.py M N K --threads T
+        [--op matmul|dense]
 
-Runs in any of the benchmarks/envs/np-* conda envs. Times C = A @ B with
-A: MxK and B: KxN, reporting which BLAS library NumPy actually loaded so the
-orchestrator can reject a run on the wrong one. Only the JSON line goes to
+Runs in any of the benchmarks/envs/np-* conda envs. With X: MxK, W: KxN and
+b: N, times X @ W (matmul) or relu(X @ W + b) (dense), reporting which BLAS
+library NumPy actually loaded so the orchestrator can reject a run on the
+wrong one. GFLOPS counts 2*M*N*K for both ops. Only the JSON line goes to
 stdout; anything else goes to stderr.
 """
 
@@ -31,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("n", type=int)
     parser.add_argument("k", type=int)
     parser.add_argument("--threads", type=int, required=True)
+    parser.add_argument("--op", choices=("matmul", "dense"), default="matmul")
     parser.add_argument("--repeats", type=int, default=None,
                         help="samples to time; overrides --min-time")
     parser.add_argument("--min-time", type=float, default=3.0,
@@ -73,12 +76,23 @@ def main() -> int:
 
     m, n, k = args.m, args.n, args.k
     rng = np.random.default_rng(0)
-    a = rng.random((m, k), dtype=np.float32)
-    b = rng.random((k, n), dtype=np.float32)
+    x = rng.random((m, k), dtype=np.float32)
+    w = rng.random((k, n), dtype=np.float32)
+    bias = rng.random(n, dtype=np.float32)
 
     # Allocate the output per call, as the EDSL call and bench_matmul.py do.
-    def call() -> None:
-        np.matmul(a, b)
+    # The dense epilogue updates it in place: still unfused passes over C,
+    # but without bench_dense_layer.py's two extra temporaries.
+    if args.op == "matmul":
+        def call() -> None:
+            np.matmul(x, w)
+    elif args.op == "dense":
+        def call() -> None:
+            c = np.matmul(x, w)
+            c += bias
+            np.maximum(c, 0.0, out=c)
+    else:
+        raise ValueError(f"unknown op {args.op!r}")
 
     for _ in range(WARMUP):
         call()
@@ -88,6 +102,7 @@ def main() -> int:
 
     result = {
         "framework": "numpy",
+        "op": args.op,
         "blas": blas["internal_api"],
         "blas_version": blas["version"],
         # Only OpenBLAS and BLIS report a kernel architecture; MKL does not.

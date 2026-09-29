@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Time one float32 jitted JAX matmul and print the result as a JSON line.
+"""Time one float32 jitted JAX matmul or dense layer and print a JSON line.
 
 Usage:
     <env>/bin/python benchmarks/workers/jax_worker.py M N K --threads T
+        [--op matmul|dense]
 
-Runs in the benchmarks/envs/jax conda env. Times C = A @ B with A: MxK and
-B: KxN on the CPU device. Only the JSON line goes to stdout.
+Runs in the benchmarks/envs/jax conda env. With X: MxK, W: KxN and b: N,
+times X @ W (matmul) or relu(X @ W + b) (dense) on the CPU device. GFLOPS
+counts 2*M*N*K for both ops. Only the JSON line goes to stdout.
 
 threadpoolctl cannot see XLA's thread pool, so the thread count is set by
 restricting the process to T CPUs before jax is imported (XLA sizes its pool
@@ -28,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("n", type=int)
     parser.add_argument("k", type=int)
     parser.add_argument("--threads", type=int, required=True)
+    parser.add_argument("--op", choices=("matmul", "dense"), default="matmul")
     parser.add_argument("--repeats", type=int, default=None,
                         help="samples to time; overrides --min-time")
     parser.add_argument("--min-time", type=float, default=3.0,
@@ -66,16 +69,26 @@ def main() -> int:
 
     m, n, k = args.m, args.n, args.k
     rng = np.random.default_rng(0)
-    a = jax.device_put(rng.random((m, k), dtype=np.float32))
-    b = jax.device_put(rng.random((k, n), dtype=np.float32))
+    x = jax.device_put(rng.random((m, k), dtype=np.float32))
+    w = jax.device_put(rng.random((k, n), dtype=np.float32))
+    bias = jax.device_put(rng.random(n, dtype=np.float32))
 
-    matmul = jax.jit(jnp.matmul)
+    if args.op == "matmul":
+        fn, inputs = jnp.matmul, (x, w)
+    elif args.op == "dense":
+        def fn(x, w, bias):
+            return jnp.maximum(x @ w + bias, 0.0)
+        inputs = (x, w, bias)
+    else:
+        raise ValueError(f"unknown op {args.op!r}")
+
+    jitted = jax.jit(fn)
     t0 = time.perf_counter()
-    matmul(a, b).block_until_ready()
+    jitted(*inputs).block_until_ready()
     compile_s = time.perf_counter() - t0
 
     def call() -> None:
-        matmul(a, b).block_until_ready()
+        jitted(*inputs).block_until_ready()
 
     for _ in range(WARMUP):
         call()
@@ -85,6 +98,7 @@ def main() -> int:
 
     result = {
         "framework": "jax",
+        "op": args.op,
         "jax_version": jax.__version__,
         "xla_flags": os.environ.get("XLA_FLAGS"),
         "cpus": cpus,
