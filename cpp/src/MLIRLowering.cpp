@@ -268,6 +268,9 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(
       createLinalgMatmulBlockedDistributePass());
   pm.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      createLinalgMatmulBlockedFuseEpiloguePass());
+  pm.addPass(mlir::createCanonicalizerPass());
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedTilePass());
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedPackPass());

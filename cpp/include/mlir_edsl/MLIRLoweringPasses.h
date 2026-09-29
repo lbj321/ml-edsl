@@ -25,6 +25,9 @@ std::unique_ptr<mlir::Pass> createLinalgGenericTilingPass();
 /// MatmulStrategy.h), reachable from mlir-edsl-opt; the other three read the
 /// strategy from the tiles' mlir_edsl.blocked attribute.
 std::unique_ptr<mlir::Pass> createLinalgMatmulBlockedDistributePass();
+/// Fuses the elementwise generics consuming a distributed matmul into its
+/// ic x jc forall. Runs between distribute and tile.
+std::unique_ptr<mlir::Pass> createLinalgMatmulBlockedFuseEpiloguePass();
 std::unique_ptr<mlir::Pass> createLinalgMatmulBlockedTilePass();
 std::unique_ptr<mlir::Pass> createLinalgMatmulBlockedPackPass();
 std::unique_ptr<mlir::Pass> createLinalgMatmulBlockedKernelPass();

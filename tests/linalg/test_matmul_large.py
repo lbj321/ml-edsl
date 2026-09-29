@@ -46,3 +46,19 @@ class TestLargeShapes:
         X = np.ones((1024, 1024), dtype=np.float32)
         result = relu_fn(X)
         np.testing.assert_allclose(result, X, rtol=1e-4)
+
+    def test_dense_layer_1024(self, backend):
+        """1024x1024 relu(X @ W + b) matches NumPy, with the bias and relu
+        fused into the blocked matmul's forall."""
+        @ml_function
+        def dense_fn(X: Tensor[f32, 1024, 1024], W: Tensor[f32, 1024, 1024],
+                     b: Tensor[f32, 1024]) -> Tensor[f32, 1024, 1024]:
+            return relu(matmul(X, W) + b)
+
+        rng = np.random.default_rng(0)
+        X = rng.standard_normal((1024, 1024)).astype(np.float32)
+        W = rng.standard_normal((1024, 1024)).astype(np.float32)
+        b = rng.standard_normal(1024).astype(np.float32)
+        result = dense_fn(X, W, b)
+        expected = np.maximum(X @ W + b, 0)
+        np.testing.assert_allclose(result, expected, rtol=1e-3, atol=1e-3)

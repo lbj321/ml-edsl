@@ -12,6 +12,7 @@ import numpy as np
 from mlir_edsl import ml_function, Tensor, f32, i32, matmul, relu
 
 DISTRIBUTE = "linalg-matmul-blocked-distribute"
+FUSE_EPILOGUE = "linalg-matmul-blocked-fuse-epilogue"
 TILE = "linalg-matmul-blocked-tile"
 PACK = "linalg-matmul-blocked-pack"
 KERNEL = "linalg-matmul-blocked-kernel"
@@ -261,6 +262,43 @@ class TestBlockedMatmulConsumers:
         // CHECK: library_call = "bias_add"
         // CHECK: library_call = "relu"
         """, after=KERNEL)
+
+
+class TestBlockedMatmulEpilogueFusion:
+    """The bias/relu chain is pulled into the matmul's ic x jc forall."""
+
+    def test_bias_and_relu_fused_into_forall(self, check_lowered_ir):
+        """Both generics are computed per block, before the forall yields."""
+        _run_dense(N, N, N)
+        check_lowered_ir("""
+        // CHECK: scf.forall
+        // CHECK: linalg.matmul {mlir_edsl.blocked = {{{.*}}stage = "distributed"
+        // CHECK: library_call = "bias_add"
+        // CHECK: library_call = "relu"
+        // CHECK: scf.forall.in_parallel
+        """, after=FUSE_EPILOGUE)
+
+    def test_padded_matmul_epilogue_stays_outside(self, check_lowered_ir):
+        """The padding copy-out sits between the forall and the generics, so
+        the chain is left unfused rather than fused across it."""
+        _run_dense(*SHAPE_PADDED)
+        check_lowered_ir("""
+        // CHECK: linalg.matmul {mlir_edsl.blocked = {{{.*}}stage = "distributed"
+        // CHECK: scf.forall.in_parallel
+        // CHECK: library_call = "bias_add"
+        // CHECK: library_call = "relu"
+        """, after=FUSE_EPILOGUE)
+
+
+def _run_dense(m, k, n):
+    """Compile and call relu(matmul(A, B) + b), returning nothing."""
+    @ml_function
+    def dense(A: Tensor[f32, m, k], B: Tensor[f32, k, n],
+              b: Tensor[f32, n]) -> Tensor[f32, m, n]:
+        return relu(matmul(A, B) + b)
+
+    dense(np.ones((m, k), dtype=np.float32), np.ones((k, n), dtype=np.float32),
+          np.ones(n, dtype=np.float32))
 
 
 class TestBlockedMatmulPadding:
