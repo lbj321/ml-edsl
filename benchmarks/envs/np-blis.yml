@@ -3,7 +3,8 @@ channels:
   - conda-forge
   - nodefaults
 dependencies:
-  - python=3.11
-  - numpy
-  - libblas=*=*blis
-  - threadpoolctl
+  - python=3.11.16
+  - numpy=2.4.6
+  - threadpoolctl=3.7.0
+  - libblas=3.11.0=*blis
+  - blis=2.0

@@ -3,7 +3,9 @@ channels:
   - conda-forge
   - nodefaults
 dependencies:
-  - python=3.11
+  - python=3.11.16
   - pip
   - pip:
-      - jax
+      - jax==0.10.2
+      - jaxlib==0.10.2
+      - numpy==2.4.6

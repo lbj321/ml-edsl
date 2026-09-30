@@ -3,7 +3,9 @@ channels:
   - conda-forge
   - nodefaults
 dependencies:
-  - python=3.11
-  - numpy
-  - libblas=*=*mkl
-  - threadpoolctl
+  - python=3.11.16
+  - numpy=2.4.6
+  - threadpoolctl=3.7.0
+  - libblas=3.11.0=*mkl
+  - mkl=2026.1.0
+  - llvm-openmp=23.1.2
