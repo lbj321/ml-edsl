@@ -788,6 +788,50 @@ only:
 - Snapshots at 128^3, 256^3 and 1024^3 are byte-identical apart from the
   deleted passes and their canonicalizes.
 
+## Pack after all tiling (DONE)
+
+The kernel pass now runs before pack, so all tiling is done before any
+packing:
+
+| pass | picks up | leaves stage |
+|---|---|---|
+| `linalg-matmul-blocked-distribute` | any matmul `chooseStrategy` accepts | `distributed` |
+| `linalg-matmul-blocked-tile` | `distributed` | `tiled` |
+| `linalg-matmul-blocked-kernel` | `tiled` | `kernel` |
+| `linalg-matmul-blocked-pack` | `kernel` | `packed` |
+
+- **The kernel pass marks its k-loop** with `mlir_edsl.blocked_hoist`, and
+  pack hoists out of k as well as jr and ir. k becomes one more packing loop,
+  so the panels are `B~ = (NC/NR) x KC x 1 x NR` and `A~ = (MC/MR) x KC x 1 x
+  MR`, which have the same layout in memory as before. Pack still needs a marked jr or ir
+  to pack at all; the k marker alone does not count.
+- **Deleted:** the kernel pass's tile-and-fuse of the un-transpose (hoisting
+  from inside the k-loop leaves it there already), the 8-row tiling of both
+  packing copies (`kPackTileRows`; each copy is now one k-row: a 1 x NR
+  vector copy for B, a 4x1 -> 1x4 transpose for A), the MC == MR
+  `replaceByPackingResult` workaround in `packA` (the k-loop always indexes A,
+  so there is always a packing loop; it never fired across the suite), and
+  the `tensor` TilingInterface registration, now unused.
+- **Whole-tensor rule restated.** The k-tile always slices the operands, so
+  "operand is not a slice" never held any more and 16^2 packed B. Pack now
+  skips an operand whose MR x KC / KC x NR block is its whole tensor, the old
+  decision stated on shapes.
+- **Faster, cause not investigated.** Per-k-row packing copies were expected
+  to cost A's vectorized 8x4 transposes, but, best-of-N through the Python
+  API, taskset 0-7:
+
+  | | 256^3 | 512^3 | 1024^3 |
+  |---|---|---|---|
+  | before, 1 thread | 91-94 | 91-94 | 85-91 |
+  | after, 1 thread | 100-103 | 100-105 | 92-102 |
+  | before, 8 threads | 162 | 560 | 542-544 |
+  | after, 8 threads | 176-182 | 628-661 | 561-593 |
+
+  Not yet confirmed with the C harness.
+- **Tests:** the pack/kernel IR tests now check the per-k-row shapes, the
+  k-loop marker, and that A's un-transpose sits in the compute k-loop.
+  **744 passed, 5 skipped.**
+
 ## Next
 
 1. **The multithreaded padding overhead** above, if padded shapes matter for

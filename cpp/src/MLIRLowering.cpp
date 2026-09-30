@@ -176,12 +176,8 @@ void registerCPUDialects(mlir::DialectRegistry &registry) {
   mlir::vector::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::vector::registerSubsetOpInterfaceExternalModels(registry);
   mlir::linalg::registerTilingInterfaceExternalModels(registry);
-  // tensor.pad's TilingInterface is an external model too. Without it,
-  // the blocked pack pass cannot tile the hoisted pad that
-  // builds B~ — the dyn_cast<TilingInterface> simply fails, with no
-  // diagnostic to point at the missing registration. That tiling in turn
-  // reifies the pad's result shape, which needs the InferType models.
-  mlir::tensor::registerTilingInterfaceExternalModels(registry);
+  // Without the tensor InferType models lowering a blocked matmul crashes
+  // rather than failing with a diagnostic.
   mlir::tensor::registerInferTypeOpInterfaceExternalModels(registry);
   mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::scf::registerValueBoundsOpInterfaceExternalModels(registry);
@@ -273,9 +269,9 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedTilePass());
   pm.addPass(mlir::createCanonicalizerPass());
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedPackPass());
-  pm.addPass(mlir::createCanonicalizerPass());
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedKernelPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedPackPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
   // Tile linalg.generic ops (elementwise, bias, relu, etc.) to strips of 8

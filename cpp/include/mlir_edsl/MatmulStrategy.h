@@ -21,8 +21,9 @@ namespace mlir_edsl {
 /// (see isLeftForScalarLowering).
 constexpr llvm::StringLiteral kBlockedAttrName = "mlir_edsl.blocked";
 
-/// Unit attribute the tile pass sets on the register loops (jr, ir) of a
-/// blocked tile: the loops the pack pass hoists the packed panels out of.
+/// Unit attribute the tile and kernel passes set on the register loops (jr,
+/// ir) and the k-loop of a blocked tile: the loops the pack pass hoists the
+/// packed panels out of.
 constexpr llvm::StringLiteral kBlockedHoistAttrName = "mlir_edsl.blocked_hoist";
 
 /// A complete blocking decision for one linalg.matmul: the register tile (the
@@ -108,8 +109,8 @@ inline int64_t paddedExtent(int64_t dim, int64_t block) {
 ///
 ///   linalg-matmul-blocked-distribute  → Distributed (inside the ic x jc forall)
 ///   linalg-matmul-blocked-tile        → Tiled (MR x NR x KC)
-///   linalg-matmul-blocked-pack        → Packed (A and B operands packed)
 ///   linalg-matmul-blocked-kernel      → Kernel (MR x NR x 1)
+///   linalg-matmul-blocked-pack        → Packed (A and B operands packed)
 ///
 /// Together they produce the BLIS loop nest
 ///
@@ -129,7 +130,7 @@ inline int64_t paddedExtent(int64_t dim, int64_t block) {
 /// loop-level hand-over is kBlockedHoistAttrName: the pack pass hoists out of
 /// the marked loops that survived, and a missing marker means that loop was
 /// folded away.
-enum class BlockedStage { Distributed, Tiled, Packed, Kernel };
+enum class BlockedStage { Distributed, Tiled, Kernel, Packed };
 
 llvm::StringRef stringifyBlockedStage(BlockedStage stage);
 std::optional<BlockedStage> symbolizeBlockedStage(llvm::StringRef str);
