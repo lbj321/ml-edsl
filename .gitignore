@@ -94,6 +94,9 @@ ir_html/
 # AST output
 ast_output
 
+# Benchmark results from benchmarks/run_matrix.py
+benchmarks/results/
+
 # Documentation builds
 docs/_build/
 docs/build/
