@@ -92,9 +92,10 @@ def repeats_for_budget(fn: Callable[[], object], N: int,
 
     A fixed count at large N is over in ~0.1 s multithreaded, before the
     clock has dropped to what it sustains, so short runs report burst rates
-    that differ per library. Call after warmup: the estimate times 3 calls.
+    that differ per library. Call after warmup. The estimate is the median of
+    5 calls, not a mean, so one slow call cannot shrink the budget.
     """
-    t_call = timeit.timeit(fn, number=3) / 3
+    t_call = statistics.median(timeit.repeat(fn, number=1, repeat=5))
     budget = math.ceil(min_time / t_call) if t_call > 0 else MAX_REPEATS
     return max(repeats_for(N), min(budget, MAX_REPEATS))
 
