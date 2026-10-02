@@ -2,10 +2,15 @@
 """Run every worker over a grid of shapes, thread counts and ops.
 
 Usage:
-    python3 benchmarks/run_matrix.py [--backends mkl edsl ...]
-        [--shapes 1024x1024x1024 64x4096x1024] [--threads 1 8]
-        [--ops matmul dense] [--rounds 2] [--min-time 3]
+    python3 benchmarks/run_matrix.py --preset overhead|scaling|padding|epilogue|ml
+    python3 benchmarks/run_matrix.py [--preset ...] [--backends mkl edsl ...]
+        [--shapes 1024x1024x1024 64x4096x1024] [--threads 1 2 4 8]
+        [--ops matmul dense] [--rounds 2] [--min-time 2]
     python3 benchmarks/run_matrix.py --report benchmarks/results/<file>.jsonl
+
+Each preset is a few-minute chunk answering one question (see PRESETS).
+Options given on the command line override the preset's; without a preset,
+--backends, --shapes, --threads and --ops are required.
 
 Each point runs in its own worker process, in that backend's env. Rounds
 repeat the whole grid with the backend order rotated, so no backend always
@@ -43,24 +48,76 @@ BACKENDS = {
 }
 
 
+def _square(*sizes: int) -> list:
+    return [f"{n}x{n}x{n}" for n in sizes]
+
+
+# Every preset includes MKL so its ratios have a baseline from the same
+# session. Durations measured on the i7-9700KF dev machine.
+PRESETS = {
+    # ~1 min. Fixed per-call cost, and which libraries thread small sizes.
+    "overhead": {
+        "backends": list(BACKENDS), "shapes": _square(8, 16, 32, 64, 128),
+        "threads": [1, 8], "ops": ["matmul"], "rounds": 1, "min_time": 1.0,
+    },
+    # ~3.5 min. Thread scaling of large square matmuls.
+    "scaling": {
+        "backends": ["mkl", "openblas", "jax", "edsl"],
+        "shapes": _square(256, 512, 1024, 2048),
+        "threads": [1, 2, 4, 8], "ops": ["matmul"],
+        "rounds": 1, "min_time": 2.0,
+    },
+    # ~2.5 min. Cost of extents no cache block divides, against 1024.
+    "padding": {
+        "backends": ["mkl", "edsl"], "shapes": _square(1000, 1023, 1024),
+        "threads": [1, 2, 4, 8], "ops": ["matmul"],
+        "rounds": 2, "min_time": 2.0,
+    },
+    # ~4 min. Dense layer against bare matmul, around the 256 -> 512 break.
+    "epilogue": {
+        "backends": ["mkl", "jax", "edsl"], "shapes": _square(256, 512, 1024),
+        "threads": [1, 8], "ops": ["matmul", "dense"],
+        "rounds": 2, "min_time": 2.0,
+    },
+    # ~1.5 min. Dense layers at batch 1..256 on a 1024 -> 4096 layer.
+    "ml": {
+        "backends": ["mkl", "openblas", "jax", "edsl"],
+        "shapes": [f"{b}x4096x1024" for b in (1, 16, 64, 256)],
+        "threads": [1, 8], "ops": ["dense"], "rounds": 1, "min_time": 2.0,
+    },
+}
+GRID_DEFAULTS = {"rounds": 1, "min_time": 2.0}
+
+
 def parse_args() -> argparse.Namespace:
     """Parse the grid, or the results file to report on."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--backends", nargs="+", choices=list(BACKENDS),
-                        default=list(BACKENDS))
+    parser.add_argument("--preset", choices=list(PRESETS))
+    parser.add_argument("--backends", nargs="+", choices=list(BACKENDS))
     parser.add_argument("--shapes", nargs="+",
-                        default=["1024x1024x1024", "64x4096x1024"],
                         help="MxNxK: X is MxK, W is KxN")
-    parser.add_argument("--threads", nargs="+", type=int, default=[1, 8])
-    parser.add_argument("--ops", nargs="+", choices=("matmul", "dense"),
-                        default=["matmul", "dense"])
-    parser.add_argument("--rounds", type=int, default=2)
-    parser.add_argument("--min-time", type=float, default=3.0)
+    parser.add_argument("--threads", nargs="+", type=int)
+    parser.add_argument("--ops", nargs="+", choices=("matmul", "dense"))
+    parser.add_argument("--rounds", type=int)
+    parser.add_argument("--min-time", type=float)
     parser.add_argument("--out", type=Path, default=None,
                         help="results file (default: results/<timestamp>)")
     parser.add_argument("--report", type=Path, default=None,
                         help="print the tables for an existing results file")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.report:
+        return args
+
+    defaults = {**GRID_DEFAULTS, **PRESETS.get(args.preset, {})}
+    for key, value in defaults.items():
+        if getattr(args, key) is None:
+            setattr(args, key, value)
+    missing = [k for k in ("backends", "shapes", "threads", "ops")
+               if getattr(args, k) is None]
+    if missing:
+        parser.error("give --preset, or all of: "
+                     + ", ".join(f"--{k}" for k in missing))
+    return args
 
 
 def parse_shape(shape: str) -> tuple:
@@ -129,12 +186,13 @@ def run(args: argparse.Namespace) -> Path:
             raise RuntimeError(f"{backend}: {python} not found; "
                                "run benchmarks/setup_envs.sh")
 
-    out = args.out or RESULTS_DIR / (
-        datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + ".jsonl")
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    out = args.out or RESULTS_DIR / f"{stamp}-{args.preset or 'custom'}.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
     meta = {
         "meta": {
             "started": datetime.datetime.now().isoformat(timespec="seconds"),
+            "preset": args.preset,
             "backends": args.backends, "shapes": args.shapes,
             "threads": args.threads, "ops": args.ops,
             "rounds": args.rounds, "min_time": args.min_time,
@@ -173,71 +231,93 @@ def progress(res: dict) -> str:
     return f"{where} {res['gflops']:7.1f} GF"
 
 
+def fmt_time(seconds: float) -> str:
+    """Microseconds below 1 ms, milliseconds below 1 s, else seconds."""
+    if seconds < 1e-3:
+        return f"{seconds * 1e6:.1f}us"
+    if seconds < 1:
+        return f"{seconds * 1e3:.2f}ms"
+    return f"{seconds:.2f}s"
+
+
 def report(path: Path) -> None:
-    """Print one table per (op, shape) plus geomean ratios to the baseline."""
+    """Print GFLOPS and time tables per (op, shape), dense/matmul time
+    ratios when both ops ran, and geomean ratios to the baseline."""
     lines = [json.loads(l) for l in path.read_text().splitlines() if l]
     meta = lines[0]["meta"]
-    results = [r for r in lines[1:] if "error" not in r]
     for r in lines[1:]:
         if "error" in r:
             print(f"FAILED: {progress(r)}")
 
-    # Median over rounds of each round's median time.
-    gf = {}
-    for r in results:
+    # Median over rounds of each round's median.
+    gf, secs = {}, {}
+    for r in lines[1:]:
+        if "error" in r:
+            continue
         key = (r["op"], (r["m"], r["n"], r["k"]), r["backend"], r["threads"])
         gf.setdefault(key, []).append(r["gflops"])
+        secs.setdefault(key, []).append(r["median_s"])
     gf = {key: statistics.median(v) for key, v in gf.items()}
+    secs = {key: statistics.median(v) for key, v in secs.items()}
 
+    print(f"preset: {meta.get('preset') or 'custom'}, {meta['rounds']} "
+          f"round(s), min_time {meta['min_time']} s")
     edsl = meta.get("edsl")
     if edsl:
         print(f"edsl: {edsl['branch']}@{edsl['commit']}"
               f"{' (dirty)' if edsl['dirty'] else ''}, "
               f".so built {edsl['so_built']}"
               f"{' (OLDER THAN cpp/ HEAD)' if edsl['so_older_than_cpp'] else ''}")
-    threads = meta["threads"]
-    ratios = {}
-    for op in meta["ops"]:
-        for shape in map(parse_shape, meta["shapes"]):
-            m, n, k = shape
-            print(f"\n=== {op} {m}x{n}x{k}  (GFLOPS, median of "
-                  f"{meta['rounds']} rounds) ===")
-            header = f"{'backend':9}" + "".join(
-                f"{f'{t}T':>9}{f'/{BASELINE}':>8}" for t in threads)
-            if len(threads) > 1:
-                header += f"{f'{threads[-1]}T/{threads[0]}T':>9}"
-            print(header)
-            for backend in meta["backends"]:
-                row = f"{backend:9}"
-                for t in threads:
-                    val = gf.get((op, shape, backend, t))
-                    base = gf.get((op, shape, BASELINE, t))
-                    if val is None:
-                        row += f"{'-':>9}{'-':>8}"
-                        continue
-                    row += f"{val:9.1f}"
-                    if base:
-                        ratio = val / base
-                        ratios.setdefault((backend, t), []).append(ratio)
-                        row += f"{ratio:7.2f}x"
-                    else:
-                        row += f"{'-':>8}"
-                lo = gf.get((op, shape, backend, threads[0]))
-                hi = gf.get((op, shape, backend, threads[-1]))
-                if len(threads) > 1 and lo and hi:
-                    row += f"{hi / lo:8.1f}x"
-                print(row)
 
-    if ratios:
-        print(f"\n=== geometric mean of GFLOPS / {BASELINE} "
-              "over all ops and shapes ===")
-        for backend in meta["backends"]:
+    threads, backends = meta["threads"], meta["backends"]
+    shapes = [parse_shape(s) for s in meta["shapes"]]
+    thread_cols = "".join(f"{f'{t}T':>10}" for t in threads)
+    speedup = f"{f'{threads[-1]}T/{threads[0]}T':>9}" if len(threads) > 1 else ""
+
+    for op in meta["ops"]:
+        for shape in shapes:
+            print(f"\n=== {op} {'x'.join(map(str, shape))} ===")
+            print(f"{'GFLOPS':9}{thread_cols}{speedup}")
+            for b in backends:
+                vals = [gf.get((op, shape, b, t)) for t in threads]
+                row = "".join(f"{v:10.1f}" if v else f"{'-':>10}"
+                              for v in vals)
+                if speedup and vals[0] and vals[-1]:
+                    row += f"{vals[-1] / vals[0]:8.1f}x"
+                print(f"{b:9}{row}")
+            print(f"{'time':9}{thread_cols}")
+            for b in backends:
+                vals = [secs.get((op, shape, b, t)) for t in threads]
+                print(f"{b:9}" + "".join(
+                    f"{fmt_time(v):>10}" if v else f"{'-':>10}"
+                    for v in vals))
+
+    if {"matmul", "dense"} <= set(meta["ops"]):
+        print("\n=== dense / matmul time (1.00 = epilogue is free) ===")
+        print(f"{'shape':16}{'backend':9}{thread_cols}")
+        for shape in shapes:
+            for b in backends:
+                cells = []
+                for t in threads:
+                    d = secs.get(("dense", shape, b, t))
+                    m = secs.get(("matmul", shape, b, t))
+                    cells.append(f"{d / m:10.2f}" if d and m else f"{'-':>10}")
+                print(f"{'x'.join(map(str, shape)):16}{b:9}" + "".join(cells))
+
+    if BASELINE in backends:
+        print(f"\n=== geometric mean of GFLOPS / {BASELINE} over all ops "
+              "and shapes ===")
+        print(f"{'':9}{thread_cols}")
+        for b in backends:
             cells = []
             for t in threads:
-                r = ratios.get((backend, t))
-                cells.append(f"{t}T {statistics.geometric_mean(r):.2f}x"
-                             if r else f"{t}T -")
-            print(f"{backend:9} " + "   ".join(cells))
+                ratios = [gf[(op, s, b, t)] / gf[(op, s, BASELINE, t)]
+                          for op in meta["ops"] for s in shapes
+                          if (op, s, b, t) in gf
+                          and (op, s, BASELINE, t) in gf]
+                cells.append(f"{statistics.geometric_mean(ratios):9.2f}x"
+                             if ratios else f"{'-':>10}")
+            print(f"{b:9}" + "".join(cells))
 
 
 def main() -> int:
