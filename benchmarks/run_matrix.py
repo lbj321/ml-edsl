@@ -30,11 +30,12 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from aggregate import BASELINE, geomean_ratios, load, parse_shape, spread
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKERS = REPO_ROOT / "benchmarks" / "workers"
 RESULTS_DIR = REPO_ROOT / "benchmarks" / "results"
 CONDA_ENVS = Path.home() / "anaconda3" / "envs"
-BASELINE = "mkl"
 
 # name -> (interpreter, worker, field of the result line, expected value)
 BACKENDS = {
@@ -138,14 +139,6 @@ def parse_args() -> argparse.Namespace:
         parser.error("give --preset, or all of: "
                      + ", ".join(f"--{k}" for k in missing))
     return args
-
-
-def parse_shape(shape: str) -> tuple:
-    """'64x4096x1024' -> (64, 4096, 1024)."""
-    parts = shape.lower().split("x")
-    if len(parts) != 3:
-        raise ValueError(f"shape {shape!r} is not MxNxK")
-    return tuple(int(p) for p in parts)
 
 
 def git(*args: str) -> str:
@@ -295,28 +288,18 @@ def report(path: Path) -> None:
     """Print GFLOPS and time tables per (op, shape), dense/matmul time
     ratios when both ops ran, and geomean ratios to the baseline, paired
     per round."""
-    lines = [json.loads(l) for l in path.read_text().splitlines() if l]
-    meta = lines[0]["meta"]
-    for r in lines[1:]:
-        if "error" in r:
-            print(f"FAILED: {progress(r)}")
+    res = load(path)
+    meta = res.meta
+    for r in res.failed:
+        print(f"FAILED: {progress(r)}")
 
-    # Median over rounds of each round's median. Rounds are separate
-    # processes, so their spread is the run-to-run noise; the spread of
-    # samples within one process is far smaller and not reported here.
-    gf_rounds, secs, gf_by_round = {}, {}, {}
-    for r in lines[1:]:
-        if "error" in r:
-            continue
-        key = (r["op"], (r["m"], r["n"], r["k"]), r["backend"], r["threads"])
-        gf_rounds.setdefault(key, []).append(r["gflops"])
-        secs.setdefault(key, []).append(r["median_s"])
-        gf_by_round[(*key, r["round"])] = r["gflops"]
-    gf = {key: statistics.median(v) for key, v in gf_rounds.items()}
-    secs = {key: statistics.median(v) for key, v in secs.items()}
+    gf_spread = {key: spread(p.gflops) for key, p in res.points.items()}
+    gf = {key: s.median for key, s in gf_spread.items()}
+    secs = {key: spread(p.secs).median for key, p in res.points.items()}
     # Half the min-max range over rounds, relative to the median.
-    half_range = {key: (max(v) - min(v)) / 2 / gf[key]
-                  for key, v in gf_rounds.items() if len(v) > 1}
+    half_range = {key: (s.hi - s.lo) / 2 / s.median
+                  for key, s in gf_spread.items()
+                  if len(res.points[key].gflops) > 1}
 
     print(f"preset: {meta.get('preset') or 'custom'}, {meta['rounds']} "
           f"round(s), min_time {meta['min_time']} s")
@@ -329,8 +312,7 @@ def report(path: Path) -> None:
               f".so built {edsl['so_built']}"
               f"{' (OLDER THAN cpp/ HEAD)' if edsl['so_older_than_cpp'] else ''}")
 
-    threads, backends = meta["threads"], meta["backends"]
-    shapes = [parse_shape(s) for s in meta["shapes"]]
+    threads, backends, shapes = meta["threads"], meta["backends"], res.shapes
     thread_cols = "".join(f"{f'{t}T':>10}" for t in threads)
     speedup = f"{f'{threads[-1]}T/{threads[0]}T':>9}" if len(threads) > 1 else ""
 
@@ -376,26 +358,13 @@ def report(path: Path) -> None:
                 print(f"{'x'.join(map(str, shape)):16}{b:9}" + "".join(cells))
 
     if BASELINE in backends:
-        # Ratios are taken within each round, where both backends ran
-        # minutes apart, then summarised over rounds. This cancels drift
-        # across the session that dividing the two medians would keep.
-        rounds = sorted({key[-1] for key in gf_by_round})
         print(f"\n=== geometric mean of GFLOPS / {BASELINE} over all ops "
               "and shapes, paired per round ===")
         print(f"{'':9}{gf_cols}")
         for b in backends:
-            cells = []
-            for t in threads:
-                per_round = []
-                for rnd in rounds:
-                    ratios = [gf_by_round[(op, s, b, t, rnd)]
-                              / gf_by_round[(op, s, BASELINE, t, rnd)]
-                              for op in meta["ops"] for s in shapes
-                              if (op, s, b, t, rnd) in gf_by_round
-                              and (op, s, BASELINE, t, rnd) in gf_by_round]
-                    if ratios:
-                        per_round.append(statistics.geometric_mean(ratios))
-                cells.append(ratio_cell(per_round, width))
+            cells = [ratio_cell(list(geomean_ratios(res, b, t).values()),
+                                width)
+                     for t in threads]
             print(f"{b:9}" + "".join(cells))
 
 
