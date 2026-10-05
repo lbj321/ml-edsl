@@ -56,14 +56,6 @@ variance.
 - [x] **4a** Fix the `repeats_for_budget` docstring: `MAX_REPEATS` wins for
       µs calls, so "at least `min_time`" is false there.
 
-### Harness
-
-- [ ] **5** Consistent pinning for every backend: `taskset` from the
-      orchestrator, plus `OMP_PROC_BIND=close` `OMP_PLACES=cores` for the
-      OpenMP backends. Drop the JAX-only `sched_setaffinity`.
-- [ ] **6** Canary (MKL 1024³ 1T) at the start and end of each session;
-      record its drift.
-
 ### Reporting
 
 - [x] **8** `report()`: show between-round min–max next to each median.
@@ -107,7 +99,6 @@ Cap square sizes at 4096 (8192 only at 8T if at all): one 8192³ call is
 - Compare across sessions only via same-session ratios to MKL. This is
   also how to judge an EDSL change: run the preset, change and rebuild,
   run it again, compare the paired EDSL/MKL ratios (one EDSL build only).
-- Discard a session whose canary drifted.
 - Rounds a multiple of the backend count: ≥ 4 for any claim; ~8–10 for
   differences under 5%.
 
