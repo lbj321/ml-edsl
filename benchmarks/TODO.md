@@ -79,16 +79,23 @@ variance.
       within-process p10–p90: min–max of the round medians, labelled in
       the subtitle. Not a confidence interval. Bar charts show the median
       only (whiskers looked cluttered).
-- [ ] **P1** GFLOP/s vs. size, evenly spaced N slots (log2 for powers of
+- [x] **P1** GFLOP/s vs. size, evenly spaced N slots (log2 for powers of
       two, and keeps 1000/1023/1024 apart), one line per backend, dashed
-      peak line; 1T and all-cores versions. Needs a `size` preset
-      (~64–4096).
+      peak line; 1T and all-cores versions. No `size` preset: `scaling`
+      already covers 256–2048 × 4 backends, `overhead` covers ≤ 128, and
+      4096 at 1T alone is ~13 min over 4 backends × 4 rounds.
 - [x] **P2** Speedup vs. MKL, log y-axis, reference line at 1.0
       (`speedup.png`, per-round paired, drawn with the size plot).
 - [ ] **P3** Small-size latency (µs/call, log-log) with an empty-call
       overhead floor.
-- [ ] **P4** Thread scaling at one or two large sizes, with ideal-scaling
-      line.
+- [x] **P4** Thread scaling at one or two large sizes, with ideal-scaling
+      line: the dashed peak curve on `scaling.png`, which includes the
+      clock drop as cores fill.
+- [ ] **P9** Re-run `scaling` with the current harness (the only run is
+      1 round, no peak), machine idle, HWiNFO open: real bands and peak
+      lines for P1/P2/P4, and a check of the assumed 8T clock. Quick
+      2-round runs gave MKL 1024³ 8T 737 then 502 GF an hour apart;
+      explain that before trusting 8T numbers.
 - [ ] **P5** Shape coverage: non-square / tall-skinny / GEMV-like (M=1);
       coarse (~5×5) M×N heatmap of EDSL vs. best competitor, diverging
       colormap centred at 1.0.
