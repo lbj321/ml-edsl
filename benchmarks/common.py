@@ -12,8 +12,9 @@ SIZES = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
 WARMUP = 5
 BUDGET_CALLS = 5
 # Keeps a min_time budget from turning a microsecond call into millions of
-# samples, where per-sample timeit overhead would dominate the runtime.
-MAX_REPEATS = 100_000
+# samples. 10k pins one process's median to ~0.03%, far inside the 1-3%
+# that medians vary between processes, so more samples only cost time.
+MAX_REPEATS = 10_000
 
 
 class Timing(NamedTuple):
@@ -102,8 +103,9 @@ def repeats_for(N: int) -> int:
 
 
 def repeats_for_budget(budget_samples: list, N: int, min_time: float) -> int:
-    """Samples covering at least `min_time` seconds of calls, given a few
-    timed calls taken after warmup, and no fewer than repeats_for(N).
+    """Samples covering about `min_time` seconds of calls, given a few
+    timed calls taken after warmup: at most MAX_REPEATS (so µs calls cover
+    less) and no fewer than repeats_for(N).
 
     A fixed count at large N is over in ~0.1 s multithreaded, before the
     clock has dropped to what it sustains, so short runs report burst rates

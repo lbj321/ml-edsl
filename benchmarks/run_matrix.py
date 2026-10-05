@@ -9,7 +9,7 @@ Usage:
         [--dump-samples [DIR]]
     python3 benchmarks/run_matrix.py --report benchmarks/results/<file>.jsonl
 
-Each preset is a few-minute chunk answering one question (see PRESETS).
+Each preset answers one question in 5-17 minutes (see PRESETS).
 Options given on the command line override the preset's; without a preset,
 --backends, --shapes, --threads and --ops are required.
 
@@ -55,37 +55,40 @@ def _square(*sizes: int) -> list:
 
 
 # Every preset includes MKL so its ratios have a baseline from the same
-# session. Durations measured on the i7-9700KF dev machine.
+# session. Durations on the i7-9700KF dev machine, scaled from 1- or
+# 2-round timings. 5 rounds because rounds, not samples, set the noise:
+# round medians vary 1-3%, and at 8T a process running right after another
+# 8T run is 3-5% slower, which only rotation over several rounds cancels.
 PRESETS = {
-    # ~1 min. Fixed per-call cost, and which libraries thread small sizes.
+    # ~5 min. Fixed per-call cost, and which libraries thread small sizes.
     "overhead": {
         "backends": list(BACKENDS), "shapes": _square(8, 16, 32, 64, 128),
-        "threads": [1, 8], "ops": ["matmul"], "rounds": 1, "min_time": 1.0,
+        "threads": [1, 8], "ops": ["matmul"], "rounds": 5, "min_time": 1.0,
     },
-    # ~3.5 min. Thread scaling of large square matmuls.
+    # ~17 min. Thread scaling of large square matmuls.
     "scaling": {
         "backends": ["mkl", "openblas", "jax", "edsl"],
         "shapes": _square(256, 512, 1024, 2048),
         "threads": [1, 2, 4, 8], "ops": ["matmul"],
-        "rounds": 1, "min_time": 2.0,
+        "rounds": 5, "min_time": 2.0,
     },
-    # ~2.5 min. Cost of extents no cache block divides, against 1024.
+    # ~6 min. Cost of extents no cache block divides, against 1024.
     "padding": {
         "backends": ["mkl", "edsl"], "shapes": _square(1000, 1023, 1024),
         "threads": [1, 2, 4, 8], "ops": ["matmul"],
-        "rounds": 2, "min_time": 2.0,
+        "rounds": 5, "min_time": 2.0,
     },
-    # ~4 min. Dense layer against bare matmul, around the 256 -> 512 break.
+    # ~10 min. Dense layer against bare matmul, around the 256 -> 512 break.
     "epilogue": {
         "backends": ["mkl", "jax", "edsl"], "shapes": _square(256, 512, 1024),
         "threads": [1, 8], "ops": ["matmul", "dense"],
-        "rounds": 2, "min_time": 2.0,
+        "rounds": 5, "min_time": 2.0,
     },
-    # ~1.5 min. Dense layers at batch 1..256 on a 1024 -> 4096 layer.
+    # ~7 min. Dense layers at batch 1..256 on a 1024 -> 4096 layer.
     "ml": {
         "backends": ["mkl", "openblas", "jax", "edsl"],
         "shapes": [f"{b}x4096x1024" for b in (1, 16, 64, 256)],
-        "threads": [1, 8], "ops": ["dense"], "rounds": 1, "min_time": 2.0,
+        "threads": [1, 8], "ops": ["dense"], "rounds": 5, "min_time": 2.0,
     },
     # ~7 min. Variance pilot: many rounds of a few points, with raw samples, to
     # compare between-process and within-process spread and to see the

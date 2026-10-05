@@ -53,7 +53,7 @@ variance.
       state; never compare runs with different `min_time`. Revisit for
       headline 8T numbers (measure those few points with `--min-time 15`)
       or for a change that alters how hard the kernel loads the cores.
-- [ ] **4a** Fix the `repeats_for_budget` docstring: `MAX_REPEATS` wins for
+- [x] **4a** Fix the `repeats_for_budget` docstring: `MAX_REPEATS` wins for
       µs calls, so "at least `min_time`" is false there.
 
 ### Harness
@@ -72,9 +72,10 @@ variance.
 - [x] **8** `report()`: show between-round min–max next to each median.
 - [ ] **9** Ratios computed per round (paired), then summarised — not a
       ratio of medians. Applies to EDSL vs. MKL and build vs. build.
-- [ ] **10** ≥ 5 rounds for any preset with 8T runs (order effect + ~2%
-      sd); keep `min_time` at 2 s everywhere (see 4); lower `MAX_REPEATS`
-      for small sizes.
+- [x] **10** 5 rounds in every preset (all have 8T runs; order effect +
+      ~2% sd); each preset keeps its `min_time` (see 4); `MAX_REPEATS`
+      100k → 10k. Presets now take ~5–17 min; trim `scaling` (~17 min) if
+      that's too long.
 
 ## Presentation
 
