@@ -15,7 +15,7 @@ chart the file has data for:
   shapes.png    GFLOPS per shape as grouped bars, for the remaining files
 Each GFLOPS chart has a *_time.png twin with time per call on a log axis.
 Lines are the median over rounds, with a band from the slowest to the
-fastest round; bars carry the same range as whiskers.
+fastest round; bars show the median only.
 """
 
 import argparse
@@ -29,7 +29,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import (FuncFormatter, LogLocator,  # noqa: E402
                                NullFormatter)
 
-from aggregate import Results, Spread, load, spread  # noqa: E402
+from aggregate import (Results, Spread, load, peak_gflops,  # noqa: E402
+                       spread)
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
@@ -115,24 +116,22 @@ def label_line_ends(ax: plt.Axes, min_gap: float = 0.07) -> None:
 
 def bar_panel(ax: plt.Axes, groups: list, series: dict) -> None:
     """Grouped bars at the median, one group per x label, one bar per
-    backend, with the between-round range as a whisker."""
+    backend."""
     backends = [b for b, spreads in series.items()
                 if any(s is not None for s in spreads)]
     width = 0.8 / max(len(backends), 1)
     for i, b in enumerate(backends):
         xs = [g + (i - (len(backends) - 1) / 2) * width
               for g in range(len(groups))]
-        ss = [s or Spread(0, 0, 0) for s in series[b]]
-        yerr = [[s.median - s.lo for s in ss], [s.hi - s.median for s in ss]]
-        ax.bar(xs, [s.median for s in ss], width=width * 0.92,
-               color=STYLE[b][0], label=b, linewidth=0, yerr=yerr,
-               error_kw={"ecolor": INK_MUTED, "elinewidth": 0.8,
-                         "capsize": 2})
+        ax.bar(xs, [s.median if s else 0 for s in series[b]],
+               width=width * 0.92, color=STYLE[b][0], label=b, linewidth=0)
     ax.set_xticks(range(len(groups)), groups)
 
 
-def figure(panels: int, title: str, meta: dict) -> tuple:
-    """A row-wrapped grid of panels with the run described under the title."""
+def figure(panels: int, title: str, meta: dict,
+           bands: bool = False) -> tuple:
+    """A row-wrapped grid of panels with the run described under the title;
+    `bands` notes what the line plots' bands mean."""
     cols = min(panels, 4)
     rows = (panels + cols - 1) // cols
     fig, axes = plt.subplots(rows, cols, figsize=(4.4 * cols, 3.2 * rows + 0.7),
@@ -140,8 +139,8 @@ def figure(panels: int, title: str, meta: dict) -> tuple:
     edsl = meta.get("edsl")
     build = f" · edsl .so built {edsl['so_built']}" if edsl else ""
     # Not a confidence interval; say so where the reader sees the plot.
-    band = (" · bands/whiskers: min-max over rounds"
-            if meta["rounds"] > 1 else "")
+    band = (" · bands: min-max over rounds"
+            if bands and meta["rounds"] > 1 else "")
     fig.suptitle(title, color=INK, fontsize=12, x=0.01, ha="left",
                  y=1 - 0.1 / fig.get_figheight(), va="top")
     fig.text(0.01, 1 - 0.42 / fig.get_figheight(),
@@ -198,6 +197,34 @@ def apply_metric(ax: plt.Axes, metric: str) -> None:
         raise ValueError(f"unknown metric {metric!r}")
 
 
+def peak_level(ax: plt.Axes, meta: dict, threads: int) -> None:
+    """Dashed line at the peak for one thread count; files from before the
+    peak was recorded get none."""
+    peak = peak_gflops(meta, threads)
+    if peak is None:
+        return
+    # "_" keeps it out of the legend and label_line_ends.
+    ax.axhline(peak, color=INK_MUTED, linewidth=1, linestyle="--",
+               label="_peak")
+    ax.annotate(f"peak {peak:.0f}", (0.01, peak),
+                xycoords=("axes fraction", "data"), xytext=(0, 2),
+                textcoords="offset points", va="bottom", fontsize=7,
+                color=INK_MUTED)
+
+
+def peak_curve(ax: plt.Axes, meta: dict, threads: list) -> None:
+    """Dashed peak against thread count: ideal scaling, with the clock
+    falling as more cores are busy."""
+    if meta.get("peak") is None:
+        return
+    peaks = [peak_gflops(meta, t) for t in threads]
+    ax.plot(threads, peaks, color=INK_MUTED, linewidth=1, linestyle="--",
+            label="_peak")
+    ax.annotate("peak", (threads[-1], peaks[-1]), xytext=(-2, 2),
+                textcoords="offset points", ha="right", va="bottom",
+                fontsize=7, color=INK_MUTED)
+
+
 METRIC_LABEL = {"gflops": "GFLOPS", "time": "time per call (log)"}
 METRIC_TITLE = {"gflops": "GFLOPS", "time": "Time per call"}
 METRIC_SUFFIX = {"gflops": "", "time": "_time"}
@@ -208,7 +235,8 @@ def plot_size(res: Results, metric: str, shapes: list, out: Path) -> None:
     meta = res.meta
     ns = [s[0] for s in shapes]
     combos = [(op, t) for op in meta["ops"] for t in meta["threads"]]
-    fig, axes = figure(len(combos), f"{METRIC_TITLE[metric]} vs size", meta)
+    fig, axes = figure(len(combos), f"{METRIC_TITLE[metric]} vs size", meta,
+                       bands=True)
     for ax, (op, t) in zip(axes, combos):
         series = {b: [point_spread(res, (op, s, b, t), metric)
                       for s in shapes]
@@ -217,6 +245,8 @@ def plot_size(res: Results, metric: str, shapes: list, out: Path) -> None:
         # and 1024 each get their own slot.
         slots = list(range(len(ns)))
         line_panel(ax, slots, series)
+        if metric == "gflops":
+            peak_level(ax, meta, t)
         ax.set_xticks(slots, [str(n) for n in ns])
         ax.set_xlim(-0.4, len(ns) - 0.4)
         apply_metric(ax, metric)
@@ -233,12 +263,14 @@ def plot_scaling(res: Results, metric: str, shapes: list, out: Path) -> None:
     threads = meta["threads"]
     combos = [(op, s) for op in meta["ops"] for s in shapes]
     fig, axes = figure(len(combos), f"{METRIC_TITLE[metric]} vs threads",
-                       meta)
+                       meta, bands=True)
     for ax, (op, s) in zip(axes, combos):
         series = {b: [point_spread(res, (op, s, b, t), metric)
                       for t in threads]
                   for b in meta["backends"]}
         line_panel(ax, threads, series)
+        if metric == "gflops":
+            peak_curve(ax, meta, threads)
         ax.set_xscale("log", base=2)
         ax.set_xticks(threads, [str(t) for t in threads])
         apply_metric(ax, metric)
@@ -287,6 +319,8 @@ def plot_shapes(res: Results, metric: str, shapes: list, out: Path) -> None:
                       for s in shapes]
                   for b in meta["backends"]}
         bar_panel(ax, labels, series)
+        if metric == "gflops":
+            peak_level(ax, meta, t)
         apply_metric(ax, metric)
         setup_axes(ax, f"{op}, {threads_label(t)}", "shape",
                    METRIC_LABEL[metric])
