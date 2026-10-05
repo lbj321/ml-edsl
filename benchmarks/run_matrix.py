@@ -6,6 +6,7 @@ Usage:
     python3 benchmarks/run_matrix.py [--preset ...] [--backends mkl edsl ...]
         [--shapes 1024x1024x1024 64x4096x1024] [--threads 1 2 4 8]
         [--ops matmul dense] [--rounds 2] [--min-time 2]
+        [--dump-samples DIR]
     python3 benchmarks/run_matrix.py --report benchmarks/results/<file>.jsonl
 
 Each preset is a few-minute chunk answering one question (see PRESETS).
@@ -26,6 +27,7 @@ import statistics
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKERS = REPO_ROOT / "benchmarks" / "workers"
@@ -102,6 +104,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-time", type=float)
     parser.add_argument("--out", type=Path, default=None,
                         help="results file (default: results/<timestamp>)")
+    parser.add_argument("--dump-samples", type=Path, default=None,
+                        metavar="DIR",
+                        help="write each point's raw durations to a JSON "
+                             "file in DIR")
     parser.add_argument("--report", type=Path, default=None,
                         help="print the tables for an existing results file")
     args = parser.parse_args()
@@ -159,12 +165,14 @@ def edsl_build_info() -> dict:
 
 
 def run_point(backend: str, shape: tuple, threads: int, op: str,
-              min_time: float) -> dict:
+              min_time: float, samples_file: Optional[Path] = None) -> dict:
     """Run one worker process and return its result line, checked."""
     python, worker, field, expected = BACKENDS[backend]
     cmd = [str(python), str(WORKERS / worker), *map(str, shape),
            "--threads", str(threads), "--op", op,
            "--min-time", str(min_time)]
+    if samples_file:
+        cmd += ["--dump-samples", str(samples_file)]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         return {"backend": backend, "op": op, "m": shape[0], "n": shape[1],
@@ -196,6 +204,8 @@ def run(args: argparse.Namespace) -> Path:
             "backends": args.backends, "shapes": args.shapes,
             "threads": args.threads, "ops": args.ops,
             "rounds": args.rounds, "min_time": args.min_time,
+            "dump_samples": (str(args.dump_samples) if args.dump_samples
+                             else None),
             "edsl": edsl_build_info() if "edsl" in args.backends else None,
         }
     }
@@ -211,8 +221,14 @@ def run(args: argparse.Namespace) -> Path:
                 for threads in args.threads:
                     for op in args.ops:
                         for backend in order:
+                            samples_file = None
+                            if args.dump_samples:
+                                samples_file = args.dump_samples / (
+                                    f"{backend}-{op}-"
+                                    f"{'x'.join(map(str, shape))}"
+                                    f"-t{threads}-r{rnd}.json")
                             res = run_point(backend, shape, threads, op,
-                                            args.min_time)
+                                            args.min_time, samples_file)
                             res["round"] = rnd
                             f.write(json.dumps(res) + "\n")
                             f.flush()

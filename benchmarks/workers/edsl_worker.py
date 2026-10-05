@@ -33,6 +33,8 @@ def parse_args() -> argparse.Namespace:
                         help="samples to time; overrides --min-time")
     parser.add_argument("--min-time", type=float, default=3.0,
                         help="seconds of timed calls to cover (default: 3)")
+    parser.add_argument("--dump-samples", type=Path, default=None,
+                        help="write every raw duration to this JSON file")
     return parser.parse_args()
 
 
@@ -49,7 +51,7 @@ def main() -> int:
     sys.path.insert(0, str(REPO_ROOT / "benchmarks"))
     from mlir_edsl import Tensor, f32, matmul, ml_function, relu
     from mlir_edsl.backend import get_backend
-    from common import WARMUP, repeats_for_budget, time_call_with_cpu
+    from common import run_timed, write_samples
 
     get_backend().set_optimization_level(3)
 
@@ -84,25 +86,26 @@ def main() -> int:
     def call() -> None:
         fn(*inputs)
 
-    for _ in range(WARMUP):
-        call()
-    repeats = args.repeats or repeats_for_budget(
-        call, round((m * n * k) ** (1 / 3)), args.min_time)
-    timing, cpu_per_wall = time_call_with_cpu(call, repeats)
+    meas = run_timed(call, round((m * n * k) ** (1 / 3)), args.min_time,
+                     args.repeats)
+    timing = meas.timing
+    if args.dump_samples:
+        write_samples(args.dump_samples, meas)
 
     result = {
         "framework": "edsl",
         "op": args.op,
         "m": m, "n": n, "k": k,
         "threads": args.threads,
-        "repeats": repeats,
+        "repeats": meas.repeats,
         "compile_s": compile_s,
-        "cpu_per_wall": cpu_per_wall,
+        "cpu_per_wall": meas.cpu_per_wall,
         "median_s": timing.median,
         "p10_s": timing.p10,
         "p90_s": timing.p90,
         "spread": timing.spread,
         "gflops": 2 * m * n * k / timing.median / 1e9,
+        "samples_file": str(args.dump_samples) if args.dump_samples else None,
     }
     print(json.dumps(result))
     return 0

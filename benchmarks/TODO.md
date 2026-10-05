@@ -9,7 +9,7 @@ variance.
 
 ### Pilot
 
-- [ ] **1** `--dump-samples PATH` on all three workers: every raw sample in
+- [x] **1** `--dump-samples PATH` on all three workers: every raw sample in
       timed order, plus warmup samples.
 - [ ] **2** `pilot` preset: ~4 points (64³ 1T, 1024³ 1T, 1024³ 8T,
       2048³ 8T) × MKL + EDSL × ~10 rounds, each a fresh process.
