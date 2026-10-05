@@ -14,19 +14,22 @@ chart the file has data for:
   epilogue.png  dense / matmul time per backend, when both ops ran
   shapes.png    GFLOPS per shape as grouped bars, for the remaining files
 Each GFLOPS chart has a *_time.png twin with time per call on a log axis.
+Lines are the median over rounds, with a band from the slowest to the
+fastest round; bars carry the same range as whiskers.
 """
 
 import argparse
-import json
-import statistics
 import sys
 from pathlib import Path
+from typing import Optional
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import (FuncFormatter, LogLocator,  # noqa: E402
                                NullFormatter)
+
+from aggregate import Results, Spread, load, spread  # noqa: E402
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
@@ -43,21 +46,16 @@ STYLE = {
 SURFACE, INK, INK_MUTED, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
 
 
-def load(path: Path) -> tuple:
-    """(meta, gflops, seconds, failed count); the maps are keyed by
-    (op, (m, n, k), backend, threads), median over rounds."""
-    lines = [json.loads(l) for l in path.read_text().splitlines() if l]
-    meta, points = lines[0]["meta"], lines[1:]
-    gf, secs = {}, {}
-    for r in points:
-        if "error" in r:
-            continue
-        key = (r["op"], (r["m"], r["n"], r["k"]), r["backend"], r["threads"])
-        gf.setdefault(key, []).append(r["gflops"])
-        secs.setdefault(key, []).append(r["median_s"])
-    failed = sum("error" in r for r in points)
-    return (meta, {k: statistics.median(v) for k, v in gf.items()},
-            {k: statistics.median(v) for k, v in secs.items()}, failed)
+def point_spread(res: Results, key: tuple, metric: str) -> Optional[Spread]:
+    """Spread over rounds of one point's metric, or None if it never ran."""
+    point = res.points.get(key)
+    if point is None:
+        return None
+    if metric == "gflops":
+        return spread(point.gflops)
+    if metric == "time":
+        return spread(point.secs)
+    raise ValueError(f"unknown metric {metric!r}")
 
 
 def setup_axes(ax: plt.Axes, title: str, xlabel: str, ylabel: str) -> None:
@@ -76,15 +74,19 @@ def setup_axes(ax: plt.Axes, title: str, xlabel: str, ylabel: str) -> None:
 
 
 def line_panel(ax: plt.Axes, xs: list, series: dict) -> None:
-    """One line per backend; label_line_ends adds the direct labels once
-    the axis limits are final."""
-    for backend, ys in series.items():
-        pts = [(x, y) for x, y in zip(xs, ys) if y is not None]
+    """One median line per backend over its between-round band;
+    label_line_ends adds the direct labels once the axis limits are final."""
+    for backend, spreads in series.items():
+        pts = [(x, s) for x, s in zip(xs, spreads) if s is not None]
         if not pts:
             continue
+        px, ps = zip(*pts)
         color, marker = STYLE[backend]
-        ax.plot(*zip(*pts), color=color, marker=marker, linewidth=2,
-                markersize=5, markeredgecolor=SURFACE, label=backend)
+        ax.fill_between(px, [s.lo for s in ps], [s.hi for s in ps],
+                        color=color, alpha=0.18, linewidth=0)
+        ax.plot(px, [s.median for s in ps], color=color, marker=marker,
+                linewidth=2, markersize=5, markeredgecolor=SURFACE,
+                label=backend)
 
 
 def label_line_ends(ax: plt.Axes, min_gap: float = 0.07) -> None:
@@ -112,14 +114,20 @@ def label_line_ends(ax: plt.Axes, min_gap: float = 0.07) -> None:
 
 
 def bar_panel(ax: plt.Axes, groups: list, series: dict) -> None:
-    """Grouped bars, one group per x label, one bar per backend."""
-    backends = [b for b, vals in series.items() if any(vals)]
+    """Grouped bars at the median, one group per x label, one bar per
+    backend, with the between-round range as a whisker."""
+    backends = [b for b, spreads in series.items()
+                if any(s is not None for s in spreads)]
     width = 0.8 / max(len(backends), 1)
     for i, b in enumerate(backends):
         xs = [g + (i - (len(backends) - 1) / 2) * width
               for g in range(len(groups))]
-        ax.bar(xs, [v or 0 for v in series[b]], width=width * 0.92,
-               color=STYLE[b][0], label=b, linewidth=0)
+        ss = [s or Spread(0, 0, 0) for s in series[b]]
+        yerr = [[s.median - s.lo for s in ss], [s.hi - s.median for s in ss]]
+        ax.bar(xs, [s.median for s in ss], width=width * 0.92,
+               color=STYLE[b][0], label=b, linewidth=0, yerr=yerr,
+               error_kw={"ecolor": INK_MUTED, "elinewidth": 0.8,
+                         "capsize": 2})
     ax.set_xticks(range(len(groups)), groups)
 
 
@@ -131,11 +139,14 @@ def figure(panels: int, title: str, meta: dict) -> tuple:
                              squeeze=False, facecolor=SURFACE)
     edsl = meta.get("edsl")
     build = f" · edsl .so built {edsl['so_built']}" if edsl else ""
+    # Not a confidence interval; say so where the reader sees the plot.
+    band = (" · bands/whiskers: min-max over rounds"
+            if meta["rounds"] > 1 else "")
     fig.suptitle(title, color=INK, fontsize=12, x=0.01, ha="left",
                  y=1 - 0.1 / fig.get_figheight(), va="top")
     fig.text(0.01, 1 - 0.42 / fig.get_figheight(),
              f"preset {meta.get('preset') or 'custom'} · {meta['rounds']} "
-             f"round(s) · min_time {meta['min_time']} s{build}",
+             f"round(s) · min_time {meta['min_time']} s{band}{build}",
              color=INK_MUTED, fontsize=8)
     flat = [ax for row in axes for ax in row]
     for ax in flat[panels:]:
@@ -192,13 +203,15 @@ METRIC_TITLE = {"gflops": "GFLOPS", "time": "Time per call"}
 METRIC_SUFFIX = {"gflops": "", "time": "_time"}
 
 
-def plot_size(meta, data, metric, shapes, out: Path) -> None:
+def plot_size(res: Results, metric: str, shapes: list, out: Path) -> None:
     """`metric` against N, one panel per (op, threads)."""
+    meta = res.meta
     ns = [s[0] for s in shapes]
     combos = [(op, t) for op in meta["ops"] for t in meta["threads"]]
     fig, axes = figure(len(combos), f"{METRIC_TITLE[metric]} vs size", meta)
     for ax, (op, t) in zip(axes, combos):
-        series = {b: [data.get((op, s, b, t)) for s in shapes]
+        series = {b: [point_spread(res, (op, s, b, t), metric)
+                      for s in shapes]
                   for b in meta["backends"]}
         # Evenly spaced categories rather than a log axis, so 1000, 1023
         # and 1024 each get their own slot.
@@ -214,14 +227,16 @@ def plot_size(meta, data, metric, shapes, out: Path) -> None:
     finish(fig, axes, out / f"size{METRIC_SUFFIX[metric]}.png")
 
 
-def plot_scaling(meta, data, metric, shapes, out: Path) -> None:
+def plot_scaling(res: Results, metric: str, shapes: list, out: Path) -> None:
     """`metric` against thread count, one panel per (op, shape)."""
+    meta = res.meta
     threads = meta["threads"]
     combos = [(op, s) for op in meta["ops"] for s in shapes]
     fig, axes = figure(len(combos), f"{METRIC_TITLE[metric]} vs threads",
                        meta)
     for ax, (op, s) in zip(axes, combos):
-        series = {b: [data.get((op, s, b, t)) for t in threads]
+        series = {b: [point_spread(res, (op, s, b, t), metric)
+                      for t in threads]
                   for b in meta["backends"]}
         line_panel(ax, threads, series)
         ax.set_xscale("log", base=2)
@@ -233,20 +248,27 @@ def plot_scaling(meta, data, metric, shapes, out: Path) -> None:
     finish(fig, axes, out / f"scaling{METRIC_SUFFIX[metric]}.png")
 
 
-def plot_epilogue(meta, secs, shapes, out: Path) -> None:
+def epilogue_spread(res: Results, shape: tuple, backend: str,
+                    threads: int) -> Optional[Spread]:
+    """dense / matmul time, paired per round like the ratios to MKL."""
+    dense = res.points.get(("dense", shape, backend, threads))
+    matmul = res.points.get(("matmul", shape, backend, threads))
+    if dense is None or matmul is None:
+        return None
+    ratios = {rnd: d / matmul.secs[rnd] for rnd, d in dense.secs.items()
+              if rnd in matmul.secs}
+    return spread(ratios) if ratios else None
+
+
+def plot_epilogue(res: Results, shapes: list, out: Path) -> None:
     """dense / matmul time per backend, one panel per thread count."""
+    meta = res.meta
     labels = ["x".join(map(str, s)) for s in shapes]
     fig, axes = figure(len(meta["threads"]), "Dense layer time / matmul "
                        "time  (dashed line = epilogue is free)", meta)
     for ax, t in zip(axes, meta["threads"]):
-        series = {}
-        for b in meta["backends"]:
-            vals = []
-            for s in shapes:
-                d = secs.get(("dense", s, b, t))
-                m = secs.get(("matmul", s, b, t))
-                vals.append(d / m if d and m else None)
-            series[b] = vals
+        series = {b: [epilogue_spread(res, s, b, t) for s in shapes]
+                  for b in meta["backends"]}
         bar_panel(ax, labels, series)
         ax.axhline(1.0, color=INK_MUTED, linewidth=1, linestyle="--")
         ax.set_ylim(bottom=0)
@@ -254,13 +276,15 @@ def plot_epilogue(meta, secs, shapes, out: Path) -> None:
     finish(fig, axes, out / "epilogue.png")
 
 
-def plot_shapes(meta, data, metric, shapes, out: Path) -> None:
+def plot_shapes(res: Results, metric: str, shapes: list, out: Path) -> None:
     """`metric` per shape as grouped bars, one panel per (op, threads)."""
+    meta = res.meta
     labels = ["x".join(map(str, s)) for s in shapes]
     combos = [(op, t) for op in meta["ops"] for t in meta["threads"]]
     fig, axes = figure(len(combos), f"{METRIC_TITLE[metric]} per shape", meta)
     for ax, (op, t) in zip(axes, combos):
-        series = {b: [data.get((op, s, b, t)) for s in shapes]
+        series = {b: [point_spread(res, (op, s, b, t), metric)
+                      for s in shapes]
                   for b in meta["backends"]}
         bar_panel(ax, labels, series)
         apply_metric(ax, metric)
@@ -277,33 +301,33 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
-    meta, gf, secs, failed = load(args.results)
-    if failed:
-        print(f"note: {failed} failed point(s) left out", file=sys.stderr)
+    res = load(args.results)
+    if res.failed:
+        print(f"note: {len(res.failed)} failed point(s) left out",
+              file=sys.stderr)
     out = args.out or RESULTS_DIR / "plots" / args.results.stem
     out.mkdir(parents=True, exist_ok=True)
 
-    shapes = [tuple(int(p) for p in s.lower().split("x"))
-              for s in meta["shapes"]]
-    metrics = {"gflops": gf, "time": secs}
+    meta, shapes = res.meta, res.shapes
+    metrics = ("gflops", "time")
     drew = False
     if all(m == n == k for m, n, k in shapes) and len(shapes) >= 3:
         # GFLOPS says little where fixed per-call cost dominates.
         small = max(s[0] for s in shapes) <= 128
-        for metric, data in metrics.items():
+        for metric in metrics:
             if not (small and metric == "gflops"):
-                plot_size(meta, data, metric, sorted(shapes), out)
+                plot_size(res, metric, sorted(shapes), out)
         drew = True
     if len(meta["threads"]) >= 3:
-        for metric, data in metrics.items():
-            plot_scaling(meta, data, metric, shapes, out)
+        for metric in metrics:
+            plot_scaling(res, metric, shapes, out)
         drew = True
     if {"matmul", "dense"} <= set(meta["ops"]):
-        plot_epilogue(meta, secs, shapes, out)
+        plot_epilogue(res, shapes, out)
         drew = True
     if not drew:
-        for metric, data in metrics.items():
-            plot_shapes(meta, data, metric, shapes, out)
+        for metric in metrics:
+            plot_shapes(res, metric, shapes, out)
     return 0
 
 
