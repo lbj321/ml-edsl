@@ -83,7 +83,8 @@ variance.
       two, and keeps 1000/1023/1024 apart), one line per backend, dashed
       peak line; 1T and all-cores versions. Needs a `size` preset
       (~64–4096).
-- [ ] **P2** Speedup vs. MKL, log y-axis, reference line at 1.0.
+- [x] **P2** Speedup vs. MKL, log y-axis, reference line at 1.0
+      (`speedup.png`, per-round paired, drawn with the size plot).
 - [ ] **P3** Small-size latency (µs/call, log-log) with an empty-call
       overhead floor.
 - [ ] **P4** Thread scaling at one or two large sizes, with ideal-scaling

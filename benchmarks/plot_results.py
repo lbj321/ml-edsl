@@ -10,6 +10,8 @@ Writes, into DIR (default: benchmarks/results/plots/<file stem>/), every
 chart the file has data for:
   size.png      GFLOPS against N, when >= 3 square shapes ran (skipped when
                 every shape is <= 128, where fixed cost dominates)
+  speedup.png   GFLOPS / mkl against N, paired per round, for the same
+                files when mkl ran
   scaling.png   GFLOPS against thread count, when >= 3 thread counts ran
   epilogue.png  dense / matmul time per backend, when both ops ran
   shapes.png    GFLOPS per shape as grouped bars, for the remaining files
@@ -19,6 +21,7 @@ fastest round; bars show the median only.
 """
 
 import argparse
+import math
 import sys
 from pathlib import Path
 from typing import Optional
@@ -29,8 +32,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import (FuncFormatter, LogLocator,  # noqa: E402
                                NullFormatter)
 
-from aggregate import (Results, Spread, load, peak_gflops,  # noqa: E402
-                       spread)
+from aggregate import (BASELINE, Results, Spread, load,  # noqa: E402
+                       paired_ratios, peak_gflops, spread)
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
@@ -241,20 +244,71 @@ def plot_size(res: Results, metric: str, shapes: list, out: Path) -> None:
         series = {b: [point_spread(res, (op, s, b, t), metric)
                       for s in shapes]
                   for b in meta["backends"]}
-        # Evenly spaced categories rather than a log axis, so 1000, 1023
-        # and 1024 each get their own slot.
-        slots = list(range(len(ns)))
+        slots = n_slots(ax, ns)
         line_panel(ax, slots, series)
         if metric == "gflops":
             peak_level(ax, meta, t)
-        ax.set_xticks(slots, [str(n) for n in ns])
-        ax.set_xlim(-0.4, len(ns) - 0.4)
         apply_metric(ax, metric)
         setup_axes(ax, f"{op}, {threads_label(t)}", "N  (N x N x N)",
                    METRIC_LABEL[metric])
         ax.tick_params(axis="x", labelrotation=45)
         label_line_ends(ax)
     finish(fig, axes, out / f"size{METRIC_SUFFIX[metric]}.png")
+
+
+def n_slots(ax: plt.Axes, ns: list) -> list:
+    """Evenly spaced categories for N rather than a log axis, so 1000, 1023
+    and 1024 each get their own slot; returns the slot positions."""
+    slots = list(range(len(ns)))
+    ax.set_xticks(slots, [str(n) for n in ns])
+    ax.set_xlim(-0.4, len(ns) - 0.4)
+    return slots
+
+
+def ratio_axis(ax: plt.Axes) -> None:
+    """Log y-axis labelled 0.5x, 1x, ...; tick steps chosen from the data's
+    span, since ratios range from a few percent to three decades."""
+    ax.set_yscale("log")
+    lo, hi = ax.get_ylim()
+    decades = math.log10(hi / lo)
+    if decades < 0.5:
+        subs = range(1, 10)
+    elif decades < 1.5:
+        subs = (1, 2, 3, 5, 7)
+    else:
+        subs = (1, 2, 5)
+    ax.yaxis.set_major_locator(LogLocator(base=10, subs=subs))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}x"))
+    ax.yaxis.set_minor_formatter(NullFormatter())
+
+
+def plot_speedup(res: Results, shapes: list, out: Path) -> None:
+    """GFLOPS / BASELINE against N, paired per round, one panel per
+    (op, threads); the baseline itself is the dashed line at 1."""
+    meta = res.meta
+    ns = [s[0] for s in shapes]
+    others = [b for b in meta["backends"] if b != BASELINE]
+    combos = [(op, t) for op in meta["ops"] for t in meta["threads"]]
+    fig, axes = figure(len(combos), f"Speedup vs {BASELINE}  (above 1 = "
+                       f"faster than {BASELINE})", meta, bands=True)
+    for ax, (op, t) in zip(axes, combos):
+        series = {}
+        for b in others:
+            ratios = [paired_ratios(res, (op, s, b, t)) for s in shapes]
+            series[b] = [spread(r) if r else None for r in ratios]
+        slots = n_slots(ax, ns)
+        line_panel(ax, slots, series)
+        ax.axhline(1.0, color=INK_MUTED, linewidth=1, linestyle="--",
+                   label="_baseline")
+        ax.annotate(BASELINE, (0.01, 1.0), xycoords=("axes fraction", "data"),
+                    xytext=(0, 2), textcoords="offset points", va="bottom",
+                    fontsize=7, color=INK_MUTED)
+        ratio_axis(ax)
+        setup_axes(ax, f"{op}, {threads_label(t)}", "N  (N x N x N)",
+                   f"GFLOPS / {BASELINE} (log)")
+        ax.tick_params(axis="x", labelrotation=45)
+        label_line_ends(ax)
+    finish(fig, axes, out / "speedup.png")
 
 
 def plot_scaling(res: Results, metric: str, shapes: list, out: Path) -> None:
@@ -351,6 +405,8 @@ def main() -> int:
         for metric in metrics:
             if not (small and metric == "gflops"):
                 plot_size(res, metric, sorted(shapes), out)
+        if BASELINE in meta["backends"] and len(meta["backends"]) > 1:
+            plot_speedup(res, sorted(shapes), out)
         drew = True
     if len(meta["threads"]) >= 3:
         for metric in metrics:
