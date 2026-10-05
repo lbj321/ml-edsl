@@ -75,9 +75,10 @@ variance.
 
 ## Presentation
 
-- [x] **P0** Error bands in every plot come from between-round spread, not
+- [x] **P0** Error bands on line plots come from between-round spread, not
       within-process p10–p90: min–max of the round medians, labelled in
-      the subtitle. Not a confidence interval.
+      the subtitle. Not a confidence interval. Bar charts show the median
+      only (whiskers looked cluttered).
 - [ ] **P1** GFLOP/s vs. size, evenly spaced N slots (log2 for powers of
       two, and keeps 1000/1023/1024 apart), one line per backend, dashed
       peak line; 1T and all-cores versions. Needs a `size` preset
@@ -94,10 +95,11 @@ variance.
       % of peak, hardware/settings in the caption.
 - [x] **P7** Same color per backend across all figures; equal line weights
       for analysis plots (`STYLE` in `plot_results.py`).
-- [ ] **P8** Peak GFLOP/s formula and assumed clock in meta (9700KF AVX2:
+- [x] **P8** Peak GFLOP/s formula and assumed clock in meta (9700KF AVX2:
       2 FMA × 8 f32 × 2 = 32 flop/cycle/core), needed by P1 and P6. Clock
-      depends on active cores (4.9 GHz at 1–2, 4.6 GHz all-core): ~157 GF
-      at 1T, ~1178 GF at 8T, not 8× the 1T peak.
+      is stock turbo by active cores (4.9 → 4.6 GHz, `PEAK` in
+      `run_matrix.py`): 157 GF at 1T, 1178 GF at 8T, not 8× the 1T peak.
+      Assumed, not measured; `aggregate.peak_gflops` reads it back.
 
 Cap square sizes at 4096 (8192 only at 8T if at all): one 8192³ call is
 ~1.1 TFLOP, ~10 s single-threaded, and the EDSL compiles per static shape.

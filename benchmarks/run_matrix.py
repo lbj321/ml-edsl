@@ -30,12 +30,23 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from aggregate import BASELINE, geomean_ratios, load, parse_shape, spread
+from aggregate import (BASELINE, geomean_ratios, load, parse_shape,
+                       peak_gflops, spread)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKERS = REPO_ROOT / "benchmarks" / "workers"
 RESULTS_DIR = REPO_ROOT / "benchmarks" / "results"
 CONDA_ENVS = Path.home() / "anaconda3" / "envs"
+
+# Peak f32 throughput of the i7-9700KF dev machine, recorded in each results
+# file so plots can draw it. AVX2: 2 FMA ports x 8 lanes x 2 flop. The clock
+# is Intel's stock turbo per active core count (index 0 = 1 core), assumed
+# rather than measured: WSL can't read the real one.
+PEAK = {
+    "cpu": "i7-9700KF",
+    "flop_per_cycle_per_core": 32,
+    "turbo_ghz": [4.9, 4.8, 4.7, 4.7, 4.6, 4.6, 4.6, 4.6],
+}
 
 # name -> (interpreter, worker, field of the result line, expected value)
 BACKENDS = {
@@ -221,6 +232,7 @@ def run(args: argparse.Namespace) -> Path:
             "dump_samples": (str(args.dump_samples) if args.dump_samples
                              else None),
             "edsl": edsl_build_info() if "edsl" in args.backends else None,
+            "peak": PEAK,
         }
     }
     total = (args.rounds * len(shapes) * len(args.threads) * len(args.ops)
@@ -313,6 +325,9 @@ def report(path: Path) -> None:
               f"{' (OLDER THAN cpp/ HEAD)' if edsl['so_older_than_cpp'] else ''}")
 
     threads, backends, shapes = meta["threads"], meta["backends"], res.shapes
+    if meta.get("peak"):
+        print(f"peak ({meta['peak']['cpu']}, assumed turbo): " + ", ".join(
+            f"{t}T {peak_gflops(meta, t):.0f} GF" for t in threads))
     thread_cols = "".join(f"{f'{t}T':>10}" for t in threads)
     speedup = f"{f'{threads[-1]}T/{threads[0]}T':>9}" if len(threads) > 1 else ""
 

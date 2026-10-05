@@ -12,7 +12,7 @@ Stdlib only: run_matrix.py and plot_results.py both import it.
 import json
 import statistics
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 BASELINE = "mkl"
 
@@ -68,6 +68,19 @@ def spread(per_round: dict) -> Spread:
     """Spread of a round -> value map (GFLOPS, seconds or ratios)."""
     vals = list(per_round.values())
     return Spread(statistics.median(vals), min(vals), max(vals))
+
+
+def peak_gflops(meta: dict, threads: int) -> Optional[float]:
+    """Peak GFLOPS at `threads` busy cores from the file's recorded peak,
+    or None for files written before it was recorded."""
+    peak = meta.get("peak")
+    if peak is None:
+        return None
+    ghz = peak["turbo_ghz"]
+    if not 1 <= threads <= len(ghz):
+        raise ValueError(f"no turbo clock for {threads} threads on "
+                         f"{peak['cpu']} ({len(ghz)} cores)")
+    return peak["flop_per_cycle_per_core"] * threads * ghz[threads - 1]
 
 
 def paired_ratios(res: Results, key: tuple,
