@@ -9,7 +9,7 @@ Usage:
         [--dump-samples [DIR]]
     python3 benchmarks/run_matrix.py --report benchmarks/results/<file>.jsonl
 
-Each preset answers one question in 5-17 minutes (see PRESETS).
+Each preset answers one question in 5-14 minutes (see PRESETS).
 Options given on the command line override the preset's; without a preset,
 --backends, --shapes, --threads and --ops are required.
 
@@ -56,39 +56,41 @@ def _square(*sizes: int) -> list:
 
 # Every preset includes MKL so its ratios have a baseline from the same
 # session. Durations on the i7-9700KF dev machine, scaled from 1- or
-# 2-round timings. 5 rounds because rounds, not samples, set the noise:
-# round medians vary 1-3%, and at 8T a process running right after another
-# 8T run is 3-5% slower, which only rotation over several rounds cancels.
+# 2-round timings. Rounds, not samples, set the noise: round medians vary
+# 1-3%, and at 8T a process running right after another 8T run is 3-5%
+# slower. Rotation cancels that only when every backend holds every
+# position equally often, so rounds are a multiple of the backend count
+# (at least 4); otherwise the median lands in the majority position.
 PRESETS = {
     # ~5 min. Fixed per-call cost, and which libraries thread small sizes.
     "overhead": {
         "backends": list(BACKENDS), "shapes": _square(8, 16, 32, 64, 128),
         "threads": [1, 8], "ops": ["matmul"], "rounds": 5, "min_time": 1.0,
     },
-    # ~17 min. Thread scaling of large square matmuls.
+    # ~14 min. Thread scaling of large square matmuls.
     "scaling": {
         "backends": ["mkl", "openblas", "jax", "edsl"],
         "shapes": _square(256, 512, 1024, 2048),
         "threads": [1, 2, 4, 8], "ops": ["matmul"],
-        "rounds": 5, "min_time": 2.0,
+        "rounds": 4, "min_time": 2.0,
     },
-    # ~6 min. Cost of extents no cache block divides, against 1024.
+    # ~7 min. Cost of extents no cache block divides, against 1024.
     "padding": {
         "backends": ["mkl", "edsl"], "shapes": _square(1000, 1023, 1024),
         "threads": [1, 2, 4, 8], "ops": ["matmul"],
-        "rounds": 5, "min_time": 2.0,
+        "rounds": 6, "min_time": 2.0,
     },
-    # ~10 min. Dense layer against bare matmul, around the 256 -> 512 break.
+    # ~12 min. Dense layer against bare matmul, around the 256 -> 512 break.
     "epilogue": {
         "backends": ["mkl", "jax", "edsl"], "shapes": _square(256, 512, 1024),
         "threads": [1, 8], "ops": ["matmul", "dense"],
-        "rounds": 5, "min_time": 2.0,
+        "rounds": 6, "min_time": 2.0,
     },
-    # ~7 min. Dense layers at batch 1..256 on a 1024 -> 4096 layer.
+    # ~6 min. Dense layers at batch 1..256 on a 1024 -> 4096 layer.
     "ml": {
         "backends": ["mkl", "openblas", "jax", "edsl"],
         "shapes": [f"{b}x4096x1024" for b in (1, 16, 64, 256)],
-        "threads": [1, 8], "ops": ["dense"], "rounds": 5, "min_time": 2.0,
+        "threads": [1, 8], "ops": ["dense"], "rounds": 4, "min_time": 2.0,
     },
     # ~7 min. Variance pilot: many rounds of a few points, with raw samples, to
     # compare between-process and within-process spread and to see the
@@ -204,6 +206,11 @@ def run(args: argparse.Namespace) -> Path:
         if not python.is_file():
             raise RuntimeError(f"{backend}: {python} not found; "
                                "run benchmarks/setup_envs.sh")
+    if args.rounds % len(args.backends):
+        print(f"warning: {args.rounds} round(s) over {len(args.backends)} "
+              "backends leaves run positions unbalanced; at 8T that biases "
+              "medians by up to the 3-5% order effect. Use a multiple of "
+              f"{len(args.backends)}.", file=sys.stderr)
 
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out = args.out or RESULTS_DIR / f"{stamp}-{args.preset or 'custom'}.jsonl"
@@ -269,9 +276,22 @@ def fmt_time(seconds: float) -> str:
     return f"{seconds:.2f}s"
 
 
+def ratio_cell(per_round: list, width: int) -> str:
+    """Median of per-round ratios, with half their min-max range relative
+    to the median when there is more than one round."""
+    if not per_round:
+        return f"{'-':>{width}}"
+    med = statistics.median(per_round)
+    if len(per_round) == 1:
+        return f"{med:{width - 1}.2f}x"
+    half = (max(per_round) - min(per_round)) / 2 / med
+    return f"{med:{width - 8}.2f}x ±{half:5.1%}"
+
+
 def report(path: Path) -> None:
     """Print GFLOPS and time tables per (op, shape), dense/matmul time
-    ratios when both ops ran, and geomean ratios to the baseline."""
+    ratios when both ops ran, and geomean ratios to the baseline, paired
+    per round."""
     lines = [json.loads(l) for l in path.read_text().splitlines() if l]
     meta = lines[0]["meta"]
     for r in lines[1:]:
@@ -281,13 +301,14 @@ def report(path: Path) -> None:
     # Median over rounds of each round's median. Rounds are separate
     # processes, so their spread is the run-to-run noise; the spread of
     # samples within one process is far smaller and not reported here.
-    gf_rounds, secs = {}, {}
+    gf_rounds, secs, gf_by_round = {}, {}, {}
     for r in lines[1:]:
         if "error" in r:
             continue
         key = (r["op"], (r["m"], r["n"], r["k"]), r["backend"], r["threads"])
         gf_rounds.setdefault(key, []).append(r["gflops"])
         secs.setdefault(key, []).append(r["median_s"])
+        gf_by_round[(*key, r["round"])] = r["gflops"]
     gf = {key: statistics.median(v) for key, v in gf_rounds.items()}
     secs = {key: statistics.median(v) for key, v in secs.items()}
     # Half the min-max range over rounds, relative to the median.
@@ -297,7 +318,7 @@ def report(path: Path) -> None:
     print(f"preset: {meta.get('preset') or 'custom'}, {meta['rounds']} "
           f"round(s), min_time {meta['min_time']} s")
     if half_range:
-        print("GFLOPS ±: half the min-max range over rounds")
+        print("±: half the min-max range over rounds")
     edsl = meta.get("edsl")
     if edsl:
         print(f"edsl: {edsl['branch']}@{edsl['commit']}"
@@ -352,18 +373,26 @@ def report(path: Path) -> None:
                 print(f"{'x'.join(map(str, shape)):16}{b:9}" + "".join(cells))
 
     if BASELINE in backends:
+        # Ratios are taken within each round, where both backends ran
+        # minutes apart, then summarised over rounds. This cancels drift
+        # across the session that dividing the two medians would keep.
+        rounds = sorted({key[-1] for key in gf_by_round})
         print(f"\n=== geometric mean of GFLOPS / {BASELINE} over all ops "
-              "and shapes ===")
-        print(f"{'':9}{thread_cols}")
+              "and shapes, paired per round ===")
+        print(f"{'':9}{gf_cols}")
         for b in backends:
             cells = []
             for t in threads:
-                ratios = [gf[(op, s, b, t)] / gf[(op, s, BASELINE, t)]
-                          for op in meta["ops"] for s in shapes
-                          if (op, s, b, t) in gf
-                          and (op, s, BASELINE, t) in gf]
-                cells.append(f"{statistics.geometric_mean(ratios):9.2f}x"
-                             if ratios else f"{'-':>10}")
+                per_round = []
+                for rnd in rounds:
+                    ratios = [gf_by_round[(op, s, b, t, rnd)]
+                              / gf_by_round[(op, s, BASELINE, t, rnd)]
+                              for op in meta["ops"] for s in shapes
+                              if (op, s, b, t, rnd) in gf_by_round
+                              and (op, s, BASELINE, t, rnd) in gf_by_round]
+                    if ratios:
+                        per_round.append(statistics.geometric_mean(ratios))
+                cells.append(ratio_cell(per_round, width))
             print(f"{b:9}" + "".join(cells))
 
 

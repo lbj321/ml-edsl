@@ -63,19 +63,19 @@ variance.
       OpenMP backends. Drop the JAX-only `sched_setaffinity`.
 - [ ] **6** Canary (MKL 1024³ 1T) at the start and end of each session;
       record its drift.
-- [ ] **7** Two EDSL builds as separate backends (e.g. `edsl-base`,
-      `edsl-new`, each pointing at its own checkout/`.so`) for
-      before/after comparisons of a change.
 
 ### Reporting
 
 - [x] **8** `report()`: show between-round min–max next to each median.
-- [ ] **9** Ratios computed per round (paired), then summarised — not a
-      ratio of medians. Applies to EDSL vs. MKL and build vs. build.
-- [x] **10** 5 rounds in every preset (all have 8T runs; order effect +
-      ~2% sd); each preset keeps its `min_time` (see 4); `MAX_REPEATS`
-      100k → 10k. Presets now take ~5–17 min; trim `scaling` (~17 min) if
-      that's too long.
+- [x] **9** Ratios to MKL computed per round (paired), then summarised —
+      not a ratio of medians.
+- [x] **10** Rounds a multiple of the backend count, ≥ 4 (all presets have
+      8T runs; order effect + ~2% sd). With unbalanced positions, e.g.
+      5 rounds over 2 backends, the median lands in the majority position
+      and keeps the order effect (pilot: ~3% at MKL 1024³ 8T).
+      `run_matrix.py` warns on unbalanced rounds. Each preset keeps its
+      `min_time` (see 4); `MAX_REPEATS` 100k → 10k. Presets take ~5–14
+      min.
 
 ## Presentation
 
@@ -104,9 +104,12 @@ Cap square sizes at 4096 (8192 only at 8T if at all): one 8192³ call is
 
 ## Rules
 
-- Compare across sessions only via same-session ratios to MKL.
+- Compare across sessions only via same-session ratios to MKL. This is
+  also how to judge an EDSL change: run the preset, change and rebuild,
+  run it again, compare the paired EDSL/MKL ratios (one EDSL build only).
 - Discard a session whose canary drifted.
-- ≥ 5 rounds for any claim; ~10 for differences under 5%.
+- Rounds a multiple of the backend count: ≥ 4 for any claim; ~8–10 for
+  differences under 5%.
 
 ## Later
 
