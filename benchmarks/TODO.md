@@ -36,16 +36,25 @@ variance.
     than the last window, still ~1% faster at 1.5–2 s, so the 2 s window's
     median sits mid-ramp and steady state isn't confirmed. 1T: flat within
     1% (MKL 2048³ 1T is 5% *slower* in the first 0.25 s: cold start).
-- [ ] **3a** One long run (MKL 1024³ 8T, `--min-time 15 --dump-samples`)
-      to find where the 8T ramp flattens; sets the warmup length for 4.
-- [ ] **3b** Investigate the EDSL 2048³ 8T slow mode (compare fast vs. slow
-      rounds' samples; try THP on/off).
-- [ ] **4** Ramp is long (from 3), so: warm up by time (length from 3a)
-      before timing, size samples for a stable median only, spend the saved
-      time on rounds. Should also remove the order effect, since every
-      process then starts timing from the same thermal state. Re-run the
-      pilot to confirm. Fix the `repeats_for_budget` docstring either way
-      (`MAX_REPEATS` wins for µs calls).
+- [x] **3a** 15 s runs at 1024³ 8T, one per backend. The ramp settles
+      after ~5–6 s (MKL) and ~8 s (EDSL). Against steady state, the median
+      of the first 2 s is 12% fast for MKL and 7% for EDSL, so 8T EDSL/MKL
+      ratios likely understate EDSL by ~5% (one run each: tentative).
+      MKL's first ~10 calls were ~2× slow, so its budget estimate covered
+      only 7.9 of 15 s.
+- [ ] **3b** *(deferred: EDSL perf work, not harness)* Investigate the
+      EDSL 2048³ 8T slow mode (compare fast vs. slow rounds' samples; try
+      THP on/off).
+- [x] **4** Decision: **keep the short warmup and accept the ramp bias.**
+      The order effect is variance, handled by rounds + reported spread
+      (8, 10). The ramp is bias that rounds can't remove, but it mostly
+      cancels in build-vs-build comparisons and is small next to the
+      EDSL/MKL gap. So 8T numbers mean "over the first ~2 s", not steady
+      state; never compare runs with different `min_time`. Revisit for
+      headline 8T numbers (measure those few points with `--min-time 15`)
+      or for a change that alters how hard the kernel loads the cores.
+- [ ] **4a** Fix the `repeats_for_budget` docstring: `MAX_REPEATS` wins for
+      µs calls, so "at least `min_time`" is false there.
 
 ### Harness
 
@@ -60,12 +69,12 @@ variance.
 
 ### Reporting
 
-- [ ] **8** `report()`: show between-round min–max next to each median.
+- [x] **8** `report()`: show between-round min–max next to each median.
 - [ ] **9** Ratios computed per round (paired), then summarised — not a
       ratio of medians. Applies to EDSL vs. MKL and build vs. build.
-- [ ] **10** Set `rounds` and `min_time` per preset from the pilot: ≥ 5
-      rounds for any preset with 8T runs (order effect + ~2% sd); lower
-      `MAX_REPEATS` for small sizes.
+- [ ] **10** ≥ 5 rounds for any preset with 8T runs (order effect + ~2%
+      sd); keep `min_time` at 2 s everywhere (see 4); lower `MAX_REPEATS`
+      for small sizes.
 
 ## Presentation
 

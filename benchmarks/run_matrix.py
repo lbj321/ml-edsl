@@ -275,19 +275,26 @@ def report(path: Path) -> None:
         if "error" in r:
             print(f"FAILED: {progress(r)}")
 
-    # Median over rounds of each round's median.
-    gf, secs = {}, {}
+    # Median over rounds of each round's median. Rounds are separate
+    # processes, so their spread is the run-to-run noise; the spread of
+    # samples within one process is far smaller and not reported here.
+    gf_rounds, secs = {}, {}
     for r in lines[1:]:
         if "error" in r:
             continue
         key = (r["op"], (r["m"], r["n"], r["k"]), r["backend"], r["threads"])
-        gf.setdefault(key, []).append(r["gflops"])
+        gf_rounds.setdefault(key, []).append(r["gflops"])
         secs.setdefault(key, []).append(r["median_s"])
-    gf = {key: statistics.median(v) for key, v in gf.items()}
+    gf = {key: statistics.median(v) for key, v in gf_rounds.items()}
     secs = {key: statistics.median(v) for key, v in secs.items()}
+    # Half the min-max range over rounds, relative to the median.
+    half_range = {key: (max(v) - min(v)) / 2 / gf[key]
+                  for key, v in gf_rounds.items() if len(v) > 1}
 
     print(f"preset: {meta.get('preset') or 'custom'}, {meta['rounds']} "
           f"round(s), min_time {meta['min_time']} s")
+    if half_range:
+        print("GFLOPS ±: half the min-max range over rounds")
     edsl = meta.get("edsl")
     if edsl:
         print(f"edsl: {edsl['branch']}@{edsl['commit']}"
@@ -300,14 +307,25 @@ def report(path: Path) -> None:
     thread_cols = "".join(f"{f'{t}T':>10}" for t in threads)
     speedup = f"{f'{threads[-1]}T/{threads[0]}T':>9}" if len(threads) > 1 else ""
 
+    # Wider GFLOPS cells when there is a spread to show.
+    width = 16 if half_range else 10
+    gf_cols = "".join(f"{f'{t}T':>{width}}" for t in threads)
+
+    def gf_cell(key: tuple) -> str:
+        """Median GFLOPS, with its spread over rounds when there is one."""
+        if key not in gf:
+            return f"{'-':>{width}}"
+        if key not in half_range:
+            return f"{gf[key]:{width}.1f}"
+        return f"{gf[key]:{width - 7}.1f} ±{half_range[key]:5.1%}"
+
     for op in meta["ops"]:
         for shape in shapes:
             print(f"\n=== {op} {'x'.join(map(str, shape))} ===")
-            print(f"{'GFLOPS':9}{thread_cols}{speedup}")
+            print(f"{'GFLOPS':9}{gf_cols}{speedup}")
             for b in backends:
                 vals = [gf.get((op, shape, b, t)) for t in threads]
-                row = "".join(f"{v:10.1f}" if v else f"{'-':>10}"
-                              for v in vals)
+                row = "".join(gf_cell((op, shape, b, t)) for t in threads)
                 if speedup and vals[0] and vals[-1]:
                     row += f"{vals[-1] / vals[0]:8.1f}x"
                 print(f"{b:9}{row}")
