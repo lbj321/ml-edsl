@@ -14,9 +14,10 @@ Options given on the command line override the preset's; without a preset,
 --backends, --shapes, --threads and --ops are required.
 
 Each point runs in its own worker process, in that backend's env. Rounds
-repeat the whole grid with the backend order rotated, so no backend always
-runs first. Results are appended to a JSONL file whose first line records
-the run settings and the EDSL build; --report prints the tables from one.
+repeat the whole grid with the backend and op orders rotated, so no
+backend or op always runs first. Results are appended to a JSONL file
+whose first line records the run settings and the EDSL build; --report
+prints the tables from one.
 Stdlib only, so any python3 can run it.
 """
 
@@ -237,9 +238,11 @@ def run(args: argparse.Namespace) -> Path:
         for rnd in range(args.rounds):
             shift = rnd % len(args.backends)
             order = args.backends[shift:] + args.backends[:shift]
+            op_shift = rnd % len(args.ops)
+            ops = args.ops[op_shift:] + args.ops[:op_shift]
             for shape in shapes:
                 for threads in args.threads:
-                    for op in args.ops:
+                    for op in ops:
                         for backend in order:
                             samples_file = None
                             if args.dump_samples:
