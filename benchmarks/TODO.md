@@ -13,17 +13,39 @@ variance.
       timed order, plus warmup samples.
 - [x] **2** `pilot` preset: {64³, 1024³, 2048³} × {1T, 8T} × MKL + EDSL
       × 10 rounds, each a fresh process, samples dumped by default.
-- [ ] **3** Analyse it:
-  - between-process vs. within-process variance → more rounds or more
-    `min_time`?
-  - bimodal process medians (thread placement)?
-  - clock ramp within a process: how long until steady state?
-- [ ] **4** Act on the ramp. `WARMUP` is 5 calls (~0.1 s at large N), so the
-      burst phase lands inside the timed window.
-  - Well under 0.5 s: keep `repeats_for_budget`; fix its docstring
-    (`MAX_REPEATS` wins for µs calls, so "at least `min_time`" is false).
-  - Longer: warm up by time (~1–2 s), size samples for a stable median
-    only, spend the saved time on rounds.
+- [x] **3** Analyse it. Findings from
+      `results/20261005-120055-pilot.jsonl` (EDSL @ 7ad3bbe):
+  - **Between-process spread dominates.** sd of round medians 1–3%
+    (7% for EDSL 2048³ 8T); one process's median is good to 0.01–0.5%,
+    3–535× tighter. More samples per process buy nothing; rounds do.
+    ~2% sd → ±0.9% at 5 rounds, ±0.6% at 10. 64³ needs far fewer than
+    `MAX_REPEATS` samples.
+  - **Order effect at 8T.** MKL 1024³ 8T alternates exactly with
+    position: 2–4% fast when it runs first, 2–4% slow when it runs right
+    after EDSL's 8T run; EDSL mirrors it. Likely thermal carry-over.
+    Rotation cancels it on average, but every `rounds: 1` preset is biased
+    3–5% against the second backend at 8T.
+  - **MKL 2048³ 8T shows the order effect too**, smaller: every second-place
+    round ≥ 1.003 of the median, every first-place round ≤ 0.997.
+  - **EDSL 2048³ 8T has a slow mode.** 4 of 10 rounds 7–18% slow. Three
+    ran second, but the worst (1.176) ran first, so it is more than the
+    order effect. `cpu_per_wall` normal (7.6); MKL doesn't show it. Working
+    set (3 × 16 MB) far exceeds L3; page placement / THP is the first
+    suspect.
+  - **Ramp is long at 8T, absent at 1T.** 8T: first 0.25 s ~10% faster
+    than the last window, still ~1% faster at 1.5–2 s, so the 2 s window's
+    median sits mid-ramp and steady state isn't confirmed. 1T: flat within
+    1% (MKL 2048³ 1T is 5% *slower* in the first 0.25 s: cold start).
+- [ ] **3a** One long run (MKL 1024³ 8T, `--min-time 15 --dump-samples`)
+      to find where the 8T ramp flattens; sets the warmup length for 4.
+- [ ] **3b** Investigate the EDSL 2048³ 8T slow mode (compare fast vs. slow
+      rounds' samples; try THP on/off).
+- [ ] **4** Ramp is long (from 3), so: warm up by time (length from 3a)
+      before timing, size samples for a stable median only, spend the saved
+      time on rounds. Should also remove the order effect, since every
+      process then starts timing from the same thermal state. Re-run the
+      pilot to confirm. Fix the `repeats_for_budget` docstring either way
+      (`MAX_REPEATS` wins for µs calls).
 
 ### Harness
 
@@ -41,7 +63,9 @@ variance.
 - [ ] **8** `report()`: show between-round min–max next to each median.
 - [ ] **9** Ratios computed per round (paired), then summarised — not a
       ratio of medians. Applies to EDSL vs. MKL and build vs. build.
-- [ ] **10** Set `rounds` (≥ 3) and `min_time` per preset from the pilot.
+- [ ] **10** Set `rounds` and `min_time` per preset from the pilot: ≥ 5
+      rounds for any preset with 8T runs (order effect + ~2% sd); lower
+      `MAX_REPEATS` for small sizes.
 
 ## Presentation
 
