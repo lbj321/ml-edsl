@@ -11,8 +11,8 @@ variance.
 
 - [x] **1** `--dump-samples PATH` on all three workers: every raw sample in
       timed order, plus warmup samples.
-- [ ] **2** `pilot` preset: ~4 points (64³ 1T, 1024³ 1T, 1024³ 8T,
-      2048³ 8T) × MKL + EDSL × ~10 rounds, each a fresh process.
+- [x] **2** `pilot` preset: {64³, 1024³, 2048³} × {1T, 8T} × MKL + EDSL
+      × 10 rounds, each a fresh process, samples dumped by default.
 - [ ] **3** Analyse it:
   - between-process vs. within-process variance → more rounds or more
     `min_time`?

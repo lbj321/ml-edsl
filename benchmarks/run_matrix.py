@@ -2,11 +2,11 @@
 """Run every worker over a grid of shapes, thread counts and ops.
 
 Usage:
-    python3 benchmarks/run_matrix.py --preset overhead|scaling|padding|epilogue|ml
+    python3 benchmarks/run_matrix.py --preset overhead|scaling|padding|epilogue|ml|pilot
     python3 benchmarks/run_matrix.py [--preset ...] [--backends mkl edsl ...]
         [--shapes 1024x1024x1024 64x4096x1024] [--threads 1 2 4 8]
         [--ops matmul dense] [--rounds 2] [--min-time 2]
-        [--dump-samples DIR]
+        [--dump-samples [DIR]]
     python3 benchmarks/run_matrix.py --report benchmarks/results/<file>.jsonl
 
 Each preset is a few-minute chunk answering one question (see PRESETS).
@@ -87,6 +87,14 @@ PRESETS = {
         "shapes": [f"{b}x4096x1024" for b in (1, 16, 64, 256)],
         "threads": [1, 8], "ops": ["dense"], "rounds": 1, "min_time": 2.0,
     },
+    # ~7 min. Variance pilot: many rounds of a few points, with raw samples, to
+    # compare between-process and within-process spread and to see the
+    # clock ramp. Not for comparing backends.
+    "pilot": {
+        "backends": ["mkl", "edsl"], "shapes": _square(64, 1024, 2048),
+        "threads": [1, 8], "ops": ["matmul"], "rounds": 10, "min_time": 2.0,
+        "dump_samples": True,
+    },
 }
 GRID_DEFAULTS = {"rounds": 1, "min_time": 2.0}
 
@@ -105,9 +113,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out", type=Path, default=None,
                         help="results file (default: results/<timestamp>)")
     parser.add_argument("--dump-samples", type=Path, default=None,
-                        metavar="DIR",
+                        nargs="?", const=True, metavar="DIR",
                         help="write each point's raw durations to a JSON "
-                             "file in DIR")
+                             "file in DIR (default: <results file>-samples/)")
     parser.add_argument("--report", type=Path, default=None,
                         help="print the tables for an existing results file")
     args = parser.parse_args()
@@ -197,6 +205,8 @@ def run(args: argparse.Namespace) -> Path:
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out = args.out or RESULTS_DIR / f"{stamp}-{args.preset or 'custom'}.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
+    if args.dump_samples is True:
+        args.dump_samples = out.with_name(f"{out.stem}-samples")
     meta = {
         "meta": {
             "started": datetime.datetime.now().isoformat(timespec="seconds"),
