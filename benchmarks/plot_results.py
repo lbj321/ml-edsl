@@ -15,6 +15,8 @@ chart the file has data for:
   scaling.png   GFLOPS against thread count, when >= 3 thread counts ran
   epilogue.png  dense / matmul time per backend, when both ops ran
   shapes.png    GFLOPS per shape as grouped bars, for the remaining files
+  summary.md    GFLOPS and % of peak per backend at 1 and all threads,
+                for every file
 Each GFLOPS chart has a *_time.png twin with time per call on a log axis.
 Lines are the median over rounds, with a band from the slowest to the
 fastest round; bars show the median only.
@@ -382,6 +384,69 @@ def plot_shapes(res: Results, metric: str, shapes: list, out: Path) -> None:
     finish(fig, axes, out / f"shapes{METRIC_SUFFIX[metric]}.png")
 
 
+def summary_cell(res: Results, key: tuple) -> str:
+    """Median GFLOPS and its share of the peak, or '-' if it never ran."""
+    point = res.points.get(key)
+    if point is None:
+        return "-"
+    gf = spread(point.gflops).median
+    peak = peak_gflops(res.meta, key[3])
+    return f"{gf:.0f} ({gf / peak:.0%})" if peak else f"{gf:.0f}"
+
+
+def shape_label(shape: tuple) -> str:
+    """'1024³' for a cube, else 'MxNxK'."""
+    m, n, k = shape
+    return f"{m}³" if m == n == k else f"{m}x{n}x{k}"
+
+
+def write_summary(res: Results, path: Path) -> None:
+    """Markdown table per op: (shape, 1 thread and all threads) x backends,
+    median GFLOPS with % of peak; the best in each row bold."""
+    meta = res.meta
+    backends = meta["backends"]
+    threads = sorted({meta["threads"][0], meta["threads"][-1]})
+    lines = []
+    for op in meta["ops"]:
+        lines += [f"### {op}", "",
+                  "| shape | threads | " + " | ".join(backends) + " |",
+                  "|---|---:|" + "---:|" * len(backends)]
+        for s in res.shapes:
+            for t in threads:
+                ran = [(spread(res.points[(op, s, b, t)].gflops).median, b)
+                       for b in backends if (op, s, b, t) in res.points]
+                best = max(ran)[1] if ran else None
+                cells = []
+                for b in backends:
+                    cell = summary_cell(res, (op, s, b, t))
+                    cells.append(f"**{cell}**" if b == best else cell)
+                lines.append(f"| {shape_label(s)} | {t} | "
+                             + " | ".join(cells) + " |")
+        lines.append("")
+    lines.append(summary_caption(meta))
+    path.write_text("\n".join(lines) + "\n")
+    print(path)
+
+
+def summary_caption(meta: dict) -> str:
+    """Hardware and run settings the table's numbers depend on."""
+    parts = [f"Median GFLOPS over {meta['rounds']} round(s), "
+             f"min_time {meta['min_time']} s, preset "
+             f"{meta.get('preset') or 'custom'}, started {meta['started']}."]
+    peak = meta.get("peak")
+    if peak:
+        ghz = peak["turbo_ghz"]
+        parts.append(f"% of peak on {peak['cpu']}: "
+                     f"{peak['flop_per_cycle_per_core']} flop/cycle/core at "
+                     f"assumed stock turbo ({ghz[0]} GHz on 1 core to "
+                     f"{ghz[-1]} GHz on {len(ghz)}).")
+    edsl = meta.get("edsl")
+    if edsl:
+        parts.append(f"EDSL {edsl['branch']}@{edsl['commit']}"
+                     f"{' (dirty)' if edsl['dirty'] else ''}.")
+    return "*" + " ".join(parts) + "*"
+
+
 def main() -> int:
     """Draw every chart the results file has data for."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -418,6 +483,7 @@ def main() -> int:
     if not drew:
         for metric in metrics:
             plot_shapes(res, metric, shapes, out)
+    write_summary(res, out / "summary.md")
     return 0
 
 

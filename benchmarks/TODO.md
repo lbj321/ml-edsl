@@ -99,8 +99,9 @@ variance.
 - [ ] **P5** Shape coverage: non-square / tall-skinny / GEMV-like (M=1);
       coarse (~5×5) M×N heatmap of EDSL vs. best competitor, diverging
       colormap centred at 1.0.
-- [ ] **P6** Summary table: backends × representative sizes, GFLOP/s and
-      % of peak, hardware/settings in the caption.
+- [x] **P6** Summary table: backends × representative sizes, GFLOP/s and
+      % of peak, hardware/settings in the caption (`summary.md`, every
+      shape at 1 and all threads, best per row bold).
 - [x] **P7** Same color per backend across all figures; equal line weights
       for analysis plots (`STYLE` in `plot_results.py`).
 - [x] **P8** Peak GFLOP/s formula and assumed clock in meta (9700KF AVX2:
