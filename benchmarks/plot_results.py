@@ -170,7 +170,7 @@ def finish(fig: plt.Figure, axes: list, path: Path) -> None:
                frameon=False, fontsize=8, labelcolor=INK_MUTED,
                bbox_to_anchor=(1, 1 - 0.05 / fig.get_figheight()))
     fig.tight_layout(rect=(0, 0, 1, 1 - 0.45 / fig.get_figheight()))
-    fig.savefig(path, dpi=150, facecolor=SURFACE)
+    fig.savefig(path, dpi=300, facecolor=SURFACE)
     plt.close(fig)
     print(path)
 
