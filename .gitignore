@@ -97,6 +97,9 @@ ast_output
 # Benchmark results from benchmarks/run_matrix.py
 benchmarks/results/
 
+# Local benchmark report draft
+report/
+
 # Documentation builds
 docs/_build/
 docs/build/
