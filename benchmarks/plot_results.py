@@ -137,7 +137,8 @@ def figure(panels: int, title: str, meta: dict,
            bands: bool = False) -> tuple:
     """A row-wrapped grid of panels with the run described under the title;
     `bands` notes what the line plots' bands mean."""
-    cols = min(panels, 4)
+    # Two columns keep panels legible when the PNG is scaled to page width.
+    cols = min(panels, 2)
     rows = (panels + cols - 1) // cols
     fig, axes = plt.subplots(rows, cols, figsize=(4.4 * cols, 3.2 * rows + 0.7),
                              squeeze=False, facecolor=SURFACE)
