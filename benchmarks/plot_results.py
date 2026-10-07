@@ -211,7 +211,9 @@ def finish(fig: plt.Figure, axes: list, path: Path) -> None:
 
 
 def threads_label(t: int) -> str:
-    return f"{t} thread{'s' if t > 1 else ''}"
+    """'1 thread', else 'max 4 threads': the thread setting is a cap, and a
+    library may use fewer on a small problem."""
+    return "1 thread" if t == 1 else f"max {t} threads"
 
 
 def fmt_time(seconds: float) -> str:
@@ -365,7 +367,7 @@ def plot_scaling(res: Results, metric: str, shapes: list, out: Path) -> None:
         ax.set_xscale("log", base=2)
         ax.set_xticks(threads, [str(t) for t in threads])
         apply_metric(ax, metric)
-        setup_axes(ax, f"{op} {'x'.join(map(str, s))}", "threads",
+        setup_axes(ax, f"{op} {'x'.join(map(str, s))}", "max threads",
                    METRIC_LABEL[metric])
         label_line_ends(ax)
     finish(fig, axes, out / f"scaling{METRIC_SUFFIX[metric]}.png")
@@ -444,7 +446,7 @@ def write_summary(res: Results, path: Path) -> None:
     lines = []
     for op in meta["ops"]:
         lines += [f"### {op}", "",
-                  "| shape | threads | " + " | ".join(backends) + " |",
+                  "| shape | max threads | " + " | ".join(backends) + " |",
                   "|---|---:|" + "---:|" * len(backends)]
         for s in res.shapes:
             for t in threads:
