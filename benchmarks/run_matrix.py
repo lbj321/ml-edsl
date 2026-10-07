@@ -80,12 +80,18 @@ PRESETS = {
         "backends": list(BACKENDS), "shapes": _square(8, 16, 32, 64, 128),
         "threads": [1, 8], "ops": ["matmul"], "rounds": 5, "min_time": 1.0,
     },
-    # ~14 min. Thread scaling of large square matmuls.
+    # ~20 min. Thread scaling of large square matmuls.
     "scaling": {
-        "backends": ["mkl", "openblas", "jax", "edsl"],
+        "backends": ["mkl", "openblas", "blis", "jax", "edsl"],
         "shapes": _square(256, 512, 1024, 2048),
         "threads": [1, 2, 4, 8], "ops": ["matmul"],
-        "rounds": 4, "min_time": 2.0,
+        "rounds": 5, "min_time": 2.0,
+    },
+    # ~3 min. Whether EDSL keeps up past 2048 on all cores; 1T is left out,
+    # since one 4096 call there is ~1 s.
+    "large": {
+        "backends": ["mkl", "jax", "edsl"], "shapes": _square(4096),
+        "threads": [8], "ops": ["matmul"], "rounds": 6, "min_time": 2.0,
     },
     # ~7 min. Cost of extents no cache block divides, against 1024.
     "padding": {
