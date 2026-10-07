@@ -87,15 +87,18 @@ PRESETS = {
         "threads": [1, 2, 4, 8], "ops": ["matmul"],
         "rounds": 5, "min_time": 2.0,
     },
-    # ~3 min. Whether EDSL keeps up past 2048 on all cores; 1T is left out,
-    # since one 4096 call there is ~1 s.
+    # ~5 min. Whether EDSL keeps up past 2048 on all cores; 512-2048
+    # overlap scaling as a cross-check. 1T is left out, since one 4096 call
+    # there is ~1 s.
     "large": {
-        "backends": ["mkl", "jax", "edsl"], "shapes": _square(4096),
+        "backends": ["mkl", "jax", "edsl"],
+        "shapes": _square(512, 1024, 2048, 4096),
         "threads": [8], "ops": ["matmul"], "rounds": 6, "min_time": 2.0,
     },
-    # ~7 min. Cost of extents no cache block divides, against 1024.
+    # ~11 min. Cost of extents no cache block divides, against 1024.
     "padding": {
-        "backends": ["mkl", "edsl"], "shapes": _square(1000, 1023, 1024),
+        "backends": ["mkl", "jax", "edsl"],
+        "shapes": _square(1000, 1023, 1024),
         "threads": [1, 2, 4, 8], "ops": ["matmul"],
         "rounds": 6, "min_time": 2.0,
     },
