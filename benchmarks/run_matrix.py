@@ -102,10 +102,12 @@ PRESETS = {
         "threads": [1, 2, 4, 8], "ops": ["matmul"],
         "rounds": 6, "min_time": 2.0,
     },
-    # ~12 min. Dense layer against bare matmul, around the 256 -> 512 break.
-    "epilogue": {
-        "backends": ["mkl", "jax", "edsl"], "shapes": _square(256, 512, 1024),
-        "threads": [1, 8], "ops": ["matmul", "dense"],
+    # ~10 min. Dense layer (matmul + bias + ReLU) over the scaling sizes,
+    # plus 128 for the small end.
+    "dense": {
+        "backends": ["mkl", "jax", "edsl"],
+        "shapes": _square(128, 256, 512, 1024, 2048),
+        "threads": [1, 8], "ops": ["dense"],
         "rounds": 6, "min_time": 2.0,
     },
     # ~6 min. Dense layers at batch 1..256 on a 1024 -> 4096 layer.
