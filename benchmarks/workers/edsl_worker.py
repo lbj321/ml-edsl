@@ -103,6 +103,8 @@ def main() -> int:
         "median_s": timing.median,
         "p10_s": timing.p10,
         "p90_s": timing.p90,
+        "mean_s": timing.mean,
+        "stdev_s": timing.stdev,
         "spread": timing.spread,
         "gflops": 2 * m * n * k / timing.median / 1e9,
         "samples_file": str(args.dump_samples) if args.dump_samples else None,

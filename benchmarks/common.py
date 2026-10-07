@@ -23,6 +23,10 @@ class Timing(NamedTuple):
     median: float
     p10: float
     p90: float
+    # Diagnostic only: a mean well above the median flags a heavy tail or a
+    # second mode that p10/p90 can miss.
+    mean: float
+    stdev: float
 
     @property
     def spread(self) -> float:
@@ -70,17 +74,19 @@ def summarize(samples: list) -> Timing:
     """
     samples = sorted(samples)
     median = statistics.median(samples)
+    mean = statistics.fmean(samples)
 
     # A single sample has no spread to report; say so rather than letting
     # statistics.quantiles raise.
     if len(samples) < 2:
-        return Timing(median, median, median)
+        return Timing(median, median, median, mean, 0.0)
 
     # Interpolated deciles, not nearest-rank: a nearest-rank p10 collapses onto
     # samples[0] once n <= 10, which would quietly turn the spread indicator
     # back into the max/min ratio it exists to avoid.
     deciles = statistics.quantiles(samples, n=10, method="inclusive")
-    return Timing(median, deciles[0], deciles[8])
+    return Timing(median, deciles[0], deciles[8], mean,
+                  statistics.stdev(samples))
 
 
 def repeats_for(N: int) -> int:
