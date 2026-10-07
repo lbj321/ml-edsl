@@ -142,35 +142,69 @@ def figure(panels: int, title: str, meta: dict,
     rows = (panels + cols - 1) // cols
     fig, axes = plt.subplots(rows, cols, figsize=(4.4 * cols, 3.2 * rows + 0.7),
                              squeeze=False, facecolor=SURFACE)
+    parts = [f"preset {meta.get('preset') or 'custom'}",
+             f"{meta['rounds']} round(s)", f"min_time {meta['min_time']} s"]
+    if bands and meta["rounds"] > 1:
+        # Not a confidence interval; say so where the reader sees the plot.
+        parts.append("bands: min-max over rounds")
     edsl = meta.get("edsl")
-    build = f" · edsl .so built {edsl['so_built']}" if edsl else ""
-    # Not a confidence interval; say so where the reader sees the plot.
-    band = (" · bands: min-max over rounds"
-            if bands and meta["rounds"] > 1 else "")
+    if edsl:
+        parts.append(f"edsl .so built {edsl['so_built']}")
     fig.suptitle(title, color=INK, fontsize=12, x=0.01, ha="left",
                  y=1 - 0.1 / fig.get_figheight(), va="top")
-    fig.text(0.01, 1 - 0.42 / fig.get_figheight(),
-             f"preset {meta.get('preset') or 'custom'} · {meta['rounds']} "
-             f"round(s) · min_time {meta['min_time']} s{band}{build}",
-             color=INK_MUTED, fontsize=8)
+    wrapped_text(fig, 0.01, 1 - 0.3 / fig.get_figheight(), parts,
+                 color=INK_MUTED, fontsize=8, va="top")
     flat = [ax for row in axes for ax in row]
     for ax in flat[panels:]:
         ax.set_visible(False)
     return fig, flat[:panels]
 
 
+def wrapped_text(fig: plt.Figure, x: float, y: float, parts: list,
+                 **kwargs) -> None:
+    """`parts` joined by ' · ', starting a new line wherever the next part
+    would run past the figure's right edge (one-panel figures are narrow)."""
+    text = fig.text(x, y, "", **kwargs)
+    renderer = fig.canvas.get_renderer()
+    room = fig.bbox.width * (1 - 2 * x)
+    lines = []
+    for part in parts:
+        if lines:
+            text.set_text(f"{lines[-1]} · {part}")
+            if text.get_window_extent(renderer).width <= room:
+                lines[-1] = f"{lines[-1]} · {part}"
+                continue
+        lines.append(part)
+    text.set_text("\n".join(lines))
+
+
 def finish(fig: plt.Figure, axes: list, path: Path) -> None:
-    """Shared legend in one row above the panels, then save."""
+    """Shared legend in one row, top right beside the title, or under the
+    header where the title leaves no room; then save."""
     handles, labels = [], []
     for ax in axes:
         for h, l in zip(*ax.get_legend_handles_labels()):
             if l not in labels:
                 handles.append(h)
                 labels.append(l)
-    fig.legend(handles, labels, loc="upper right", ncol=len(labels),
-               frameon=False, fontsize=8, labelcolor=INK_MUTED,
-               bbox_to_anchor=(1, 1 - 0.05 / fig.get_figheight()))
-    fig.tight_layout(rect=(0, 0, 1, 1 - 0.45 / fig.get_figheight()))
+
+    def legend(loc: str, anchor: tuple) -> plt.Artist:
+        return fig.legend(handles, labels, loc=loc, ncol=len(labels),
+                          frameon=False, fontsize=8, labelcolor=INK_MUTED,
+                          bbox_to_anchor=anchor)
+
+    renderer = fig.canvas.get_renderer()
+    height = fig.bbox.height
+    texts = [t.get_window_extent(renderer) for t in fig.texts]
+    header_bottom = min(t.y0 for t in texts)
+    leg = legend("upper right", (1, 1 - 0.05 / fig.get_figheight()))
+    if any(leg.get_window_extent(renderer).overlaps(t) for t in texts):
+        leg.remove()
+        leg = legend("upper left", (0, header_bottom / height))
+        header_bottom = leg.get_window_extent(renderer).y0
+    # Panels start below the header, however many rows it took.
+    fig.tight_layout(rect=(0, 0, 1, (header_bottom - 0.04 * fig.dpi)
+                           / height))
     fig.savefig(path, dpi=300, facecolor=SURFACE)
     plt.close(fig)
     print(path)
