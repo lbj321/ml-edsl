@@ -1,6 +1,6 @@
 //===- LinalgMatmulBlockedKernel.cpp - k-loop over the register tile ------===//
 //
-// linalg-matmul-blocked-kernel: the third of the four blocked matmul passes
+// linalg-matmul-blocked-kernel: the third of the six blocked matmul passes
 // (see BlockedStage in MatmulStrategy.h). Tiles each Tiled MR x NR x KC tile
 // over k into the MR x NR x 1 register tile the microkernel passes build on,
 // and leaves it at stage Kernel.
@@ -24,7 +24,7 @@ namespace {
 using mlir_edsl::BlockedStage;
 
 // Reduces the MR x NR x KC tile to the MR x NR x 1 register tile, marking
-// the k-loop for the pack pass to hoist out of.
+// the k-loop for pack-b and pack-a to hoist out of.
 static mlir::FailureOr<mlir::Operation *>
 tileK(mlir::IRRewriter &rewriter, mlir::Operation *tile) {
   auto tiled = mlir_edsl::tileOneLevel(rewriter, tile, {0, 0, 1});

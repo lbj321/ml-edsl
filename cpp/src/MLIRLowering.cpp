@@ -257,7 +257,7 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   // chooseStrategy accepts before the older tiling passes see it. The tiles it
   // leaves carry mlir_edsl.blocked, which keeps those passes off them.
   // Anything the guard rejects — non-f32, dynamic or non-divisible shapes —
-  // is untouched here and lowers exactly as before. The four stages hand
+  // is untouched here and lowers exactly as before. The stages hand
   // tiles over through that attribute (and
   // the register loops through kBlockedHoistAttrName), so canonicalize
   // between them is safe.
@@ -271,7 +271,12 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedKernelPass());
   pm.addPass(mlir::createCanonicalizerPass());
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedPackPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      createLinalgMatmulBlockedPackPreparePass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedPackBPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedPackAPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
   // Tile linalg.generic ops (elementwise, bias, relu, etc.) to strips of 8

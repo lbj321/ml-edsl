@@ -1,5 +1,7 @@
 #include "TilingUtils.h"
 
+#include "mlir_edsl/MatmulStrategy.h"
+
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Tensor/Transforms/Transforms.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
@@ -61,6 +63,20 @@ tileOneLevel(mlir::IRRewriter &rewriter, mlir::Operation *op,
 
   rewriter.replaceOp(op, result->mergeResult.replacements);
   return TiledLevel{result->tiledOps.front(), std::move(result->loops)};
+}
+
+llvm::SmallVector<mlir::scf::ForOp> collectHoistLoops(mlir::Operation *tile) {
+  llvm::SmallVector<mlir::scf::ForOp> loops;
+  for (auto loop = llvm::dyn_cast<mlir::scf::ForOp>(tile->getParentOp());
+       loop && loop->hasAttr(kBlockedHoistAttrName);
+       loop = llvm::dyn_cast<mlir::scf::ForOp>(loop->getParentOp()))
+    loops.push_back(loop);
+  return loops;
+}
+
+mlir::tensor::PadOp nofoldPadOperand(mlir::Operation *tile, unsigned operand) {
+  auto pad = tile->getOperand(operand).getDefiningOp<mlir::tensor::PadOp>();
+  return pad && pad.getNofold() ? pad : nullptr;
 }
 
 } // namespace mlir_edsl

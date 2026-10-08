@@ -1,6 +1,8 @@
 #pragma once
 
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "llvm/ADT/SmallVector.h"
@@ -46,5 +48,15 @@ mlir::LogicalResult vectorizeCopyTile(mlir::IRRewriter &rewriter,
                                       mlir::Operation *tile,
                                       mlir::Operation *loop,
                                       llvm::ArrayRef<int64_t> vectorSizes = {});
+
+/// The kBlockedHoistAttrName-marked loops directly around a blocked `tile`,
+/// innermost first: k, then whichever of ir and jr survived. Canonicalize
+/// removes the ones with a single iteration, and their markers with them; k
+/// always has KC > 1 iterations.
+llvm::SmallVector<mlir::scf::ForOp> collectHoistLoops(mlir::Operation *tile);
+
+/// The nofold pad linalg-matmul-blocked-pack-prepare put on operand `operand`
+/// of a blocked tile to have it packed, or null when there is none.
+mlir::tensor::PadOp nofoldPadOperand(mlir::Operation *tile, unsigned operand);
 
 } // namespace mlir_edsl

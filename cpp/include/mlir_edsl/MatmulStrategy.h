@@ -22,7 +22,7 @@ namespace mlir_edsl {
 constexpr llvm::StringLiteral kBlockedAttrName = "mlir_edsl.blocked";
 
 /// Unit attribute the tile and kernel passes set on the register loops (jr,
-/// ir) and the k-loop of a blocked tile: the loops the pack pass hoists the
+/// ir) and the k-loop of a blocked tile: the loops pack-b and pack-a hoist the
 /// packed panels out of.
 constexpr llvm::StringLiteral kBlockedHoistAttrName = "mlir_edsl.blocked_hoist";
 
@@ -102,15 +102,17 @@ inline int64_t paddedExtent(int64_t dim, int64_t block) {
 
 /// How far the blocked passes have taken a tile.
 ///
-/// The fast path for f32 matmuls chooseStrategy accepts is four passes
+/// The fast path for f32 matmuls chooseStrategy accepts is six passes
 /// (cpp/src/passes/LinalgMatmulBlocked*.cpp), run in this order and each
 /// followed by canonicalize in buildCPUPipeline. Each picks up the tiles at
 /// the stage the previous one left them in:
 ///
-///   linalg-matmul-blocked-distribute  → Distributed (inside the ic x jc forall)
-///   linalg-matmul-blocked-tile        → Tiled (MR x NR x KC)
-///   linalg-matmul-blocked-kernel      → Kernel (MR x NR x 1)
-///   linalg-matmul-blocked-pack        → Packed (A and B operands packed)
+///   linalg-matmul-blocked-distribute    → Distributed (inside the ic x jc forall)
+///   linalg-matmul-blocked-tile          → Tiled (MR x NR x KC)
+///   linalg-matmul-blocked-kernel        → Kernel (MR x NR x 1)
+///   linalg-matmul-blocked-pack-prepare  → Padded (A and B behind nofold pads)
+///   linalg-matmul-blocked-pack-b        → Padded (B packed)
+///   linalg-matmul-blocked-pack-a        → Packed (A packed)
 ///
 /// Together they produce the BLIS loop nest
 ///
@@ -127,10 +129,11 @@ inline int64_t paddedExtent(int64_t dim, int64_t block) {
 /// distribute pass records the strategy there, and each pass advances the
 /// stage. Canonicalize removes single-iteration loops, forall included, in
 /// between, so no pass holds on to a loop an earlier one created. The one
-/// loop-level hand-over is kBlockedHoistAttrName: the pack pass hoists out of
-/// the marked loops that survived, and a missing marker means that loop was
-/// folded away.
-enum class BlockedStage { Distributed, Tiled, Kernel, Packed };
+/// loop-level hand-over is kBlockedHoistAttrName: pack-b and pack-a hoist out
+/// of the marked loops that survived, and pack-a removes the markers. A
+/// missing marker means that loop was folded away. Which operands to pack is
+/// handed from pack-prepare to pack-b and pack-a as nofold tensor.pads.
+enum class BlockedStage { Distributed, Tiled, Kernel, Padded, Packed };
 
 llvm::StringRef stringifyBlockedStage(BlockedStage stage);
 std::optional<BlockedStage> symbolizeBlockedStage(llvm::StringRef str);

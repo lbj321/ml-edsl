@@ -1,6 +1,6 @@
 //===- LinalgMatmulBlockedDistribute.cpp - ic x jc forall -----------------===//
 //
-// linalg-matmul-blocked-distribute: the first of the four blocked matmul
+// linalg-matmul-blocked-distribute: the first of the six blocked matmul
 // passes (see BlockedStage in MatmulStrategy.h). Chooses the strategy for
 // every matmul chooseStrategy accepts, pads the extents its blocks do not
 // divide (MatmulPadding.h), distributes it over an ic x jc scf.forall, and

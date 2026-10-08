@@ -43,7 +43,9 @@ add_library(mlir_edsl_core STATIC
     src/passes/LinalgMatmulBlockedDistribute.cpp
     src/passes/LinalgMatmulBlockedFuseEpilogue.cpp
     src/passes/LinalgMatmulBlockedTile.cpp
-    src/passes/LinalgMatmulBlockedPack.cpp
+    src/passes/LinalgMatmulBlockedPackPrepare.cpp
+    src/passes/LinalgMatmulBlockedPackB.cpp
+    src/passes/LinalgMatmulBlockedPackA.cpp
     src/passes/LinalgMatmulBlockedKernel.cpp
     src/passes/TilingUtils.cpp
     src/passes/MatmulPadding.cpp
@@ -70,7 +72,11 @@ if(NOT LLVM_ENABLE_RTTI)
         PROPERTIES COMPILE_OPTIONS "-fno-rtti")
     set_source_files_properties(src/passes/LinalgMatmulBlockedTile.cpp
         PROPERTIES COMPILE_OPTIONS "-fno-rtti")
-    set_source_files_properties(src/passes/LinalgMatmulBlockedPack.cpp
+    set_source_files_properties(src/passes/LinalgMatmulBlockedPackPrepare.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(src/passes/LinalgMatmulBlockedPackB.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(src/passes/LinalgMatmulBlockedPackA.cpp
         PROPERTIES COMPILE_OPTIONS "-fno-rtti")
     set_source_files_properties(src/passes/LinalgMatmulBlockedKernel.cpp
         PROPERTIES COMPILE_OPTIONS "-fno-rtti")

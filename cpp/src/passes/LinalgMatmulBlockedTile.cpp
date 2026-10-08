@@ -1,9 +1,9 @@
 //===- LinalgMatmulBlockedTile.cpp - cache and register tiles -------------===//
 //
-// linalg-matmul-blocked-tile: the second of the four blocked matmul passes
+// linalg-matmul-blocked-tile: the second of the six blocked matmul passes
 // (see BlockedStage in MatmulStrategy.h). Tiles each Distributed tile into
 // pc → jr → ir loops over an MR x NR x KC tile, marks jr and ir for the pack
-// pass to hoist out of, and leaves the tile at stage Tiled.
+// passes to hoist out of, and leaves the tile at stage Tiled.
 //
 //===----------------------------------------------------------------------===//
 

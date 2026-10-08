@@ -46,8 +46,11 @@ void registerCPUPasses() {
   mlir::registerPass(
       [] { return createLinalgMatmulBlockedFuseEpiloguePass(); });
   mlir::registerPass([] { return createLinalgMatmulBlockedTilePass(); });
-  mlir::registerPass([] { return createLinalgMatmulBlockedPackPass(); });
   mlir::registerPass([] { return createLinalgMatmulBlockedKernelPass(); });
+  mlir::registerPass(
+      [] { return createLinalgMatmulBlockedPackPreparePass(); });
+  mlir::registerPass([] { return createLinalgMatmulBlockedPackBPass(); });
+  mlir::registerPass([] { return createLinalgMatmulBlockedPackAPass(); });
 
   mlir::PassPipelineRegistration<>(
       "cpu-pipeline",
