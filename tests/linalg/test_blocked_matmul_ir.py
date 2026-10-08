@@ -341,6 +341,28 @@ class TestBlockedMatmulEpilogueFusion:
         // CHECK: scf.forall.in_parallel
         """, after=FUSE_EPILOGUE)
 
+    def test_fused_matmul_keeps_full_k(self, check_lowered_ir):
+        """The forall slices only M and N: the block is MC x K times K x NC,
+        with K = 512 left whole for the tile pass to split by KC."""
+        _run_dense(512, 512, 512)
+        check_lowered_ir("""
+        // CHECK: scf.forall
+        // CHECK: linalg.matmul {mlir_edsl.blocked = {{{.*}}stage = "distributed"
+        // CHECK-SAME: tensor<128x512xf32>, tensor<512x256xf32>
+        """, after=FUSE_EPILOGUE)
+
+    def test_fused_dense_layer_k_split_into_kc_blocks(self, check_lowered_ir):
+        """K = 512 is two KC = 256 blocks: the pc loop steps by KC inside the
+        forall, and the register tile reads KC-deep slices."""
+        _run_dense(512, 512, 512)
+        check_lowered_ir("""
+        // CHECK: scf.forall
+        // CHECK: scf.for {{.*}} to %c512{{[_0-9]*}} step %c256
+        // CHECK: linalg.matmul {mlir_edsl.blocked = {{{.*}}stage = "tiled"
+        // CHECK-SAME: tensor<4x256xf32>, tensor<256x16xf32>
+        // CHECK: library_call = "bias_add"
+        """, after=TILE)
+
     def test_padded_matmul_epilogue_stays_outside(self, check_lowered_ir):
         """The padding copy-out sits between the forall and the generics, so
         the chain is left unfused rather than fused across it."""

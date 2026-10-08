@@ -5,7 +5,6 @@ replaced by lower-level ops at specific pipeline stages.
 """
 
 import numpy as np
-import pytest
 from mlir_edsl import ml_function, Tensor, f32, i32, dot, matmul, tensor_sum, relu
 
 
@@ -120,37 +119,6 @@ class TestLinalgMatmulLargeIR:
         // CHECK: vector.
         // CHECK-NOT: linalg.matmul
         """, after="linalg-vectorize")
-
-    @pytest.mark.skip(
-        reason=(
-            "asserts the old CPU path's fused 64x64 epilogue, which was "
-            "removed: LinalgOuterTileAndFusePass and the old matmul tiling "
-            "passes are GPU-only now, and dense layers go through the blocked "
-            "matmul passes with the epilogue unfused. Revisit with "
-            "INTEGRATION.md Step 4. "
-        )
-    )
-    def test_dense_layer_large_k_cache_blocked(self, check_lowered_ir):
-        """512x512 dense layer: K=512 clears the 256-wide Kc cache-block
-        threshold (see LinalgMatmulKTilingPass), so the fused epilogue's
-        64x64-tile matmul (full K=512 after linalg-outer-tile-and-fuse) gets
-        split into a serial scf.for over two 256-wide K chunks."""
-        @ml_function
-        def dense(A: Tensor[f32, 512, 512], B: Tensor[f32, 512, 512],
-                  b: Tensor[f32, 512]) -> Tensor[f32, 512, 512]:
-            return relu(matmul(A, B) + b)
-
-        dense(np.ones((512, 512), dtype=np.float32),
-              np.ones((512, 512), dtype=np.float32),
-              np.ones(512, dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.forall
-        // CHECK: scf.for
-        // CHECK: linalg.matmul
-        // CHECK-SAME: tensor<64x256xf32>
-        // CHECK-SAME: tensor<256x64xf32>
-        """, after="linalg-tile-matmul-k")
-
 
 class TestVectorCleanupPass:
     """IR tests for VectorCleanupPass (vector-cleanup).

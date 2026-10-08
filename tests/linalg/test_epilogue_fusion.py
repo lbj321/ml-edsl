@@ -1,14 +1,11 @@
 """Tests for matmul -> bias_add -> relu chains on CPU.
 
-Epilogue fusion is disabled on CPU for now: the matmul goes through the
-blocked matmul passes and bias_add/relu run as their own ops afterwards. The
-execution tests check that chains still compute the right values. The IR
-tests describe the old fused 64x64 structure and stay skipped until
-INTEGRATION.md Step 4 fuses the epilogue into the blocked accumulator.
+The matmul goes through the blocked matmul passes, which fuse bias_add/relu
+into its ic x jc forall. These tests check that chains compute the right
+values; the IR structure is covered in test_blocked_matmul_ir.py.
 """
 
 import numpy as np
-import pytest
 from mlir_edsl import ml_function, Tensor, f32, matmul, relu
 
 
@@ -114,116 +111,3 @@ class TestFallbackMatmulTilingExecution:
         expected = A @ B + bias
         np.testing.assert_allclose(result, expected, rtol=1e-3, atol=1e-3)
 
-
-# ==================== POST-LOWERING IR ====================
-
-class TestEpilogueFusionIR:
-    """IR structure after linalg-outer-tile-and-fuse: verifies the fused
-    chain lands inside one scf.forall and that K stays untiled."""
-
-    @pytest.mark.skip(
-        reason=(
-            "asserts the old CPU path's fused 64x64 epilogue, which was "
-            "removed: LinalgOuterTileAndFusePass and the old matmul tiling "
-            "passes are GPU-only now, and dense layers go through the blocked "
-            "matmul passes with the epilogue unfused. Revisit with "
-            "INTEGRATION.md Step 4. "
-        )
-    )
-    def test_relu_epilogue_fused_into_one_forall(self, check_lowered_ir):
-        @ml_function
-        def dense(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128],
-                  b: Tensor[f32, 128]) -> Tensor[f32, 128, 128]:
-            return relu(matmul(A, B) + b)
-
-        dense(np.ones((128, 128), dtype=np.float32),
-              np.ones((128, 128), dtype=np.float32),
-              np.ones(128, dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.forall (
-        // CHECK: linalg.fill
-        // CHECK: linalg.matmul
-        // CHECK: library_call = "bias_add"
-        // CHECK: library_call = "relu"
-        // CHECK: scf.forall.in_parallel
-        """, after="linalg-outer-tile-and-fuse")
-
-    @pytest.mark.skip(
-        reason=(
-            "asserts the old CPU path's fused 64x64 epilogue, which was "
-            "removed: LinalgOuterTileAndFusePass and the old matmul tiling "
-            "passes are GPU-only now, and dense layers go through the blocked "
-            "matmul passes with the epilogue unfused. Revisit with "
-            "INTEGRATION.md Step 4. "
-        )
-    )
-    def test_outer_tile_size_is_64(self, check_lowered_ir):
-        @ml_function
-        def dense(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128],
-                  b: Tensor[f32, 128]) -> Tensor[f32, 128, 128]:
-            return relu(matmul(A, B) + b)
-
-        dense(np.ones((128, 128), dtype=np.float32),
-              np.ones((128, 128), dtype=np.float32),
-              np.ones(128, dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.forall {{.*}} step (64, 64)
-        """, after="linalg-outer-tile-and-fuse")
-
-    @pytest.mark.skip(
-        reason=(
-            "asserts the old CPU path's fused 64x64 epilogue, which was "
-            "removed: LinalgOuterTileAndFusePass and the old matmul tiling "
-            "passes are GPU-only now, and dense layers go through the blocked "
-            "matmul passes with the epilogue unfused. Revisit with "
-            "INTEGRATION.md Step 4. "
-        )
-    )
-    def test_fused_matmul_keeps_full_k(self, check_lowered_ir):
-        """The fused matmul is sliced to 64 wide on M/N but keeps the full
-        128-wide K dimension: relu has no K dimension to slice against, so
-        producer fusion never tiles K. Checked after the canonicalizer that
-        immediately follows linalg-outer-tile-and-fuse, which removes the
-        dead top-level (pre-fusion) matmul copy so there's only one match."""
-        @ml_function
-        def dense(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128],
-                  b: Tensor[f32, 128]) -> Tensor[f32, 128, 128]:
-            return relu(matmul(A, B) + b)
-
-        dense(np.ones((128, 128), dtype=np.float32),
-              np.ones((128, 128), dtype=np.float32),
-              np.ones(128, dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: linalg.matmul
-        // CHECK-SAME: tensor<64x128xf32>
-        // CHECK-SAME: tensor<128x64xf32>
-        """, after="canonicalize")
-
-class TestFallbackMatmulTilingIR:
-    """IR structure after linalg-tile-matmul-forall: verifies the fallback
-    pass tiles matmuls the fusion pass didn't touch, and skips ones it did."""
-
-    @pytest.mark.skip(
-        reason=(
-            "asserts the old CPU path's fused 64x64 epilogue, which was "
-            "removed: LinalgOuterTileAndFusePass and the old matmul tiling "
-            "passes are GPU-only now, and dense layers go through the blocked "
-            "matmul passes with the epilogue unfused. Revisit with "
-            "INTEGRATION.md Step 4. "
-        )
-    )
-    def test_fused_matmul_not_retiled(self, check_lowered_ir):
-        """A matmul already fused into an scf.forall must not get a second,
-        redundant outer-tiling forall wrapped around it."""
-        @ml_function
-        def dense(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128],
-                  b: Tensor[f32, 128]) -> Tensor[f32, 128, 128]:
-            return relu(matmul(A, B) + b)
-
-        dense(np.ones((128, 128), dtype=np.float32),
-              np.ones((128, 128), dtype=np.float32),
-              np.ones(128, dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.forall (
-        // CHECK-NOT: scf.forall (
-        """, after="linalg-tile-matmul-forall")
