@@ -8,9 +8,10 @@ Usage:
 Needs matplotlib (the system python3 has it; the project venv does not).
 Writes, into DIR (default: benchmarks/results/plots/<file stem>/), every
 chart the file has data for:
-  size.png      GFLOPS against N, when >= 3 square shapes ran (skipped when
-                every shape is <= 128, where fixed cost dominates)
-  speedup.png   GFLOPS / mkl against N, paired per round, for the same
+  size.png      GFLOPS against M, when >= 3 shapes ran that are all cubes
+                or all share N and K (skipped when every dimension is
+                <= 128, where fixed cost dominates)
+  speedup.png   GFLOPS / mkl against M, paired per round, for the same
                 files when mkl ran
   scaling.png   GFLOPS against thread count, when >= 3 thread counts ran
   epilogue.png  dense / matmul time per backend, when both ops ran
@@ -272,8 +273,20 @@ METRIC_TITLE = {"gflops": "GFLOPS", "time": "Time per call"}
 METRIC_SUFFIX = {"gflops": "", "time": "_time"}
 
 
-def plot_size(res: Results, metric: str, shapes: list, out: Path) -> None:
-    """`metric` against N, one panel per (op, threads)."""
+def size_axis(shapes: list) -> Optional[str]:
+    """X-axis label when the shapes sweep a single size, M, with the rest
+    following it (cubes) or fixed (a dense layer over batch); else None."""
+    if all(m == n == k for m, n, k in shapes):
+        return "N  (M = N = K)"
+    if len({(n, k) for _, n, k in shapes}) == 1:
+        _, n, k = shapes[0]
+        return f"batch M  ({k} → {n})"
+    return None
+
+
+def plot_size(res: Results, metric: str, shapes: list, xlabel: str,
+              out: Path) -> None:
+    """`metric` against M, one panel per (op, threads)."""
     meta = res.meta
     ns = [s[0] for s in shapes]
     combos = [(op, t) for op in meta["ops"] for t in meta["threads"]]
@@ -288,7 +301,7 @@ def plot_size(res: Results, metric: str, shapes: list, out: Path) -> None:
         if metric == "gflops":
             peak_level(ax, meta, t)
         apply_metric(ax, metric)
-        setup_axes(ax, f"{op}, {threads_label(t)}", "N  (N x N x N)",
+        setup_axes(ax, f"{op}, {threads_label(t)}", xlabel,
                    METRIC_LABEL[metric])
         ax.tick_params(axis="x", labelrotation=45)
         label_line_ends(ax)
@@ -321,8 +334,8 @@ def ratio_axis(ax: plt.Axes) -> None:
     ax.yaxis.set_minor_formatter(NullFormatter())
 
 
-def plot_speedup(res: Results, shapes: list, out: Path) -> None:
-    """GFLOPS / BASELINE against N, paired per round, one panel per
+def plot_speedup(res: Results, shapes: list, xlabel: str, out: Path) -> None:
+    """GFLOPS / BASELINE against M, paired per round, one panel per
     (op, threads); the baseline itself is the dashed line at 1."""
     meta = res.meta
     ns = [s[0] for s in shapes]
@@ -343,7 +356,7 @@ def plot_speedup(res: Results, shapes: list, out: Path) -> None:
                     xytext=(0, 2), textcoords="offset points", va="bottom",
                     fontsize=7, color=INK_MUTED)
         ratio_axis(ax)
-        setup_axes(ax, f"{op}, {threads_label(t)}", "N  (N x N x N)",
+        setup_axes(ax, f"{op}, {threads_label(t)}", xlabel,
                    f"GFLOPS / {BASELINE} (log)")
         ax.tick_params(axis="x", labelrotation=45)
         label_line_ends(ax)
@@ -367,7 +380,7 @@ def plot_scaling(res: Results, metric: str, shapes: list, out: Path) -> None:
         ax.set_xscale("log", base=2)
         ax.set_xticks(threads, [str(t) for t in threads])
         apply_metric(ax, metric)
-        setup_axes(ax, f"{op} {'x'.join(map(str, s))}", "max threads",
+        setup_axes(ax, f"{op} {shape_label(op, s)}", "max threads",
                    METRIC_LABEL[metric])
         label_line_ends(ax)
     finish(fig, axes, out / f"scaling{METRIC_SUFFIX[metric]}.png")
@@ -388,7 +401,7 @@ def epilogue_spread(res: Results, shape: tuple, backend: str,
 def plot_epilogue(res: Results, shapes: list, out: Path) -> None:
     """dense / matmul time per backend, one panel per thread count."""
     meta = res.meta
-    labels = ["x".join(map(str, s)) for s in shapes]
+    labels = [shape_label("dense", s) for s in shapes]
     fig, axes = figure(len(meta["threads"]), "Dense layer time / matmul "
                        "time  (dashed line = epilogue is free)", meta)
     for ax, t in zip(axes, meta["threads"]):
@@ -404,14 +417,13 @@ def plot_epilogue(res: Results, shapes: list, out: Path) -> None:
 def plot_shapes(res: Results, metric: str, shapes: list, out: Path) -> None:
     """`metric` per shape as grouped bars, one panel per (op, threads)."""
     meta = res.meta
-    labels = ["x".join(map(str, s)) for s in shapes]
     combos = [(op, t) for op in meta["ops"] for t in meta["threads"]]
     fig, axes = figure(len(combos), f"{METRIC_TITLE[metric]} per shape", meta)
     for ax, (op, t) in zip(axes, combos):
         series = {b: [point_spread(res, (op, s, b, t), metric)
                       for s in shapes]
                   for b in meta["backends"]}
-        bar_panel(ax, labels, series)
+        bar_panel(ax, [shape_label(op, s) for s in shapes], series)
         if metric == "gflops":
             peak_level(ax, meta, t)
         apply_metric(ax, metric)
@@ -431,10 +443,15 @@ def summary_cell(res: Results, key: tuple) -> str:
     return f"{gf:.0f} ({gf / peak:.0%})" if peak else f"{gf:.0f}"
 
 
-def shape_label(shape: tuple) -> str:
-    """'1024³' for a cube, else 'MxNxK'."""
+def shape_label(op: str, shape: tuple) -> str:
+    """'1024³' for a cube, 'batch 16, 1024→4096' for a dense layer (batch,
+    in -> out features), else 'MxNxK'."""
     m, n, k = shape
-    return f"{m}³" if m == n == k else f"{m}x{n}x{k}"
+    if m == n == k:
+        return f"{m}³"
+    if op == "dense":
+        return f"batch {m}, {k}→{n}"
+    return f"{m}x{n}x{k}"
 
 
 def write_summary(res: Results, path: Path) -> None:
@@ -457,7 +474,7 @@ def write_summary(res: Results, path: Path) -> None:
                 for b in backends:
                     cell = summary_cell(res, (op, s, b, t))
                     cells.append(f"**{cell}**" if b == best else cell)
-                lines.append(f"| {shape_label(s)} | {t} | "
+                lines.append(f"| {shape_label(op, s)} | {t} | "
                              + " | ".join(cells) + " |")
         lines.append("")
     lines.append(summary_caption(meta))
@@ -501,14 +518,15 @@ def main() -> int:
     meta, shapes = res.meta, res.shapes
     metrics = ("gflops", "time")
     drew = False
-    if all(m == n == k for m, n, k in shapes) and len(shapes) >= 3:
+    xlabel = size_axis(shapes)
+    if xlabel and len(shapes) >= 3:
         # GFLOPS says little where fixed per-call cost dominates.
-        small = max(s[0] for s in shapes) <= 128
+        small = max(max(s) for s in shapes) <= 128
         for metric in metrics:
             if not (small and metric == "gflops"):
-                plot_size(res, metric, sorted(shapes), out)
+                plot_size(res, metric, sorted(shapes), xlabel, out)
         if BASELINE in meta["backends"] and len(meta["backends"]) > 1:
-            plot_speedup(res, sorted(shapes), out)
+            plot_speedup(res, sorted(shapes), xlabel, out)
         drew = True
     if len(meta["threads"]) >= 3:
         for metric in metrics:
