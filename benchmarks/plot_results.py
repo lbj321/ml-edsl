@@ -144,13 +144,10 @@ def figure(panels: int, title: str, meta: dict,
     fig, axes = plt.subplots(rows, cols, figsize=(4.4 * cols, 3.2 * rows + 0.7),
                              squeeze=False, facecolor=SURFACE)
     parts = [f"preset {meta.get('preset') or 'custom'}",
-             f"{meta['rounds']} round(s)", f"min_time {meta['min_time']} s"]
+             f"{meta['rounds']} round(s)"]
     if bands and meta["rounds"] > 1:
         # Not a confidence interval; say so where the reader sees the plot.
         parts.append("bands: min-max over rounds")
-    edsl = meta.get("edsl")
-    if edsl:
-        parts.append(f"edsl .so built {edsl['so_built']}")
     fig.suptitle(title, color=INK, fontsize=12, x=0.01, ha="left",
                  y=1 - 0.1 / fig.get_figheight(), va="top")
     wrapped_text(fig, 0.01, 1 - 0.3 / fig.get_figheight(), parts,
@@ -484,8 +481,7 @@ def write_summary(res: Results, path: Path) -> None:
 
 def summary_caption(meta: dict) -> str:
     """Hardware and run settings the table's numbers depend on."""
-    parts = [f"Median GFLOPS over {meta['rounds']} round(s), "
-             f"min_time {meta['min_time']} s, preset "
+    parts = [f"Median GFLOPS over {meta['rounds']} round(s), preset "
              f"{meta.get('preset') or 'custom'}, started {meta['started']}."]
     peak = meta.get("peak")
     if peak:
@@ -494,10 +490,6 @@ def summary_caption(meta: dict) -> str:
                      f"{peak['flop_per_cycle_per_core']} flop/cycle/core at "
                      f"assumed stock turbo ({ghz[0]} GHz on 1 core to "
                      f"{ghz[-1]} GHz on {len(ghz)}).")
-    edsl = meta.get("edsl")
-    if edsl:
-        parts.append(f"EDSL {edsl['branch']}@{edsl['commit']}"
-                     f"{' (dirty)' if edsl['dirty'] else ''}.")
     return "*" + " ".join(parts) + "*"
 
 
