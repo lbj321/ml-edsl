@@ -78,9 +78,9 @@ int64_t detectNumThreads() {
   return hw > 0 ? static_cast<int64_t>(hw) : 1;
 }
 
-/// Static f32 ranked tensor, or failure. Matches the operand constraints
-/// LinalgMatmulToContractPass applies further down the pipeline, so a matmul
-/// this accepts is one that pass can also turn into a vector.contract.
+/// Static f32 ranked tensor, or failure. Static shapes are what
+/// LinalgVectorizationPass needs to vectorize the resulting tiles without
+/// vector sizes.
 mlir::FailureOr<mlir::ArrayRef<int64_t>> staticF32Shape(mlir::Value v) {
   auto tensorType = llvm::dyn_cast<mlir::RankedTensorType>(v.getType());
   if (!tensorType || !tensorType.hasStaticShape())

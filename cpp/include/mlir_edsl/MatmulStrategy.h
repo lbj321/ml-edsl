@@ -15,8 +15,8 @@ namespace mlir_edsl {
 /// show which blocking was used and each pass can pick up the previous one's
 /// tiles.
 ///
-/// It is also what the passes that build the microkernel
-/// (LinalgMatmulToContractPass, LinalgVectorizationPass) key on: a matmul
+/// It is also what the pass that builds the microkernel
+/// (LinalgVectorizationPass) keys on: a matmul
 /// without it, or with vectorization turned off, is left for scalar loops
 /// (see isLeftForScalarLowering).
 constexpr llvm::StringLiteral kBlockedAttrName = "mlir_edsl.blocked";
@@ -52,8 +52,7 @@ struct MatmulStrategy {
   bool packA = false;
   bool packB = false;
 
-  /// When false LinalgMatmulToContractPass and LinalgVectorizationPass skip
-  /// the produced tiles (see isLeftForScalarLowering) and they fall through to
+  /// When false LinalgVectorizationPass skips the produced tiles (see isLeftForScalarLowering) and they fall through to
   /// convert-linalg-to-loops. For a meaningful scalar comparison LLVM's own
   /// loop/SLP vectorizers must be disabled too, or O2/O3 re-vectorizes them.
   bool vectorize = true;
@@ -120,8 +119,8 @@ inline int64_t paddedExtent(int64_t dim, int64_t block) {
 ///
 /// with jc and ic fused into one forall. The MR x NR x 1 linalg.matmul left
 /// at the bottom is the microkernel, but these passes do not build it:
-/// LinalgMatmulToContractPass turns it into a vector.contract,
-/// LinalgVectorizationPass handles the fill, LoopInvariantSubsetHoisting lifts
+/// LinalgVectorizationPass vectorizes it and its fill, VectorCleanupPass turns
+/// it into a vector.contract, LoopInvariantSubsetHoisting lifts
 /// the C accumulator into the k-loop's iter_args, and
 /// VectorContractToOuterProductPass lowers the contract to FMAs.
 ///

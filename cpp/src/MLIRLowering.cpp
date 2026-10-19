@@ -288,25 +288,19 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgGenericTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Lower the blocked MR x NR x 1 register tiles to vector.contract with
-  // standard 2D indexing maps (m,k)x(k,n)->(m,n), on tensor semantics
-  // (pre-bufferize). Must run before LinalgVectorizationPass: linalg::vectorize
-  // always produces a 3D double-broadcast form that the OuterProduct lowering
-  // cannot decompose into vector.fma, so a matmul must never reach it.
-  // Matmuls the blocked passes did not take (non-f32) are left untouched by
-  // both, whole, and convert-linalg-to-loops lowers them to scalar loops (see
-  // isLeftForScalarLowering). Bufferizing the vector.transfer_read/write this
-  // produces requires vector::registerBufferizableOpInterfaceExternalModels
-  // (see registerRequiredDialects).
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulToContractPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-
-  // Vectorize remaining linalg structured ops → vector dialect, on tensor
-  // semantics (pre-bufferize). linalg::vectorize is dialect-agnostic
-  // upstream (the standard "vectorize before bufferize" pattern), so no
-  // rewrite was needed here, unlike LinalgMatmulToContractPass above. It
-  // skips the matmuls left for scalar loops and the fills initializing them.
+  // Vectorize linalg structured ops → vector dialect, on tensor semantics
+  // (pre-bufferize), including the blocked MR x NR x 1 register tiles. It
+  // skips the matmuls left for scalar loops and the fills initializing them
+  // (see isLeftForScalarLowering). Bufferizing the vector.transfer_read/write
+  // this produces requires
+  // vector::registerBufferizableOpInterfaceExternalModels (see
+  // registerRequiredDialects).
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgVectorizationPass());
+  // Turn the vectorized matmuls into vector.contract with 2D operands. Must
+  // run before the canonicalize: with K = 1 it folds the unit-dim
+  // multi_reduction into shape_cast + addf, which no longer matches the
+  // contract pattern.
+  pm.addNestedPass<mlir::func::FuncOp>(createVectorCleanupPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
   // Hoist loop-invariant subset reads/writes — specifically the accumulator
@@ -325,9 +319,6 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
       mlir::createLoopInvariantSubsetHoistingPass());
 
   pm.addNestedPass<mlir::func::FuncOp>(createVectorTransposeLoweringPass());
-
-  // Fuse mulf + multi_reduction → vector.contract for better LLVM codegen
-  pm.addNestedPass<mlir::func::FuncOp>(createVectorCleanupPass());
 
   // Lower vector.contract → vector.outerproduct on rank-1 slices, on tensor
   // semantics (pre-bufferize). Pure vector.*-to-vector.* rewrite — no tensor

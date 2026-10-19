@@ -127,140 +127,6 @@ struct LinalgOuterTileAndFusePass
   }
 };
 
-// Lowers any static-shape linalg.matmul tile directly to vector.contract
-// using standard 2D indexing maps {(m,k),(k,n),(m,n)}. This bypasses the
-// linalg vectorizer which always produces a 3D double-broadcast form
-// {(d0,d1,d2),(d0,d1,d2),(d0,d1)} that the OuterProduct lowering strategy
-// cannot decompose into vector.outerproduct → vector.fma — instead it falls
-// back to a per-output-element vector.extract -> arith.mulf ->
-// vector.reduction -> vector.insert chain, with no FMA at all.
-//
-// Deliberately shape-agnostic: this pass's only job is to avoid ever
-// producing the broken 3D-broadcast form. How efficiently a given (M, K, N)
-// then lowers to hardware (e.g. whether it's a clean full-width AVX2 FMA, or
-// a narrower/masked op for a shape that isn't a multiple of the target
-// vector width) is left to VectorContractToOuterProductPass and the
-// standard vector-to-llvm legalization further down the pipeline — not
-// this pass's concern.
-//
-// Runs pre-bufferize (tensor semantics), so operands are tensors, not
-// memref. vector.transfer_write on a tensor is functional — it returns a new
-// tensor rather than mutating C in place — so the matmul's tensor result is
-// replaced with that value instead of being erased as a pure side effect.
-struct LinalgMatmulToContractPass
-    : public mlir::PassWrapper<LinalgMatmulToContractPass,
-                               mlir::OperationPass<mlir::func::FuncOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LinalgMatmulToContractPass)
-
-  // Constructs new vector.transfer_read/write and vector.contraction ops.
-  void getDependentDialects(mlir::DialectRegistry &registry) const override {
-    registry.insert<mlir::vector::VectorDialect>();
-  }
-
-  llvm::StringRef getArgument() const override {
-    return "linalg-matmul-to-contract";
-  }
-  llvm::StringRef getDescription() const override {
-    return "Lower static-shape linalg.matmul tiles to vector.contract with "
-           "standard (m,k)x(k,n)->(m,n) indexing maps";
-  }
-  void runOnOperation() override {
-    mlir::func::FuncOp func = getOperation();
-    mlir::IRRewriter rewriter(func->getContext());
-    mlir::MLIRContext *ctx = func->getContext();
-
-    llvm::SmallVector<mlir::linalg::MatmulOp> matmuls;
-    func.walk([&](mlir::linalg::MatmulOp op) { matmuls.push_back(op); });
-
-    for (mlir::linalg::MatmulOp matmul : matmuls) {
-      // Only blocked register tiles become contracts. A matmul the blocked
-      // passes did not take, or a tile with vectorize=false, is left whole
-      // for convert-linalg-to-loops.
-      if (mlir_edsl::isLeftForScalarLowering(matmul))
-        continue;
-
-      mlir::Value A = matmul.getInputs()[0];
-      mlir::Value B = matmul.getInputs()[1];
-      mlir::Value C = matmul.getOutputs()[0];
-
-      auto aType = mlir::dyn_cast<mlir::RankedTensorType>(A.getType());
-      auto bType = mlir::dyn_cast<mlir::RankedTensorType>(B.getType());
-      auto cType = mlir::dyn_cast<mlir::RankedTensorType>(C.getType());
-      if (!aType || !bType || !cType)
-        continue;
-
-      // Dynamic-shape tiles (boundary tiles under dynamic tiling) fall
-      // through to convert-linalg-to-loops for scalar lowering.
-      if (!aType.hasStaticShape() || !bType.hasStaticShape() ||
-          !cType.hasStaticShape())
-        continue;
-
-      int64_t M = aType.getShape()[0];
-      int64_t K = aType.getShape()[1];
-      int64_t N = bType.getShape()[1];
-      if (bType.getShape()[0] != K || cType.getShape() != llvm::ArrayRef<int64_t>{M, N})
-        continue;
-
-      mlir::Type elemType = aType.getElementType();
-      if (bType.getElementType() != elemType || cType.getElementType() != elemType)
-        continue;
-
-      // vector.transfer_read's padding value must be a zero of elemType;
-      // only float/integer scalars are supported here.
-      auto floatType = mlir::dyn_cast<mlir::FloatType>(elemType);
-      auto intType = mlir::dyn_cast<mlir::IntegerType>(elemType);
-      if (!floatType && !intType)
-        continue;
-
-      auto vecTypeA = mlir::VectorType::get({M, K}, elemType);
-      auto vecTypeB = mlir::VectorType::get({K, N}, elemType);
-      auto vecTypeC = mlir::VectorType::get({M, N}, elemType);
-      mlir::Location loc = matmul.getLoc();
-      rewriter.setInsertionPoint(matmul);
-
-      auto zero = rewriter.create<mlir::arith::ConstantIndexOp>(loc, 0);
-      mlir::Value pad =
-          floatType ? rewriter.create<mlir::arith::ConstantOp>(
-                          loc, elemType, mlir::FloatAttr::get(floatType, 0.0))
-                    : rewriter.create<mlir::arith::ConstantOp>(
-                          loc, elemType, mlir::IntegerAttr::get(intType, 0));
-
-      llvm::SmallVector<bool> inBounds = {true, true};
-      mlir::Value vA = rewriter.create<mlir::vector::TransferReadOp>(
-          loc, vecTypeA, A, mlir::ValueRange{zero, zero}, pad, inBounds);
-      mlir::Value vB = rewriter.create<mlir::vector::TransferReadOp>(
-          loc, vecTypeB, B, mlir::ValueRange{zero, zero}, pad, inBounds);
-      mlir::Value vC = rewriter.create<mlir::vector::TransferReadOp>(
-          loc, vecTypeC, C, mlir::ValueRange{zero, zero}, pad, inBounds);
-
-      // Standard matmul indexing: (m,n,k) -> (m,k) for A, (k,n) for B, (m,n) for C
-      mlir::AffineExpr m, n, k;
-      mlir::bindDims(ctx, m, n, k);
-      auto indexingMaps = rewriter.getAffineMapArrayAttr({
-          mlir::AffineMap::get(3, 0, {m, k}, ctx),
-          mlir::AffineMap::get(3, 0, {k, n}, ctx),
-          mlir::AffineMap::get(3, 0, {m, n}, ctx),
-      });
-
-      auto par = mlir::vector::IteratorType::parallel;
-      auto red = mlir::vector::IteratorType::reduction;
-      auto iterTypes = rewriter.getArrayAttr({
-          mlir::vector::IteratorTypeAttr::get(ctx, par),
-          mlir::vector::IteratorTypeAttr::get(ctx, par),
-          mlir::vector::IteratorTypeAttr::get(ctx, red),
-      });
-
-      mlir::Value result = rewriter.create<mlir::vector::ContractionOp>(
-          loc, vA, vB, vC, indexingMaps, iterTypes);
-
-      auto newC = rewriter.create<mlir::vector::TransferWriteOp>(
-          loc, result, C, mlir::ValueRange{zero, zero}, inBounds);
-
-      rewriter.replaceOp(matmul, newC.getResult());
-    }
-  }
-};
-
 // True when `op` is a linalg.fill whose result initializes a matmul that is
 // left for scalar lowering (see mlir_edsl::isLeftForScalarLowering).
 static bool initializesScalarMatmul(mlir::Operation *op) {
@@ -300,9 +166,8 @@ struct LinalgVectorizationPass
                   // vectorized outer)
       if (!mlir::linalg::hasVectorizationImpl(op))
         continue;
-      // See the matching skip in LinalgMatmulToContractPass. The fill that
-      // initializes such a matmul is untiled too, and would become one
-      // matrix-sized vector.
+      // Vectorizing such a matmul whole would build one matrix-sized vector.
+      // The fill that initializes it is untiled too.
       if (mlir_edsl::isLeftForScalarLowering(op) || initializesScalarMatmul(op))
         continue;
       rewriter.setInsertionPoint(op);
@@ -315,7 +180,11 @@ struct LinalgVectorizationPass
 
 // Fuses the mulf + multi_reduction pattern emitted by linalg::vectorize into
 // vector.contract, giving the LLVM backend a clear contraction semantic.
-// This is the key optimization for larger matmuls.
+// The permutation-map patterns split the vectorizer's broadcasting
+// transfer_reads into a plain read plus vector.broadcast/transpose, which the
+// contract patterns then fold into its indexing maps. Without them a matmul
+// keeps the 3D double-broadcast form, which the OuterProduct lowering cannot
+// turn into FMAs.
 struct VectorCleanupPass
     : public mlir::PassWrapper<VectorCleanupPass,
                                mlir::OperationPass<mlir::func::FuncOp>> {
@@ -327,6 +196,7 @@ struct VectorCleanupPass
   void runOnOperation() override {
     mlir::func::FuncOp func = getOperation();
     mlir::RewritePatternSet patterns(func->getContext());
+    mlir::vector::populateVectorTransferPermutationMapLoweringPatterns(patterns);
     mlir::vector::populateVectorReductionToContractPatterns(patterns);
     if (mlir::failed(mlir::applyPatternsGreedily(func, std::move(patterns))))
       signalPassFailure();
@@ -553,9 +423,6 @@ namespace mlir_edsl {
 std::unique_ptr<mlir::Pass> createLinalgOuterTileAndFusePass(int64_t tileM,
                                                               int64_t tileN) {
   return std::make_unique<LinalgOuterTileAndFusePass>(tileM, tileN);
-}
-std::unique_ptr<mlir::Pass> createLinalgMatmulToContractPass() {
-  return std::make_unique<LinalgMatmulToContractPass>();
 }
 std::unique_ptr<mlir::Pass> createLinalgVectorizationPass() {
   return std::make_unique<LinalgVectorizationPass>();

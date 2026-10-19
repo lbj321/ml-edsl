@@ -125,6 +125,8 @@ class TestVectorCleanupPass:
 
     Fuses the mulf + multi_reduction pattern emitted by linalg::vectorize
     into vector.contract, giving the LLVM backend explicit contraction semantics.
+    Also splits broadcasting transfer_reads so the broadcasts fold into the
+    contract's indexing maps, leaving 2D operands.
     """
 
     def test_matmul_fused_to_vector_contract(self, check_lowered_ir):
@@ -166,64 +168,8 @@ class TestVectorCleanupPass:
         // CHECK-NOT: linalg.matmul
         """, after="vector-cleanup")
 
-
-class TestLinalgMatmulToContractPass:
-    """IR tests for LinalgMatmulToContractPass (linalg-matmul-to-contract).
-
-    Bypasses the linalg vectorizer (which produces a 3D double-broadcast
-    contract) by lowering any static-shape matmul directly to vector.contract
-    with standard 2D indexing maps {(m,k),(k,n),(m,n)}. This pass only
-    guarantees the clean 2D form is produced — how efficiently that then
-    lowers to hardware (e.g. full-width AVX2 FMA vs. a narrower op) is
-    downstream's concern (VectorContractToOuterProductPass + vector-to-llvm).
-    """
-
-    def test_8x8_matmul_emits_vector_contract(self, check_lowered_ir):
-        """8x8 linalg.matmul is replaced by vector.contract after this pass."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((8, 8), dtype=np.float32),
-              np.ones((8, 8), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: vector.contract
-        // CHECK-NOT: linalg.matmul
-        """, after="linalg-matmul-to-contract")
-
-    def test_contract_has_standard_2d_matmul_maps(self, check_lowered_ir):
-        """vector.contract uses standard (m,k)x(k,n)->(m,n) indexing maps, not the
-        3D double-broadcast form the linalg vectorizer emits."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((8, 8), dtype=np.float32),
-              np.ones((8, 8), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: affine_map<(d0, d1, d2) -> (d0, d2)>
-        // CHECK: affine_map<(d0, d1, d2) -> (d2, d1)>
-        // CHECK: affine_map<(d0, d1, d2) -> (d0, d1)>
-        """, after="linalg-matmul-to-contract")
-
-    def test_non_8x8_matmul_also_lowered(self, check_lowered_ir):
-        """Non-8x8 static-shape matmuls are lowered by this pass too — it is
-        not restricted to 8x8 tiles, since the 2D indexing-map construction
-        doesn't depend on the specific M/K/N values."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((2, 2), dtype=np.float32),
-              np.ones((2, 2), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: vector.contract
-        // CHECK-NOT: linalg.matmul
-        """, after="linalg-matmul-to-contract")
-
-    def test_non_square_matmul_lowered(self, check_lowered_ir):
-        """Non-square M/K/N (2x4 @ 4x3) is lowered correctly, using each
-        operand's own shape rather than a single shared shape for all three."""
+    def test_non_square_matmul_fused_to_contract(self, check_lowered_ir):
+        """Non-square M/K/N (2x4 @ 4x3) also becomes a vector.contract."""
         @ml_function
         def mm_fn(A: Tensor[f32, 2, 4], B: Tensor[f32, 4, 3]) -> Tensor[f32, 2, 3]:
             return matmul(A, B)
@@ -233,7 +179,22 @@ class TestLinalgMatmulToContractPass:
         check_lowered_ir("""
         // CHECK: vector.contract
         // CHECK-NOT: linalg.matmul
-        """, after="linalg-matmul-to-contract")
+        """, after="vector-cleanup")
+
+    def test_contract_operands_are_2d(self, check_lowered_ir):
+        """The contract takes 2D operands, not the 3D double-broadcast form
+        linalg::vectorize emits, which the OuterProduct lowering cannot turn
+        into FMAs. Checks shapes rather than maps: packed A is k-major, so its
+        transpose is folded into a (k, m) map."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
+            return matmul(A, B)
+
+        mm_fn(np.ones((8, 8), dtype=np.float32),
+              np.ones((8, 8), dtype=np.float32))
+        check_lowered_ir("""
+        // CHECK: vector.contract {{.*}} : vector<{{[0-9]+}}x{{[0-9]+}}xf32>, vector<{{[0-9]+}}x{{[0-9]+}}xf32> into vector<{{[0-9]+}}x{{[0-9]+}}xf32>
+        """, after="vector-cleanup")
 
 class TestVectorContractToOuterProductPass:
     """IR tests for VectorContractToOuterProductPass (vector-contract-to-outerproduct).

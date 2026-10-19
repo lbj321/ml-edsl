@@ -29,7 +29,6 @@ namespace {
 void registerCPUPasses() {
   mlir::registerPass(
       [] { return createLinalgOuterTileAndFusePass(); });
-  mlir::registerPass([] { return createLinalgMatmulToContractPass(); });
   mlir::registerPass([] { return createLinalgVectorizationPass(); });
   mlir::registerPass([] { return createVectorCleanupPass(); });
   mlir::registerPass([] { return createVectorTransposeLoweringPass(); });
