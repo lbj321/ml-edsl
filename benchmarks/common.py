@@ -1,11 +1,20 @@
 """Shared helpers for EDSL vs NumPy benchmarks."""
 
+import json
+import math
 import statistics
+import time
 import timeit
-from typing import Callable, NamedTuple
+from pathlib import Path
+from typing import Callable, NamedTuple, Optional
 
 SIZES = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
 WARMUP = 5
+BUDGET_CALLS = 5
+# Keeps a min_time budget from turning a microsecond call into millions of
+# samples. 10k pins one process's median to ~0.03%, far inside the 1-3%
+# that medians vary between processes, so more samples only cost time.
+MAX_REPEATS = 10_000
 
 
 class Timing(NamedTuple):
@@ -14,6 +23,10 @@ class Timing(NamedTuple):
     median: float
     p10: float
     p90: float
+    # Diagnostic only: a mean well above the median flags a heavy tail or a
+    # second mode that p10/p90 can miss.
+    mean: float
+    stdev: float
 
     @property
     def spread(self) -> float:
@@ -27,8 +40,21 @@ class Timing(NamedTuple):
         return self.p90 / self.p10 if self.p10 > 0 else float("inf")
 
 
+def measure(fn: Callable[[], object], n: int) -> list:
+    """Time `n` calls to `fn`, returning the durations in the order they ran.
+
+    timeit disables GC while timing; use this for every phase (warmup,
+    budget estimate, samples) so they differ only in when they ran."""
+    return timeit.repeat(fn, number=1, repeat=n)
+
+
 def time_call(fn: Callable[[], object], n: int) -> Timing:
-    """Time `fn` over `n` samples and report the median.
+    """Time `fn` over `n` samples and summarize them."""
+    return summarize(measure(fn, n))
+
+
+def summarize(samples: list) -> Timing:
+    """Median and interpolated p10/p90 of `samples`.
 
     Median, not minimum. The minimum is the right estimator when noise is
     purely additive — scheduling hiccups, interrupts, page faults — which is
@@ -41,24 +67,26 @@ def time_call(fn: Callable[[], object], n: int) -> Timing:
     cannot hold. Measured on this project: one unchanged matmul binary
     reported 157, 292 and 196 GFLOPS purely by varying the sample count.
 
-    The minimum is also biased by `n` itself — min-of-10000 lands much closer
+    The minimum is also biased by the sample count — min-of-10000 lands much closer
     to the true floor than min-of-5 — so with `repeats_for` scaling the count
     down for large N, minima are not comparable across rows of one table.
     Medians are.
     """
-    samples = sorted(timeit.repeat(fn, number=1, repeat=n))
+    samples = sorted(samples)
     median = statistics.median(samples)
+    mean = statistics.fmean(samples)
 
     # A single sample has no spread to report; say so rather than letting
     # statistics.quantiles raise.
     if len(samples) < 2:
-        return Timing(median, median, median)
+        return Timing(median, median, median, mean, 0.0)
 
     # Interpolated deciles, not nearest-rank: a nearest-rank p10 collapses onto
     # samples[0] once n <= 10, which would quietly turn the spread indicator
     # back into the max/min ratio it exists to avoid.
     deciles = statistics.quantiles(samples, n=10, method="inclusive")
-    return Timing(median, deciles[0], deciles[8])
+    return Timing(median, deciles[0], deciles[8], mean,
+                  statistics.stdev(samples))
 
 
 def repeats_for(N: int) -> int:
@@ -78,6 +106,61 @@ def repeats_for(N: int) -> int:
     if N <= 512:
         return 150
     return 25
+
+
+def repeats_for_budget(budget_samples: list, N: int, min_time: float) -> int:
+    """Samples covering about `min_time` seconds of calls, given a few
+    timed calls taken after warmup: at most MAX_REPEATS (so µs calls cover
+    less) and no fewer than repeats_for(N).
+
+    A fixed count at large N is over in ~0.1 s multithreaded, before the
+    clock has dropped to what it sustains, so short runs report burst rates
+    that differ per library. The estimate is the median of the given calls,
+    not a mean, so one slow call cannot shrink the budget.
+    """
+    t_call = statistics.median(budget_samples)
+    budget = math.ceil(min_time / t_call) if t_call > 0 else MAX_REPEATS
+    return max(repeats_for(N), min(budget, MAX_REPEATS))
+
+
+class Measurement(NamedTuple):
+    """One worker's timing run, with the raw durations of every phase."""
+
+    timing: Timing
+    cpu_per_wall: float
+    repeats: int
+    warmup: list
+    budget: list
+    samples: list
+
+
+def run_timed(fn: Callable[[], object], N: int, min_time: float,
+              repeats: Optional[int] = None) -> Measurement:
+    """Warm up, size the sample count (unless `repeats` is given), then time.
+
+    cpu_per_wall is process CPU seconds per wall second over the samples
+    only: roughly how many threads were busy, including any spin-waiting.
+    """
+    warmup = measure(fn, WARMUP)
+    budget = []
+    if repeats is None:
+        budget = measure(fn, BUDGET_CALLS)
+        repeats = repeats_for_budget(budget, N, min_time)
+
+    wall0, cpu0 = time.perf_counter(), time.process_time()
+    samples = measure(fn, repeats)
+    cpu_per_wall = ((time.process_time() - cpu0)
+                    / (time.perf_counter() - wall0))
+    return Measurement(summarize(samples), cpu_per_wall, repeats,
+                       warmup, budget, samples)
+
+
+def write_samples(path: Path, meas: Measurement) -> None:
+    """Write every phase's raw durations, in timed order, as JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"warmup": meas.warmup,
+                                "budget": meas.budget,
+                                "samples": meas.samples}))
 
 
 def print_section(title: str, rows: list):

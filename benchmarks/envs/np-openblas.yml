@@ -1,0 +1,10 @@
+name: np-openblas
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11.16
+  - numpy=2.4.6
+  - threadpoolctl=3.7.0
+  - libblas=3.11.0=*openblas
+  - libopenblas=0.3.34
