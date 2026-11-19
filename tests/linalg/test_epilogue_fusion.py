@@ -1,16 +1,8 @@
-"""Tests for CPU epilogue fusion.
+"""Tests for matmul -> bias_add -> relu chains on CPU.
 
-LinalgOuterTileAndFusePass tiles a matmul -> bias_add -> relu chain (found
-via the "relu" library_call attribute set by LinalgBuilder) into a single
-64x64 scf.forall, fusing bias_add/matmul/fill in as producers so the whole
-epilogue runs on one tile without round-tripping through DRAM.
-
-For matmuls with no relu epilogue, that pass instead uses the bare
-linalg.matmul itself as the fusion root, pulling in just its linalg.fill
-producer into the same 64x64 scf.forall. createLinalgMatmulParallelTilingPass
-(the "fallback" pass) then skips it entirely — see the guard in
-LinalgMatmulTilingPass that skips matmuls already nested in an scf.forall,
-so the two passes never double-tile the same op.
+The matmul goes through the blocked matmul passes, which fuse bias_add/relu
+into its ic x jc forall. These tests check that chains compute the right
+values; the IR structure is covered in test_blocked_matmul_ir.py.
 """
 
 import numpy as np
@@ -87,9 +79,7 @@ class TestEpilogueFusionExecution:
 
 
 class TestFallbackMatmulTilingExecution:
-    """Correctness of matmuls with no relu epilogue: LinalgOuterTileAndFusePass
-    fuses these using the bare matmul itself as the fusion root, so the
-    fallback outer-tiling pass never touches them."""
+    """Correctness of matmuls with no relu epilogue."""
 
     def test_bare_matmul_no_epilogue(self, backend):
         """128x128 matmul alone (no bias/relu) still tiles and executes correctly."""
@@ -105,10 +95,8 @@ class TestFallbackMatmulTilingExecution:
         np.testing.assert_allclose(result, A @ B, rtol=1e-3, atol=1e-3)
 
     def test_matmul_bias_without_relu(self, backend):
-        """bias_add with no relu: the fusion pass finds no "relu" consumer,
-        so it falls back to using the bare matmul as its fusion root
-        (fusing in just fill) while bias_add is tiled separately further
-        down the pipeline."""
+        """bias_add with no relu: the matmul is blocked and bias_add is
+        tiled separately further down the pipeline."""
         @ml_function
         def biased(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128],
                    b: Tensor[f32, 128]) -> Tensor[f32, 128, 128]:
@@ -123,113 +111,3 @@ class TestFallbackMatmulTilingExecution:
         expected = A @ B + bias
         np.testing.assert_allclose(result, expected, rtol=1e-3, atol=1e-3)
 
-
-# ==================== POST-LOWERING IR ====================
-
-class TestEpilogueFusionIR:
-    """IR structure after linalg-outer-tile-and-fuse: verifies the fused
-    chain lands inside one scf.forall and that K stays untiled."""
-
-    def test_relu_epilogue_fused_into_one_forall(self, check_lowered_ir):
-        @ml_function
-        def dense(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128],
-                  b: Tensor[f32, 128]) -> Tensor[f32, 128, 128]:
-            return relu(matmul(A, B) + b)
-
-        dense(np.ones((128, 128), dtype=np.float32),
-              np.ones((128, 128), dtype=np.float32),
-              np.ones(128, dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.forall (
-        // CHECK: linalg.fill
-        // CHECK: linalg.matmul
-        // CHECK: library_call = "bias_add"
-        // CHECK: library_call = "relu"
-        // CHECK: scf.forall.in_parallel
-        """, after="linalg-outer-tile-and-fuse")
-
-    def test_outer_tile_size_is_64(self, check_lowered_ir):
-        @ml_function
-        def dense(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128],
-                  b: Tensor[f32, 128]) -> Tensor[f32, 128, 128]:
-            return relu(matmul(A, B) + b)
-
-        dense(np.ones((128, 128), dtype=np.float32),
-              np.ones((128, 128), dtype=np.float32),
-              np.ones(128, dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.forall {{.*}} step (64, 64)
-        """, after="linalg-outer-tile-and-fuse")
-
-    def test_fused_matmul_keeps_full_k(self, check_lowered_ir):
-        """The fused matmul is sliced to 64 wide on M/N but keeps the full
-        128-wide K dimension: relu has no K dimension to slice against, so
-        producer fusion never tiles K. Checked after the canonicalizer that
-        immediately follows linalg-outer-tile-and-fuse, which removes the
-        dead top-level (pre-fusion) matmul copy so there's only one match."""
-        @ml_function
-        def dense(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128],
-                  b: Tensor[f32, 128]) -> Tensor[f32, 128, 128]:
-            return relu(matmul(A, B) + b)
-
-        dense(np.ones((128, 128), dtype=np.float32),
-              np.ones((128, 128), dtype=np.float32),
-              np.ones(128, dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: linalg.matmul
-        // CHECK-SAME: tensor<64x128xf32>
-        // CHECK-SAME: tensor<128x64xf32>
-        """, after="canonicalize")
-
-    def test_bare_matmul_fused(self, check_lowered_ir):
-        """With no relu epilogue, LinalgOuterTileAndFusePass uses the bare
-        matmul itself as the fusion root, pulling its fill producer into
-        the same scf.forall."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128]) -> Tensor[f32, 128, 128]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((128, 128), dtype=np.float32),
-              np.ones((128, 128), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.forall (
-        // CHECK: linalg.fill
-        // CHECK: linalg.matmul
-        // CHECK: scf.forall.in_parallel
-        """, after="linalg-outer-tile-and-fuse")
-
-
-class TestFallbackMatmulTilingIR:
-    """IR structure after linalg-tile-matmul-forall: verifies the fallback
-    pass tiles matmuls the fusion pass didn't touch, and skips ones it did."""
-
-    def test_fused_matmul_not_retiled(self, check_lowered_ir):
-        """A matmul already fused into an scf.forall must not get a second,
-        redundant outer-tiling forall wrapped around it."""
-        @ml_function
-        def dense(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128],
-                  b: Tensor[f32, 128]) -> Tensor[f32, 128, 128]:
-            return relu(matmul(A, B) + b)
-
-        dense(np.ones((128, 128), dtype=np.float32),
-              np.ones((128, 128), dtype=np.float32),
-              np.ones(128, dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.forall (
-        // CHECK-NOT: scf.forall (
-        """, after="linalg-tile-matmul-forall")
-
-    def test_bare_matmul_not_retiled(self, check_lowered_ir):
-        """A matmul with no epilogue is already fused into an scf.forall by
-        LinalgOuterTileAndFusePass, so the fallback pass must not wrap it
-        in a second, redundant outer-tiling forall."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128]) -> Tensor[f32, 128, 128]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((128, 128), dtype=np.float32),
-              np.ones((128, 128), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.forall (
-        // CHECK-NOT: scf.forall (
-        """, after="linalg-tile-matmul-forall")

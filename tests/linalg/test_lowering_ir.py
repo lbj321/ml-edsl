@@ -120,110 +120,13 @@ class TestLinalgMatmulLargeIR:
         // CHECK-NOT: linalg.matmul
         """, after="linalg-vectorize")
 
-    def test_dense_layer_large_k_cache_blocked(self, check_lowered_ir):
-        """512x512 dense layer: K=512 clears the 256-wide Kc cache-block
-        threshold (see LinalgMatmulKTilingPass), so the fused epilogue's
-        64x64-tile matmul (full K=512 after linalg-outer-tile-and-fuse) gets
-        split into a serial scf.for over two 256-wide K chunks."""
-        @ml_function
-        def dense(A: Tensor[f32, 512, 512], B: Tensor[f32, 512, 512],
-                  b: Tensor[f32, 512]) -> Tensor[f32, 512, 512]:
-            return relu(matmul(A, B) + b)
-
-        dense(np.ones((512, 512), dtype=np.float32),
-              np.ones((512, 512), dtype=np.float32),
-              np.ones(512, dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.forall
-        // CHECK: scf.for
-        // CHECK: linalg.matmul
-        // CHECK-SAME: tensor<64x256xf32>
-        // CHECK-SAME: tensor<256x64xf32>
-        """, after="linalg-tile-matmul-k")
-
-
-class TestLinalgMatmulTilingPass:
-    """IR tests for LinalgMatmulTilingPass (linalg-tile-matmul).
-
-    Matrices with all dims > 8 are tiled into scf.for loops over 8x8 tiles.
-    Matrices with any dim <= 8 are left untouched for direct vectorization.
-    """
-
-    def test_large_matmul_tiled_to_scf_for(self, check_lowered_ir):
-        """16x16 matmul is replaced by three nested scf.for loops (M, N, K tiled to 8)."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((16, 16), dtype=np.float32),
-              np.ones((16, 16), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.for
-        // CHECK: scf.for
-        // CHECK: linalg.matmul
-        """, after="linalg-tile-matmul")
-
-    def test_large_matmul_tile_step_is_8(self, check_lowered_ir):
-        """Tiling uses step size 8 for both M and N dimensions."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((16, 16), dtype=np.float32),
-              np.ones((16, 16), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: arith.constant 8 : index
-        // CHECK: scf.for
-        """, after="linalg-tile-matmul")
-
-    def test_large_matmul_produces_extract_slices(self, check_lowered_ir):
-        """Tiled matmul slices all three operands into 8x8 tensor slices (M, N, K all
-        tiled). Runs pre-bufferize (tensor semantics), so slices are
-        tensor.extract_slice, not memref.subview."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 16, 16], B: Tensor[f32, 16, 16]) -> Tensor[f32, 16, 16]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((16, 16), dtype=np.float32),
-              np.ones((16, 16), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: tensor.extract_slice {{.*}} [8, 8] [1, 1]
-        // CHECK: tensor.extract_slice {{.*}} [8, 8] [1, 1]
-        // CHECK: tensor.extract_slice {{.*}} [8, 8] [1, 1]
-        """, after="linalg-tile-matmul")
-
-    def test_boundary_8x8_matmul_tiled(self, check_lowered_ir):
-        """8x8 matmul is tiled into a single 8x8 tile (one-iteration scf.for loops)."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((8, 8), dtype=np.float32),
-              np.ones((8, 8), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.for
-        // CHECK: linalg.matmul
-        """, after="linalg-tile-matmul")
-
-    def test_small_matmul_tiled(self, check_lowered_ir):
-        """2x2 matmul is tiled — produces scf.for loops with a partial tile."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
-            return matmul(A, B)
-
-        mm_fn(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
-              np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: scf.for
-        // CHECK: linalg.matmul
-        """, after="linalg-tile-matmul")
-
-
 class TestVectorCleanupPass:
     """IR tests for VectorCleanupPass (vector-cleanup).
 
     Fuses the mulf + multi_reduction pattern emitted by linalg::vectorize
     into vector.contract, giving the LLVM backend explicit contraction semantics.
+    Also splits broadcasting transfer_reads so the broadcasts fold into the
+    contract's indexing maps, leaving 2D operands.
     """
 
     def test_matmul_fused_to_vector_contract(self, check_lowered_ir):
@@ -265,64 +168,8 @@ class TestVectorCleanupPass:
         // CHECK-NOT: linalg.matmul
         """, after="vector-cleanup")
 
-
-class TestLinalgMatmulToContractPass:
-    """IR tests for LinalgMatmulToContractPass (linalg-matmul-to-contract).
-
-    Bypasses the linalg vectorizer (which produces a 3D double-broadcast
-    contract) by lowering any static-shape matmul directly to vector.contract
-    with standard 2D indexing maps {(m,k),(k,n),(m,n)}. This pass only
-    guarantees the clean 2D form is produced — how efficiently that then
-    lowers to hardware (e.g. full-width AVX2 FMA vs. a narrower op) is
-    downstream's concern (VectorContractToOuterProductPass + vector-to-llvm).
-    """
-
-    def test_8x8_matmul_emits_vector_contract(self, check_lowered_ir):
-        """8x8 linalg.matmul is replaced by vector.contract after this pass."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((8, 8), dtype=np.float32),
-              np.ones((8, 8), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: vector.contract
-        // CHECK-NOT: linalg.matmul
-        """, after="linalg-matmul-to-contract")
-
-    def test_contract_has_standard_2d_matmul_maps(self, check_lowered_ir):
-        """vector.contract uses standard (m,k)x(k,n)->(m,n) indexing maps, not the
-        3D double-broadcast form the linalg vectorizer emits."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((8, 8), dtype=np.float32),
-              np.ones((8, 8), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: affine_map<(d0, d1, d2) -> (d0, d2)>
-        // CHECK: affine_map<(d0, d1, d2) -> (d2, d1)>
-        // CHECK: affine_map<(d0, d1, d2) -> (d0, d1)>
-        """, after="linalg-matmul-to-contract")
-
-    def test_non_8x8_matmul_also_lowered(self, check_lowered_ir):
-        """Non-8x8 static-shape matmuls are lowered by this pass too — it is
-        not restricted to 8x8 tiles, since the 2D indexing-map construction
-        doesn't depend on the specific M/K/N values."""
-        @ml_function
-        def mm_fn(A: Tensor[f32, 2, 2], B: Tensor[f32, 2, 2]) -> Tensor[f32, 2, 2]:
-            return matmul(A, B)
-
-        mm_fn(np.ones((2, 2), dtype=np.float32),
-              np.ones((2, 2), dtype=np.float32))
-        check_lowered_ir("""
-        // CHECK: vector.contract
-        // CHECK-NOT: linalg.matmul
-        """, after="linalg-matmul-to-contract")
-
-    def test_non_square_matmul_lowered(self, check_lowered_ir):
-        """Non-square M/K/N (2x4 @ 4x3) is lowered correctly, using each
-        operand's own shape rather than a single shared shape for all three."""
+    def test_non_square_matmul_fused_to_contract(self, check_lowered_ir):
+        """Non-square M/K/N (2x4 @ 4x3) also becomes a vector.contract."""
         @ml_function
         def mm_fn(A: Tensor[f32, 2, 4], B: Tensor[f32, 4, 3]) -> Tensor[f32, 2, 3]:
             return matmul(A, B)
@@ -332,23 +179,22 @@ class TestLinalgMatmulToContractPass:
         check_lowered_ir("""
         // CHECK: vector.contract
         // CHECK-NOT: linalg.matmul
-        """, after="linalg-matmul-to-contract")
+        """, after="vector-cleanup")
 
-    def test_int_matmul_lowered_with_correct_element_type(self, check_lowered_ir):
-        """An integer matmul must not be padded/read as f32 — the pass reads
-        each operand's actual element type instead of assuming float."""
+    def test_contract_operands_are_2d(self, check_lowered_ir):
+        """The contract takes 2D operands, not the 3D double-broadcast form
+        linalg::vectorize emits, which the OuterProduct lowering cannot turn
+        into FMAs. Checks shapes rather than maps: packed A is k-major, so its
+        transpose is folded into a (k, m) map."""
         @ml_function
-        def mm_fn(A: Tensor[i32, 2, 2], B: Tensor[i32, 2, 2]) -> Tensor[i32, 2, 2]:
+        def mm_fn(A: Tensor[f32, 8, 8], B: Tensor[f32, 8, 8]) -> Tensor[f32, 8, 8]:
             return matmul(A, B)
 
-        mm_fn(np.ones((2, 2), dtype=np.int32),
-              np.ones((2, 2), dtype=np.int32))
+        mm_fn(np.ones((8, 8), dtype=np.float32),
+              np.ones((8, 8), dtype=np.float32))
         check_lowered_ir("""
-        // CHECK: vector.contract
-        // CHECK-SAME: vector<2x2xi32>
-        // CHECK-NOT: linalg.matmul
-        """, after="linalg-matmul-to-contract")
-
+        // CHECK: vector.contract {{.*}} : vector<{{[0-9]+}}x{{[0-9]+}}xf32>, vector<{{[0-9]+}}x{{[0-9]+}}xf32> into vector<{{[0-9]+}}x{{[0-9]+}}xf32>
+        """, after="vector-cleanup")
 
 class TestVectorContractToOuterProductPass:
     """IR tests for VectorContractToOuterProductPass (vector-contract-to-outerproduct).
@@ -400,16 +246,16 @@ class TestAllocaScopeCleanupPass:
     """
 
     def test_omp_loop_body_has_no_alloca_scope(self, check_lowered_ir):
-        """128x128 matmul fires the outer parallel tile as a real multi-iteration
-        omp.parallel (a 2x2 tile grid — a single-iteration 64x64 tile gets
-        canonicalized away before this checkpoint). Its loop body must not
-        retain the vacuous memref.alloca_scope ConvertSCFToOpenMPPass wraps it in."""
+        """256x256 matmul: the blocked ic x jc forall has two iterations (MC =
+        128), so it survives canonicalize as a real omp.parallel. Its loop body
+        must not retain the vacuous memref.alloca_scope ConvertSCFToOpenMPPass
+        wraps it in."""
         @ml_function
-        def mm_fn(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128]) -> Tensor[f32, 128, 128]:
+        def mm_fn(A: Tensor[f32, 256, 256], B: Tensor[f32, 256, 256]) -> Tensor[f32, 256, 256]:
             return matmul(A, B)
 
-        mm_fn(np.ones((128, 128), dtype=np.float32),
-              np.ones((128, 128), dtype=np.float32))
+        mm_fn(np.ones((256, 256), dtype=np.float32),
+              np.ones((256, 256), dtype=np.float32))
         check_lowered_ir("""
         // CHECK: omp.parallel
         // CHECK-NOT: memref.alloca_scope

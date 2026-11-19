@@ -9,7 +9,7 @@ Validates that matmul(A, B) compiles through the full pipeline:
 
 import pytest
 import numpy as np
-from mlir_edsl import ml_function, Tensor, f32, i32, matmul
+from mlir_edsl import ml_function, Tensor, f32, i32, matmul, relu
 
 
 # ==================== BASIC MATMUL ====================
@@ -78,6 +78,102 @@ class TestMatmulExecution:
 
         np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-4)
 
+    def test_matmul_128x128_single_blocked_tile(self, backend):
+        """128x128 is blocked with MC = NC = 128: one forall iteration, which
+        canonicalize removes between the blocked passes."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 128, 128], B: Tensor[f32, 128, 128]) -> Tensor[f32, 128, 128]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.random((128, 128), dtype=np.float32)
+        B = rng.random((128, 128), dtype=np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-3)
+
+    def test_matmul_4x512x256_one_register_loop(self, backend):
+        """M = MR folds ir before packing; A and B are hoisted out of jr only."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 4, 512], B: Tensor[f32, 512, 256]) -> Tensor[f32, 4, 256]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.random((4, 512), dtype=np.float32)
+        B = rng.random((512, 256), dtype=np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-3)
+
+    def test_matmul_4x64x16_no_register_loop(self, backend):
+        """M = MR and N = NR fold both register loops, so nothing is packed."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 4, 64], B: Tensor[f32, 64, 16]) -> Tensor[f32, 4, 16]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.random((4, 64), dtype=np.float32)
+        B = rng.random((64, 16), dtype=np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-3)
+
+    def test_matmul_1000x1000_padded(self, backend):
+        """No NC that is a multiple of 16 divides 1000, so N is padded."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 1000, 1000], B: Tensor[f32, 1000, 1000]) -> Tensor[f32, 1000, 1000]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.random((1000, 1000), dtype=np.float32)
+        B = rng.random((1000, 1000), dtype=np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-2)
+
+    def test_matmul_98x100x100_all_extents_padded(self, backend):
+        """M, K and N are each padded up to their block."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 98, 100], B: Tensor[f32, 100, 100]) -> Tensor[f32, 98, 100]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((98, 100)).astype(np.float32)
+        B = rng.standard_normal((100, 100)).astype(np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-3)
+
+    def test_matmul_prime_extents_padded(self, backend):
+        """97x101x103: prime extents, so the padding copies fall back to
+        width-1 column tiles."""
+        @ml_function
+        def mm_fn(A: Tensor[f32, 97, 101], B: Tensor[f32, 101, 103]) -> Tensor[f32, 97, 103]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((97, 101)).astype(np.float32)
+        B = rng.standard_normal((101, 103)).astype(np.float32)
+        result = mm_fn(A, B)
+
+        np.testing.assert_allclose(result, A @ B, rtol=1e-4, atol=1e-3)
+
+    def test_padded_dense_layer(self, backend):
+        """The epilogue reads the result sliced back out of the padded C."""
+        @ml_function
+        def dense(A: Tensor[f32, 100, 100], B: Tensor[f32, 100, 100],
+                  b: Tensor[f32, 100]) -> Tensor[f32, 100, 100]:
+            return relu(matmul(A, B) + b)
+
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((100, 100)).astype(np.float32)
+        B = rng.standard_normal((100, 100)).astype(np.float32)
+        bias = rng.standard_normal(100).astype(np.float32)
+        result = dense(A, B, bias)
+
+        np.testing.assert_allclose(result, np.maximum(A @ B + bias, 0),
+                                   rtol=1e-4, atol=1e-3)
+
     def test_matmul_zeros(self, backend):
         """A @ 0 == 0"""
         @ml_function
@@ -101,6 +197,20 @@ class TestMatmulExecution:
         result = matmul_int(I, B)
 
         np.testing.assert_array_equal(result, [[5, 6], [7, 8]])
+
+    @pytest.mark.parametrize("m, k, n", [(100, 100, 100), (256, 256, 256)])
+    def test_matmul_integer_scalar_loops(self, backend, m, k, n):
+        """i32 matmuls are not blocked; they lower to scalar loops."""
+        @ml_function
+        def matmul_int(A: Tensor[i32, m, k], B: Tensor[i32, k, n]) -> Tensor[i32, m, n]:
+            return matmul(A, B)
+
+        rng = np.random.default_rng(42)
+        A = rng.integers(-8, 8, (m, k), dtype=np.int32)
+        B = rng.integers(-8, 8, (k, n), dtype=np.int32)
+        result = matmul_int(A, B)
+
+        np.testing.assert_array_equal(result, A @ B)
 
 
 # ==================== CHAINED MATMUL ====================

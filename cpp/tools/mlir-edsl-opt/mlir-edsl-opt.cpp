@@ -29,25 +29,34 @@ namespace {
 void registerCPUPasses() {
   mlir::registerPass(
       [] { return createLinalgOuterTileAndFusePass(); });
-  mlir::registerPass([] { return createLinalgMatmulToContractPass(); });
   mlir::registerPass([] { return createLinalgVectorizationPass(); });
   mlir::registerPass([] { return createVectorCleanupPass(); });
+  mlir::registerPass([] { return createVectorTransposeLoweringPass(); });
   mlir::registerPass([] { return createAllocaScopeCleanupPass(); });
   mlir::registerPass(
       [] { return createVectorContractToOuterProductPass(); });
-  // LinalgMatmulTilingPass backs two distinct pass-argument names depending
-  // on its (tileM, tileN, tileK, loopType) configuration — see getArgument()
-  // in MLIRLoweringPasses.cpp — so both factories must be registered.
-  mlir::registerPass([] { return createLinalgMatmulTilingPass(); });
-  mlir::registerPass([] { return createLinalgMatmulParallelTilingPass(); });
-  mlir::registerPass([] { return createLinalgMatmulKTilingPass(); });
   mlir::registerPass([] { return createLinalgGenericTilingPass(); });
+  // Run first inside -cpu-pipeline with their defaults. Registered separately
+  // so a non-default strategy can be composed ahead of it (pass options are
+  // space-separated):
+  //   mlir-edsl-opt in.mlir '-linalg-matmul-blocked-distribute=mr=6 nr=16' \
+  //       -cpu-pipeline
+  mlir::registerPass([] { return createLinalgMatmulBlockedDistributePass(); });
+  mlir::registerPass(
+      [] { return createLinalgMatmulBlockedFuseEpiloguePass(); });
+  mlir::registerPass([] { return createLinalgMatmulBlockedTilePass(); });
+  mlir::registerPass([] { return createLinalgMatmulBlockedKernelPass(); });
+  mlir::registerPass(
+      [] { return createLinalgMatmulBlockedPackPreparePass(); });
+  mlir::registerPass([] { return createLinalgMatmulBlockedPackBPass(); });
+  mlir::registerPass([] { return createLinalgMatmulBlockedPackAPass(); });
 
   mlir::PassPipelineRegistration<>(
       "cpu-pipeline",
       "Run the full mlir_edsl CPU lowering pipeline (same sequence as "
       "MLIRLowering::addCPUPasses)",
       [](mlir::OpPassManager &pm) { buildCPUPipeline(pm); });
+
 }
 
 } // namespace

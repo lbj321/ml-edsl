@@ -39,6 +39,16 @@ add_library(mlir_edsl_core STATIC
     src/MLIRBuilder.cpp
     src/MLIRLowering.cpp
     src/MLIRLoweringPasses.cpp
+    src/MatmulStrategy.cpp
+    src/passes/LinalgMatmulBlockedDistribute.cpp
+    src/passes/LinalgMatmulBlockedFuseEpilogue.cpp
+    src/passes/LinalgMatmulBlockedTile.cpp
+    src/passes/LinalgMatmulBlockedPackPrepare.cpp
+    src/passes/LinalgMatmulBlockedPackB.cpp
+    src/passes/LinalgMatmulBlockedPackA.cpp
+    src/passes/LinalgMatmulBlockedKernel.cpp
+    src/passes/TilingUtils.cpp
+    src/passes/MatmulPadding.cpp
     src/ShapeUtils.cpp
     src/builders/ArithBuilder.cpp
     src/builders/SCFBuilder.cpp
@@ -53,6 +63,26 @@ if(NOT LLVM_ENABLE_RTTI)
     set_source_files_properties(src/MLIRLowering.cpp
         PROPERTIES COMPILE_OPTIONS "-fno-rtti")
     set_source_files_properties(src/MLIRLoweringPasses.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(src/MatmulStrategy.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(src/passes/LinalgMatmulBlockedDistribute.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(src/passes/LinalgMatmulBlockedFuseEpilogue.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(src/passes/LinalgMatmulBlockedTile.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(src/passes/LinalgMatmulBlockedPackPrepare.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(src/passes/LinalgMatmulBlockedPackB.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(src/passes/LinalgMatmulBlockedPackA.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(src/passes/LinalgMatmulBlockedKernel.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(src/passes/TilingUtils.cpp
+        PROPERTIES COMPILE_OPTIONS "-fno-rtti")
+    set_source_files_properties(src/passes/MatmulPadding.cpp
         PROPERTIES COMPILE_OPTIONS "-fno-rtti")
     if(MLIR_EDSL_CUDA)
         set_source_files_properties(src/MLIRExecutor.cpp

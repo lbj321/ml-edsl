@@ -77,6 +77,8 @@
 #include "mlir/Dialect/SCF/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Tensor/IR/TensorInferTypeOpInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/IR/TensorTilingInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/IR/ValueBoundsOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
@@ -174,6 +176,9 @@ void registerCPUDialects(mlir::DialectRegistry &registry) {
   mlir::vector::registerBufferizableOpInterfaceExternalModels(registry);
   mlir::vector::registerSubsetOpInterfaceExternalModels(registry);
   mlir::linalg::registerTilingInterfaceExternalModels(registry);
+  // Without the tensor InferType models lowering a blocked matmul crashes
+  // rather than failing with a diagnostic.
+  mlir::tensor::registerInferTypeOpInterfaceExternalModels(registry);
   mlir::arith::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::scf::registerValueBoundsOpInterfaceExternalModels(registry);
   mlir::tensor::registerValueBoundsOpInterfaceExternalModels(registry);
@@ -248,38 +253,30 @@ bool MLIRLowering::runPipeline(mlir::PassManager &pm, mlir::ModuleOp module) {
 void MLIRLowering::addCPUPasses(mlir::PassManager &pm) { buildCPUPipeline(pm); }
 
 void buildCPUPipeline(mlir::OpPassManager &pm) {
-  // Outer 64×64 tile-and-fuse epilogue fusion, run on tensor semantics
-  // (pre-bufferize). LinalgOuterTileAndFusePass tiles the relu generic (when
-  // present) via the TilingInterface and fuses bias_add/matmul/fill into the
-  // resulting scf.forall via tileConsumerAndFuseProducersUsingSCF — fusion
-  // legality is straightforward on tensor SSA values but hard to prove once
-  // operands are aliasing memrefs, hence doing this before bufferization.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgOuterTileAndFusePass());
+  // BLIS-style cache and register blocking, first so it claims every matmul
+  // chooseStrategy accepts before the older tiling passes see it. The tiles it
+  // leaves carry mlir_edsl.blocked, which keeps those passes off them.
+  // Anything the guard rejects — non-f32, dynamic or non-divisible shapes —
+  // is untouched here and lowers exactly as before. The stages hand
+  // tiles over through that attribute (and
+  // the register loops through kBlockedHoistAttrName), so canonicalize
+  // between them is safe.
+  pm.addNestedPass<mlir::func::FuncOp>(
+      createLinalgMatmulBlockedDistributePass());
   pm.addPass(mlir::createCanonicalizerPass());
-
-  // Outer 64×64 parallel tiling for any matmul not already covered by the
-  // fusion above (e.g. a bare matmul with no relu epilogue). Matmuls already
-  // nested inside the scf.forall the fusion pass produced are skipped — see
-  // the guard in LinalgMatmulTilingPass — so this never double-tiles a
-  // fused matmul.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulParallelTilingPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      createLinalgMatmulBlockedFuseEpiloguePass());
   pm.addPass(mlir::createCanonicalizerPass());
-
-  // Cache-block K into serial 256-wide chunks for matmuls whose K is large
-  // (a no-op below that threshold). Targets both the epilogue-fusion path and
-  // the fallback above, since both leave the matmul's K full-length inside
-  // the outer forall. See LinalgMatmulKTilingPass for why this matters — CPU
-  // cache sizes, not correctness.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulKTilingPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedTilePass());
   pm.addPass(mlir::createCanonicalizerPass());
-
-  // Inner 8x8 serial tiling, also run on tensor semantics (pre-bufferize) for
-  // the same reason as the outer tiling above. Nesting inside the outer
-  // forall's boundary tile (e.g. the 32-wide remainder on a 96x96 matmul)
-  // requires ValueBoundsOpInterface support for affine ops — see the
-  // affine::registerValueBoundsOpInterfaceExternalModels registration in
-  // registerRequiredDialects.
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulTilingPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedKernelPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      createLinalgMatmulBlockedPackPreparePass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedPackBPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulBlockedPackAPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
   // Tile linalg.generic ops (elementwise, bias, relu, etc.) to strips of 8
@@ -291,30 +288,37 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgGenericTilingPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Lower static 8x8 linalg.matmul tiles to vector.contract with standard
-  // 2D indexing maps (m,k)x(k,n)->(m,n), on tensor semantics (pre-bufferize).
-  // Must run before LinalgVectorizationPass (which stays post-bufferize
-  // below) — linalg::vectorize always produces a 3D double-broadcast form
-  // that the OuterProduct lowering cannot decompose into vector.fma, so
-  // matmul must never reach it. Running this pass earlier still guarantees
-  // that ordering since it consumes/erases every linalg.matmul it touches.
-  // Bufferizing the vector.transfer_read/write this produces requires
+  // Vectorize linalg structured ops → vector dialect, on tensor semantics
+  // (pre-bufferize), including the blocked MR x NR x 1 register tiles. It
+  // skips the matmuls left for scalar loops and the fills initializing them
+  // (see isLeftForScalarLowering). Bufferizing the vector.transfer_read/write
+  // this produces requires
   // vector::registerBufferizableOpInterfaceExternalModels (see
   // registerRequiredDialects).
-  pm.addNestedPass<mlir::func::FuncOp>(createLinalgMatmulToContractPass());
-  pm.addPass(mlir::createCanonicalizerPass());
-
-  // Vectorize remaining linalg structured ops → vector dialect, on tensor
-  // semantics (pre-bufferize). linalg::vectorize is dialect-agnostic
-  // upstream (the standard "vectorize before bufferize" pattern), so no
-  // rewrite was needed here, unlike LinalgMatmulToContractPass above.
-  // (linalg.matmul is already handled by LinalgMatmulToContractPass above,
-  // so this only ever sees generic/fill ops.)
   pm.addNestedPass<mlir::func::FuncOp>(createLinalgVectorizationPass());
+  // Turn the vectorized matmuls into vector.contract with 2D operands. Must
+  // run before the canonicalize: with K = 1 it folds the unit-dim
+  // multi_reduction into shape_cast + addf, which no longer matches the
+  // contract pattern.
+  pm.addNestedPass<mlir::func::FuncOp>(createVectorCleanupPass());
   pm.addPass(mlir::createCanonicalizerPass());
 
-  // Fuse mulf + multi_reduction → vector.contract for better LLVM codegen
-  pm.addNestedPass<mlir::func::FuncOp>(createVectorCleanupPass());
+  // Hoist loop-invariant subset reads/writes — specifically the accumulator
+  // tile's transfer_read/transfer_write around a reduction loop, which become
+  // iter_args on the loop. Without it the innermost k-loop reloads and
+  // restores its C tile every step; with it C stays in registers as a
+  // vector<MRxNRxf32> for the whole reduction (1024^3: 38.3 vs 16.7 GFLOPS).
+  //
+  // Must run here, pre-bufferization, where the C tile is still tensor SSA:
+  // after bufferization it hoists nothing for the blocked path. It applies to
+  // every loop in the function; it used to miscompile the old path's fused
+  // matmul+bias+relu forall, which no longer exists. Fusing an epilogue into
+  // the blocked accumulator (INTEGRATION.md Step 4) must be checked against
+  // it.
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::createLoopInvariantSubsetHoistingPass());
+
+  pm.addNestedPass<mlir::func::FuncOp>(createVectorTransposeLoweringPass());
 
   // Lower vector.contract → vector.outerproduct on rank-1 slices, on tensor
   // semantics (pre-bufferize). Pure vector.*-to-vector.* rewrite — no tensor
@@ -355,6 +359,25 @@ void buildCPUPipeline(mlir::OpPassManager &pm) {
   // analysis working over already-deduped IR.
   pm.addPass(mlir::createCSEPass());
   pm.addPass(mlir::createCanonicalizerPass());
+
+  // Hoist buffer allocations out of the loops that produced them, *before*
+  // deallocation is inserted. The blocked matmul's packed A~/B~ buffers
+  // bufferize to a memref.alloc inside the pc loop; hoisted, each thread
+  // allocates them once per call instead of once per pc iteration. Running
+  // the ownership-based dealloc pass first would instead pin an alloc/free
+  // pair inside that loop, and glibc hands back freshly mmap'd (unfaulted)
+  // pages every time for buffers over its 128 KB threshold — the experiment
+  // measured 10,694 vs 530 minor page faults over 200 calls for exactly this
+  // (PLAN.md Stage 4).
+  //
+  // BufferLoopHoisting deliberately never lifts an allocation out of an
+  // scf.forall body (that would be a race), so per-thread packing buffers
+  // stay per-thread. The second BufferLoopHoisting run further down serves an
+  // unrelated purpose (ConvertVectorToSCF's per-transfer alloca).
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::bufferization::createBufferHoistingPass());
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::bufferization::createBufferLoopHoistingPass());
 
   pm.addPass(
       mlir::bufferization::createOwnershipBasedBufferDeallocationPass());

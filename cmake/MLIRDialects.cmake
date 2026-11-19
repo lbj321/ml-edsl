@@ -51,6 +51,10 @@ set(MLIR_MEMORY_LIBS
     MLIRMemRefToLLVM
     MLIRMemRefTransforms
     MLIRTensorDialect
+    # tensor.pad's TilingInterface and the shape reification it needs, used by
+    # LinalgMatmulBlockedPass to tile the operand-packing copies.
+    MLIRTensorTilingInterfaceImpl
+    MLIRTensorInferTypeOpInterfaceImpl
     MLIRLinalgDialect
     MLIRLinalgTransforms
     MLIRBufferizationDialect
