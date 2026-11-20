@@ -11,7 +11,7 @@ Usage:
         [--backends ...] [--rounds 1] [--min-time 0.1] [--force]
     python3 benchmarks/run_matrix.py --report benchmarks/results/<file>.jsonl
 
-Each preset answers one question in 10-80 minutes (see PRESETS). A
+Each preset answers one question in 10-120 minutes (see PRESETS). A
 session runs several presets into one folder, one file each, plus a
 session.json; --backends, --rounds, --min-time and --dump-samples apply to
 all of them. It refuses a dirty tree or a stale .so unless forced.
@@ -104,12 +104,14 @@ PRESETS = {
         **REPORT, "shapes": _square(256, 512, 1024, 2048),
         "threads": [1, 2, 4, 8], "ops": ["matmul", "dense"],
     },
-    # ~60 min, ~55 of it 8192. Whether EDSL keeps up once the working set is
-    # far past L3; calls run long enough to reach the sustained 8T clock.
+    # ~120 min, most of it 8192. Whether EDSL keeps up once the working set
+    # is far past L3; calls run long enough to reach the sustained 8T clock.
+    # Dense too, since EDSL's epilogue cost is not monotonic in size (~1.0x
+    # at 256 and 2048, ~2.5x at 512), so 2048 does not predict 4096+.
     # 1T is left out, since one 8192 call there is ~10 s.
     "large": {
         **REPORT, "shapes": _square(4096, 8192),
-        "threads": [8], "ops": ["matmul"],
+        "threads": [8], "ops": ["matmul", "dense"],
     },
     # ~38 min. Batch 1..256 on a 1024 -> 4096 layer: 1T isolates the
     # kernel's code generation, 8T how the work is split across threads.
