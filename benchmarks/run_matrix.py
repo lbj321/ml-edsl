@@ -2,14 +2,19 @@
 """Run every worker over a grid of shapes, thread counts and ops.
 
 Usage:
-    python3 benchmarks/run_matrix.py --preset overhead|scaling|padding|epilogue|ml|pilot
+    python3 benchmarks/run_matrix.py --preset overhead|scaling|large|ml|pilot
     python3 benchmarks/run_matrix.py [--preset ...] [--backends mkl edsl ...]
         [--shapes 1024x1024x1024 64x4096x1024] [--threads 1 2 4 8]
         [--ops matmul dense] [--rounds 2] [--min-time 2]
         [--dump-samples [DIR]]
+    python3 benchmarks/run_matrix.py --session report [--out-dir DIR]
+        [--backends ...] [--rounds 1] [--min-time 0.1] [--force]
     python3 benchmarks/run_matrix.py --report benchmarks/results/<file>.jsonl
 
-Each preset answers one question in 5-14 minutes (see PRESETS).
+Each preset answers one question in 10-80 minutes (see PRESETS). A
+session runs several presets into one folder, one file each, plus a
+session.json; --backends, --rounds, --min-time and --dump-samples apply to
+all of them. It refuses a dirty tree or a stale .so unless forced.
 Options given on the command line override the preset's; without a preset,
 --backends, --shapes, --threads and --ops are required.
 
@@ -30,8 +35,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from aggregate import (BASELINE, geomean_ratios, load, parse_shape,
-                       peak_gflops, spread)
+from aggregate import (BASELINE, clock_label, geomean_ratios, load,
+                       parse_shape, peak_gflops, spread)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKERS = REPO_ROOT / "benchmarks" / "workers"
@@ -39,13 +44,16 @@ RESULTS_DIR = REPO_ROOT / "benchmarks" / "results"
 CONDA_ENVS = Path.home() / "anaconda3" / "envs"
 
 # Peak f32 throughput of the i7-9700KF dev machine, recorded in each results
-# file so plots can draw it. AVX2: 2 FMA ports x 8 lanes x 2 flop. The clock
-# is Intel's stock turbo per active core count (index 0 = 1 core), assumed
-# rather than measured: WSL can't read the real one.
+# file so plots can draw it. AVX2: 2 FMA ports x 8 lanes x 2 flop. `ghz` is
+# the clock per active core count (index 0 = 1 core). With turbo off in the
+# BIOS every core runs at the 3.6 GHz base clock; WSL can't read the clock,
+# so this is a stated setting, not a measurement. Files from before have
+# `turbo_ghz`, Intel's stock turbo table, instead.
 PEAK = {
     "cpu": "i7-9700KF",
     "flop_per_cycle_per_core": 32,
-    "turbo_ghz": [4.9, 4.8, 4.7, 4.7, 4.6, 4.6, 4.6, 4.6],
+    "clock": "base 3.6 GHz, turbo off in BIOS",
+    "ghz": [3.6] * 8,
 }
 
 # name -> (interpreter, worker, field of the result line, expected value)
@@ -67,54 +75,47 @@ def _square(*sizes: int) -> list:
     return [f"{n}x{n}x{n}" for n in sizes]
 
 
-# Every preset includes MKL so its ratios have a baseline from the same
-# session. Durations on the i7-9700KF dev machine, scaled from 1- or
-# 2-round timings. Rounds, not samples, set the noise: round medians vary
-# 1-3%, and at 8T a process running right after another 8T run is 3-5%
-# slower. Rotation cancels that only when every backend holds every
-# position equally often, so rounds are a multiple of the backend count
-# (at least 4); otherwise the median lands in the majority position.
+# Settings every report preset shares, so all figures show the same
+# backends at the same precision. Rounds, not samples, set the noise: round
+# medians vary 1-3%, and at 8T a process running right after another 8T run
+# is 3-5% slower. Rotation cancels that only when every backend holds every
+# position equally often, so rounds are a multiple of the backend count;
+# 10 is enough for differences under 5%. Raw samples are kept so any
+# statistic can be computed afterwards without re-running.
+REPORT = {
+    "backends": list(BACKENDS), "rounds": 10, "min_time": 2.0,
+    "dump_samples": True,
+}
+
+# The report presets split the shapes without overlap: cubes up to 128,
+# 256-2048 and from 4096, plus the non-square ML shapes. All extents are
+# powers of two. Durations on the i7-9700KF dev machine, scaled from
+# earlier runs.
 PRESETS = {
-    # ~5 min. Fixed per-call cost, and which libraries thread small sizes.
+    # ~10 min. Fixed per-call cost, and which libraries thread small sizes.
+    # MAX_REPEATS, not min_time, sets the sample count at these sizes.
     "overhead": {
-        "backends": list(BACKENDS), "shapes": _square(8, 16, 32, 64, 128),
-        "threads": [1, 8], "ops": ["matmul"], "rounds": 5, "min_time": 1.0,
+        **REPORT, "shapes": _square(8, 16, 32, 64, 128),
+        "threads": [1, 8], "ops": ["matmul"],
     },
-    # ~20 min. Thread scaling of large square matmuls.
+    # ~80 min. Size and thread scaling, and the cost of the dense epilogue
+    # (bias + ReLU), which needs both ops in one file to pair per round.
     "scaling": {
-        "backends": ["mkl", "openblas", "blis", "jax", "edsl"],
-        "shapes": _square(256, 512, 1024, 2048),
-        "threads": [1, 2, 4, 8], "ops": ["matmul"],
-        "rounds": 5, "min_time": 2.0,
+        **REPORT, "shapes": _square(256, 512, 1024, 2048),
+        "threads": [1, 2, 4, 8], "ops": ["matmul", "dense"],
     },
-    # ~5 min. Whether EDSL keeps up past 2048 on all cores; 512-2048
-    # overlap scaling as a cross-check. 1T is left out, since one 4096 call
-    # there is ~1 s.
+    # ~60 min, ~55 of it 8192. Whether EDSL keeps up once the working set is
+    # far past L3; calls run long enough to reach the sustained 8T clock.
+    # 1T is left out, since one 8192 call there is ~10 s.
     "large": {
-        "backends": ["mkl", "jax", "edsl"],
-        "shapes": _square(512, 1024, 2048, 4096),
-        "threads": [8], "ops": ["matmul"], "rounds": 6, "min_time": 2.0,
+        **REPORT, "shapes": _square(4096, 8192),
+        "threads": [8], "ops": ["matmul"],
     },
-    # ~11 min. Cost of extents no cache block divides, against 1024.
-    "padding": {
-        "backends": ["mkl", "jax", "edsl"],
-        "shapes": _square(1000, 1023, 1024),
-        "threads": [1, 2, 4, 8], "ops": ["matmul"],
-        "rounds": 6, "min_time": 2.0,
-    },
-    # ~10 min. Dense layer (matmul + bias + ReLU) over the scaling sizes,
-    # plus 128 for the small end.
-    "dense": {
-        "backends": ["mkl", "jax", "edsl"],
-        "shapes": _square(128, 256, 512, 1024, 2048),
-        "threads": [1, 8], "ops": ["dense"],
-        "rounds": 6, "min_time": 2.0,
-    },
-    # ~6 min. Dense layers at batch 1..256 on a 1024 -> 4096 layer.
+    # ~38 min. Batch 1..256 on a 1024 -> 4096 layer: 1T isolates the
+    # kernel's code generation, 8T how the work is split across threads.
     "ml": {
-        "backends": ["mkl", "openblas", "jax", "edsl"],
-        "shapes": [f"{b}x4096x1024" for b in (1, 16, 64, 256)],
-        "threads": [1, 8], "ops": ["dense"], "rounds": 4, "min_time": 2.0,
+        **REPORT, "shapes": [f"{b}x4096x1024" for b in (1, 16, 64, 256)],
+        "threads": [1, 8], "ops": ["matmul", "dense"],
     },
     # ~7 min. Variance pilot: many rounds of a few points, with raw samples, to
     # compare between-process and within-process spread and to see the
@@ -127,11 +128,25 @@ PRESETS = {
 }
 GRID_DEFAULTS = {"rounds": 1, "min_time": 2.0}
 
+# name -> presets run one after another into one folder, one file each.
+SESSIONS = {
+    "report": ["overhead", "scaling", "large", "ml"],
+}
+# Options a session passes on to every preset; the rest are per preset.
+SESSION_OVERRIDES = ("backends", "rounds", "min_time", "dump_samples")
+
 
 def parse_args() -> argparse.Namespace:
-    """Parse the grid, or the results file to report on."""
+    """Parse the grid, the session, or the results file to report on."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--preset", choices=list(PRESETS))
+    parser.add_argument("--session", choices=list(SESSIONS),
+                        help="run a list of presets into one folder")
+    parser.add_argument("--out-dir", type=Path, default=None,
+                        help="session folder (default: "
+                             "results/<timestamp>-<session>)")
+    parser.add_argument("--force", action="store_true",
+                        help="run a session on a dirty tree or stale .so")
     parser.add_argument("--backends", nargs="+", choices=list(BACKENDS))
     parser.add_argument("--shapes", nargs="+",
                         help="MxNxK: X is MxK, W is KxN")
@@ -151,16 +166,38 @@ def parse_args() -> argparse.Namespace:
     if args.report:
         return args
 
-    defaults = {**GRID_DEFAULTS, **PRESETS.get(args.preset, {})}
-    for key, value in defaults.items():
-        if getattr(args, key) is None:
-            setattr(args, key, value)
+    if args.session:
+        if args.preset:
+            parser.error("give --session or --preset, not both")
+        per_preset = [k for k in ("shapes", "threads", "ops", "out")
+                      if getattr(args, k) is not None]
+        if per_preset:
+            parser.error("a session takes its grids from its presets; drop "
+                         + ", ".join(f"--{k}" for k in per_preset))
+        return args
+    if args.out_dir or args.force:
+        parser.error("--out-dir and --force only apply to --session")
+
+    args = resolve(args, args.preset)
     missing = [k for k in ("backends", "shapes", "threads", "ops")
                if getattr(args, k) is None]
     if missing:
         parser.error("give --preset, or all of: "
                      + ", ".join(f"--{k}" for k in missing))
     return args
+
+
+def resolve(args: argparse.Namespace,
+            preset: Optional[str]) -> argparse.Namespace:
+    """A copy of `args` with the preset's values filled in wherever the
+    command line left them unset."""
+    resolved = argparse.Namespace(**vars(args))
+    resolved.preset = preset
+    defaults = {**GRID_DEFAULTS, **PRESETS.get(preset, {})}
+    for key, value in defaults.items():
+        if getattr(resolved, key) is None:
+            setattr(resolved, key, value)
+    return resolved
 
 
 def git(*args: str) -> str:
@@ -214,8 +251,9 @@ def run_point(backend: str, shape: tuple, threads: int, op: str,
     return {"backend": backend, **result}
 
 
-def run(args: argparse.Namespace) -> Path:
-    """Run the grid, appending each result to the results file."""
+def run(args: argparse.Namespace, edsl: Optional[dict] = None) -> Path:
+    """Run the grid, appending each result to the results file. `edsl` is
+    build info already taken by a session; otherwise it is read here."""
     shapes = [parse_shape(s) for s in args.shapes]
     for backend in args.backends:
         python = BACKENDS[backend][0]
@@ -236,13 +274,14 @@ def run(args: argparse.Namespace) -> Path:
     meta = {
         "meta": {
             "started": datetime.datetime.now().isoformat(timespec="seconds"),
-            "preset": args.preset,
+            "preset": args.preset, "session": args.session,
             "backends": args.backends, "shapes": args.shapes,
             "threads": args.threads, "ops": args.ops,
             "rounds": args.rounds, "min_time": args.min_time,
             "dump_samples": (str(args.dump_samples) if args.dump_samples
                              else None),
-            "edsl": edsl_build_info() if "edsl" in args.backends else None,
+            "edsl": ((edsl or edsl_build_info())
+                     if "edsl" in args.backends else None),
             "peak": PEAK,
         }
     }
@@ -275,6 +314,64 @@ def run(args: argparse.Namespace) -> Path:
                             print(f"[{done}/{total}] {progress(res)}",
                                   file=sys.stderr)
     return out
+
+
+def checked_build(force: bool) -> dict:
+    """EDSL build info for a session, refusing a dirty tree or a stale .so
+    unless forced: an hours-long run should not end in an unusable file."""
+    info = edsl_build_info()
+    problems = []
+    if info["dirty"]:
+        problems.append("the working tree has uncommitted changes")
+    if info["so_older_than_cpp"]:
+        problems.append("_mlir_backend.so is older than the last cpp/ commit")
+    if problems and not force:
+        raise RuntimeError("; ".join(problems)
+                           + ". Commit and ./build.sh, or pass --force.")
+    for problem in problems:
+        print(f"warning: {problem} (--force)", file=sys.stderr)
+    return info
+
+
+def run_session(args: argparse.Namespace) -> list:
+    """Run each preset of the session into its own file in one folder,
+    keeping session.json current so an interrupted run shows where it
+    stopped. Returns the results files."""
+    presets = SESSIONS[args.session]
+    grids = [resolve(args, preset) for preset in presets]
+    edsl = (checked_build(args.force)
+            if any("edsl" in g.backends for g in grids) else None)
+
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = args.out_dir or RESULTS_DIR / f"{stamp}-{args.session}"
+    # Refuses an existing folder rather than mixing two sessions in one.
+    out_dir.mkdir(parents=True)
+    session = {
+        "session": args.session, "presets": presets,
+        "started": datetime.datetime.now().isoformat(timespec="seconds"),
+        "finished": None,
+        "overrides": {k: (str(v) if isinstance(v, Path) else v)
+                      for k in SESSION_OVERRIDES
+                      if (v := getattr(args, k)) is not None},
+        "edsl": edsl, "completed": [],
+    }
+    session_file = out_dir / "session.json"
+    session_file.write_text(json.dumps(session, indent=2) + "\n")
+
+    outs = []
+    for grid in grids:
+        grid.out = out_dir / f"{grid.preset}.jsonl"
+        if isinstance(grid.dump_samples, Path):
+            grid.dump_samples = grid.dump_samples / grid.preset
+        print(f"\n=== session {args.session}: preset {grid.preset} ===",
+              file=sys.stderr)
+        outs.append(run(grid, edsl))
+        session["completed"].append(grid.preset)
+        session_file.write_text(json.dumps(session, indent=2) + "\n")
+    session["finished"] = datetime.datetime.now().isoformat(
+        timespec="seconds")
+    session_file.write_text(json.dumps(session, indent=2) + "\n")
+    return outs
 
 
 def progress(res: dict) -> str:
@@ -337,7 +434,8 @@ def report(path: Path) -> None:
 
     threads, backends, shapes = meta["threads"], meta["backends"], res.shapes
     if meta.get("peak"):
-        print(f"peak ({meta['peak']['cpu']}, assumed turbo): " + ", ".join(
+        print(f"peak ({meta['peak']['cpu']}, "
+              f"{clock_label(meta['peak'])}): " + ", ".join(
             f"{t}T {peak_gflops(meta, t):.0f} GF" for t in threads))
     thread_cols = "".join(f"{f'{t}T':>10}" for t in threads)
     speedup = f"{f'{threads[-1]}T/{threads[0]}T':>9}" if len(threads) > 1 else ""
@@ -395,10 +493,18 @@ def report(path: Path) -> None:
 
 
 def main() -> int:
-    """Run the grid and report it, or just report an existing file."""
+    """Run the grid or session and report it, or just report an existing
+    file."""
     args = parse_args()
     if args.report:
         report(args.report)
+        return 0
+    if args.session:
+        outs = run_session(args)
+        print(f"\nresults: {outs[0].parent}", file=sys.stderr)
+        for out in outs:
+            print(f"\n##### {out.stem} #####")
+            report(out)
         return 0
     out = run(args)
     print(f"\nresults: {out}", file=sys.stderr)

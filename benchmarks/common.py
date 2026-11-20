@@ -95,7 +95,9 @@ def repeats_for(N: int) -> int:
     The large-N counts are deliberately not tiny: at 5 samples the occasional
     30x outlier seen on this machine (page faults, OpenMP pool wake-up) can
     invert which implementation looks faster. 25 samples costs ~2.5s at
-    2048^3 and makes the median stable.
+    2048^3 and makes the median stable. Past 4096 one call is seconds, so 25
+    would make each point minutes; one process's median is already far
+    tighter than the spread between processes, so 10 loses nothing.
     """
     if N <= 8:
         return 10_000
@@ -105,7 +107,9 @@ def repeats_for(N: int) -> int:
         return 200
     if N <= 512:
         return 150
-    return 25
+    if N <= 4096:
+        return 25
+    return 10
 
 
 def repeats_for_budget(budget_samples: list, N: int, min_time: float) -> int:

@@ -35,8 +35,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import (FuncFormatter, LogLocator,  # noqa: E402
                                NullFormatter)
 
-from aggregate import (BASELINE, Results, Spread, load,  # noqa: E402
-                       paired_ratios, peak_gflops, spread)
+from aggregate import (BASELINE, Results, Spread,  # noqa: E402
+                       clock_label, load, paired_ratios, peak_gflops, spread)
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
@@ -485,11 +485,9 @@ def summary_caption(meta: dict) -> str:
              f"{meta.get('preset') or 'custom'}, started {meta['started']}."]
     peak = meta.get("peak")
     if peak:
-        ghz = peak["turbo_ghz"]
         parts.append(f"% of peak on {peak['cpu']}: "
                      f"{peak['flop_per_cycle_per_core']} flop/cycle/core at "
-                     f"assumed stock turbo ({ghz[0]} GHz on 1 core to "
-                     f"{ghz[-1]} GHz on {len(ghz)}).")
+                     f"{clock_label(peak)}.")
     return "*" + " ".join(parts) + "*"
 
 

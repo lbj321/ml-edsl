@@ -76,11 +76,29 @@ def peak_gflops(meta: dict, threads: int) -> Optional[float]:
     peak = meta.get("peak")
     if peak is None:
         return None
-    ghz = peak["turbo_ghz"]
+    ghz = peak_clocks(peak)
     if not 1 <= threads <= len(ghz):
-        raise ValueError(f"no turbo clock for {threads} threads on "
+        raise ValueError(f"no clock for {threads} threads on "
                          f"{peak['cpu']} ({len(ghz)} cores)")
     return peak["flop_per_cycle_per_core"] * threads * ghz[threads - 1]
+
+
+def peak_clocks(peak: dict) -> list:
+    """GHz per active core count; older files call it turbo_ghz."""
+    if "ghz" in peak:
+        return peak["ghz"]
+    if "turbo_ghz" in peak:
+        return peak["turbo_ghz"]
+    raise ValueError(f"peak for {peak.get('cpu')} records no clock")
+
+
+def clock_label(peak: dict) -> str:
+    """How the peak's clock was set, for captions and reports."""
+    if "clock" in peak:
+        return peak["clock"]
+    ghz = peak_clocks(peak)
+    return (f"assumed stock turbo ({ghz[0]} GHz on 1 core to {ghz[-1]} GHz "
+            f"on {len(ghz)})")
 
 
 def paired_ratios(res: Results, key: tuple,
