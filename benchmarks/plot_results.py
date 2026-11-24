@@ -25,6 +25,7 @@ over rounds, whiskers and bands its 95% CI (Yuen); see aggregate.py.
 """
 
 import argparse
+import statistics
 import sys
 from pathlib import Path
 from typing import Optional
@@ -42,14 +43,15 @@ from aggregate import (Results, Spread, clock_label,  # noqa: E402
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
 # Fixed per backend, so a backend keeps its color whichever subset ran.
-# Slots 1-5 of the validated reference palette, in its order; three are
-# under 3:1 on the surface, so lines also get a marker shape and an end label.
+# Okabe-Ito (2008), colorblind-safe: worst pair ΔE 11 under deutan, 15.6
+# for normal vision. Orange and sky blue are under 3:1 on the surface, so
+# lines also get a marker shape and an end label.
 STYLE = {
-    "edsl": ("#2a78d6", "o"),
-    "mkl": ("#eb6834", "s"),
-    "jax": ("#1baf7a", "^"),
-    "openblas": ("#eda100", "D"),
-    "blis": ("#e87ba4", "v"),
+    "edsl": ("#0072B2", "o"),
+    "mkl": ("#D55E00", "s"),
+    "jax": ("#009E73", "^"),
+    "openblas": ("#E69F00", "D"),
+    "blis": ("#56B4E9", "v"),
 }
 SURFACE, INK, INK_MUTED, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
 
@@ -97,6 +99,32 @@ def line_panel(ax: plt.Axes, xs: list, series: dict) -> None:
                 label=backend)
 
 
+def spread_labels(ys: list, gap: float) -> list:
+    """Label positions for sorted ys at least `gap` apart: labels that would
+    overlap form a group, evenly spaced and centred on its lines' mean, so
+    each label stays next to its own line; groups that then touch merge.
+    Kept inside [0, 1]."""
+    groups = []  # [first index, count, centre]
+    for i, y in enumerate(ys):
+        groups.append([i, 1, y])
+        while len(groups) > 1:
+            (i0, n0, c0), (i1, n1, c1) = groups[-2], groups[-1]
+            if (c1 - (n1 - 1) * gap / 2) - (c0 + (n0 - 1) * gap / 2) >= gap:
+                break
+            n = n0 + n1
+            groups[-2:] = [[i0, n, statistics.fmean(ys[i0:i0 + n])]]
+    out = []
+    for _, n, centre in groups:
+        low = centre - (n - 1) * gap / 2
+        out += [low + j * gap for j in range(n)]
+    if not out:
+        return out
+    shift = max(0.0, -out[0])
+    if out[-1] + shift > 1.0:
+        shift = 1.0 - out[-1]
+    return [y + shift for y in out]
+
+
 def label_line_ends(ax: plt.Axes, min_gap: float = 0.07) -> None:
     """Label each line at its last point, nudging labels apart vertically
     (in axes fraction) where lines end close together."""
@@ -108,14 +136,8 @@ def label_line_ends(ax: plt.Axes, min_gap: float = 0.07) -> None:
         x, y = line.get_xdata()[-1], line.get_ydata()[-1]
         ends.append([to_axes.transform((x, y))[1], x, line.get_label()])
     ends.sort()
-    for i in range(1, len(ends)):
-        ends[i][0] = max(ends[i][0], ends[i - 1][0] + min_gap)
-    # If the stack ran off the top, pull it back down from there.
-    if ends and ends[-1][0] > 1.0:
-        ends[-1][0] = 1.0
-        for i in range(len(ends) - 2, -1, -1):
-            ends[i][0] = min(ends[i][0], ends[i + 1][0] - min_gap)
-    for frac, x, label in ends:
+    for frac, (_, x, label) in zip(spread_labels([e[0] for e in ends],
+                                                 min_gap), ends):
         ax.annotate(label, (x, frac), xycoords=("data", "axes fraction"),
                     xytext=(6, 0), textcoords="offset points", va="center",
                     fontsize=8, color=INK_MUTED, annotation_clip=False)
@@ -176,18 +198,29 @@ def figure(panels: int, title: str, meta: dict, kind: str) -> tuple:
 def wrapped_text(fig: plt.Figure, x: float, y: float, parts: list,
                  **kwargs) -> None:
     """`parts` joined by ' · ', starting a new line wherever the next part
-    would run past the figure's right edge (one-panel figures are narrow)."""
+    would run past the figure's right edge (one-panel figures are narrow);
+    a part too wide for a line of its own is broken between words."""
     text = fig.text(x, y, "", **kwargs)
     renderer = fig.canvas.get_renderer()
     room = fig.bbox.width * (1 - 2 * x)
+
+    def fits(line: str) -> bool:
+        text.set_text(line)
+        return text.get_window_extent(renderer).width <= room
+
     lines = []
     for part in parts:
-        if lines:
-            text.set_text(f"{lines[-1]} · {part}")
-            if text.get_window_extent(renderer).width <= room:
-                lines[-1] = f"{lines[-1]} · {part}"
-                continue
-        lines.append(part)
+        if lines and fits(f"{lines[-1]} · {part}"):
+            lines[-1] = f"{lines[-1]} · {part}"
+            continue
+        line = ""
+        for word in part.split():
+            if line and not fits(f"{line} {word}"):
+                lines.append(line)
+                line = word
+            else:
+                line = f"{line} {word}" if line else word
+        lines.append(line)
     text.set_text("\n".join(lines))
 
 
@@ -302,48 +335,62 @@ def size_axis(shapes: list) -> Optional[str]:
 
 def plot_size(res: Results, metric: str, shapes: list, xlabel: str,
               out: Path) -> None:
-    """`metric` against M as grouped bars, one panel per (op, threads).
-    Sizes are categories, not a log axis, so 1000, 1023 and 1024 each get
-    their own group."""
+    """`metric` against M as grouped bars, one panel per (op, threads)."""
     meta = res.meta
-    groups = [str(s[0]) for s in shapes]
     combos = [(op, t) for op in meta["ops"] for t in meta["threads"]]
     fig, axes = figure(len(combos), f"{METRIC_TITLE[metric]} vs size", meta,
                        "bars")
     for ax, (op, t) in zip(axes, combos):
-        series = {b: [point_spread(res, (op, s, b, t), metric)
-                      for s in shapes]
-                  for b in meta["backends"]}
-        bar_panel(ax, groups, series)
-        if metric == "gflops":
-            peak_level(ax, meta, t)
-        apply_metric(ax, metric)
-        setup_axes(ax, f"{op}, {threads_label(t)}", xlabel,
-                   METRIC_LABEL[metric])
+        size_panel(ax, res, op, t, shapes, metric, xlabel)
     finish(fig, axes, out / f"size{METRIC_SUFFIX[metric]}.png")
+
+
+def size_panel(ax: plt.Axes, res: Results, op: str, threads: int,
+               shapes: list, metric: str, xlabel: str) -> None:
+    """One panel of `metric` against M as grouped bars, one bar per backend.
+    Sizes are categories, not a log axis, so 1000, 1023 and 1024 each get
+    their own group."""
+    meta = res.meta
+    series = {b: [point_spread(res, (op, s, b, threads), metric)
+                  for s in shapes]
+              for b in meta["backends"]}
+    bar_panel(ax, [str(s[0]) for s in shapes], series)
+    if metric == "gflops":
+        peak_level(ax, meta, threads)
+    apply_metric(ax, metric)
+    setup_axes(ax, f"{op}, {threads_label(threads)}", xlabel,
+               METRIC_LABEL[metric])
 
 
 def plot_scaling(res: Results, metric: str, shapes: list, out: Path) -> None:
     """`metric` against thread count, one panel per (op, shape)."""
     meta = res.meta
-    threads = meta["threads"]
     combos = [(op, s) for op in meta["ops"] for s in shapes]
     fig, axes = figure(len(combos), f"{METRIC_TITLE[metric]} vs threads",
                        meta, "lines")
     for ax, (op, s) in zip(axes, combos):
-        series = {b: [point_spread(res, (op, s, b, t), metric)
-                      for t in threads]
-                  for b in meta["backends"]}
-        line_panel(ax, threads, series)
-        if metric == "gflops":
-            peak_curve(ax, meta, threads)
-        ax.set_xscale("log", base=2)
-        ax.set_xticks(threads, [str(t) for t in threads])
-        apply_metric(ax, metric)
-        setup_axes(ax, f"{op} {shape_label(op, s)}", "max threads",
-                   METRIC_LABEL[metric])
-        label_line_ends(ax)
+        scaling_panel(ax, res, op, s, metric)
     finish(fig, axes, out / f"scaling{METRIC_SUFFIX[metric]}.png")
+
+
+def scaling_panel(ax: plt.Axes, res: Results, op: str, shape: tuple,
+                  metric: str) -> None:
+    """One panel of `metric` against thread count, one line per backend,
+    with the peak curve for GFLOPS."""
+    meta = res.meta
+    threads = meta["threads"]
+    series = {b: [point_spread(res, (op, shape, b, t), metric)
+                  for t in threads]
+              for b in meta["backends"]}
+    line_panel(ax, threads, series)
+    if metric == "gflops":
+        peak_curve(ax, meta, threads)
+    ax.set_xscale("log", base=2)
+    ax.set_xticks(threads, [str(t) for t in threads])
+    apply_metric(ax, metric)
+    setup_axes(ax, f"{op} {shape_label(op, shape)}", "max threads",
+               METRIC_LABEL[metric])
+    label_line_ends(ax)
 
 
 def epilogue_spread(res: Results, shape: tuple, backend: str,
@@ -356,17 +403,24 @@ def epilogue_spread(res: Results, shape: tuple, backend: str,
 def plot_epilogue(res: Results, shapes: list, out: Path) -> None:
     """dense / matmul time per backend, one panel per thread count."""
     meta = res.meta
-    labels = [shape_label("dense", s) for s in shapes]
     fig, axes = figure(len(meta["threads"]), "Dense layer time / matmul "
-                       "time  (dashed line = epilogue is free)", meta, "bars")
+                       "time  (dashed line = same time as matmul)", meta,
+                       "bars")
     for ax, t in zip(axes, meta["threads"]):
-        series = {b: [epilogue_spread(res, s, b, t) for s in shapes]
-                  for b in meta["backends"]}
-        bar_panel(ax, labels, series)
-        ax.axhline(1.0, color=INK_MUTED, linewidth=1, linestyle="--")
-        ax.set_ylim(bottom=0)
-        setup_axes(ax, threads_label(t), "shape", "dense / matmul time")
+        epilogue_panel(ax, res, t, shapes)
     finish(fig, axes, out / "epilogue.png")
+
+
+def epilogue_panel(ax: plt.Axes, res: Results, threads: int,
+                   shapes: list) -> None:
+    """One panel of dense / matmul time per backend over `shapes`, with
+    the line where dense takes as long as matmul."""
+    series = {b: [epilogue_spread(res, s, b, threads) for s in shapes]
+              for b in res.meta["backends"]}
+    bar_panel(ax, [shape_label("dense", s) for s in shapes], series)
+    ax.axhline(1.0, color=INK_MUTED, linewidth=1, linestyle="--")
+    ax.set_ylim(bottom=0)
+    setup_axes(ax, threads_label(threads), "shape", "dense / matmul time")
 
 
 def plot_shapes(res: Results, metric: str, shapes: list, out: Path) -> None:
@@ -423,19 +477,26 @@ def write_summary(res: Results, path: Path) -> None:
                   "|---|---:|" + "---:|" * len(backends)]
         for s in res.shapes:
             for t in threads:
-                ran = [(gflops_spread(res.points[(op, s, b, t)].gflops).mean, b)
-                       for b in backends if (op, s, b, t) in res.points]
-                best = max(ran)[1] if ran else None
-                cells = []
-                for b in backends:
-                    cell = summary_cell(res, (op, s, b, t))
-                    cells.append(f"**{cell}**" if b == best else cell)
-                lines.append(f"| {shape_label(op, s)} | {t} | "
-                             + " | ".join(cells) + " |")
+                lines.append(gflops_row(res, op, s, t))
         lines.append("")
     lines.append(summary_caption(meta))
     path.write_text("\n".join(lines) + "\n")
     print(path)
+
+
+def gflops_row(res: Results, op: str, shape: tuple, threads: int) -> str:
+    """Markdown row: shape, thread count, then each backend's mean GFLOPS
+    with % of peak, the best in bold."""
+    backends = res.meta["backends"]
+    ran = [(gflops_spread(res.points[(op, shape, b, threads)].gflops).mean, b)
+           for b in backends if (op, shape, b, threads) in res.points]
+    best = max(ran)[1] if ran else None
+    cells = []
+    for b in backends:
+        cell = summary_cell(res, (op, shape, b, threads))
+        cells.append(f"**{cell}**" if b == best else cell)
+    return (f"| {shape_label(op, shape)} | {threads} | "
+            + " | ".join(cells) + " |")
 
 
 def summary_caption(meta: dict) -> str:

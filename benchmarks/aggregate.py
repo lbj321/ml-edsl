@@ -191,7 +191,7 @@ def clock_label(peak: dict) -> str:
 def epilogue_ratios(res: Results, shape: tuple, backend: str,
                     threads: int) -> dict:
     """round -> dense time / matmul time of the same point, for the rounds
-    where both ran; 1.0 means the epilogue is free."""
+    where both ran; 1.0 means dense takes as long as plain matmul."""
     dense = res.points.get(("dense", shape, backend, threads))
     matmul = res.points.get(("matmul", shape, backend, threads))
     if dense is None or matmul is None:

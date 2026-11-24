@@ -462,7 +462,7 @@ def report(path: Path) -> None:
 
     if {"matmul", "dense"} <= set(meta["ops"]):
         print("\n=== dense / matmul time, paired per round "
-              "(1.00 = epilogue is free) ===")
+              "(1.00 = same time as matmul) ===")
         print(f"{'shape':16}{'backend':9}{thread_cols}")
         for shape in shapes:
             for b in backends:
