@@ -29,14 +29,14 @@ Stdlib only, so any python3 can run it.
 import argparse
 import datetime
 import json
-import statistics
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
-from aggregate import (BASELINE, clock_label, geomean_ratios, load,
-                       parse_shape, peak_gflops, spread)
+from aggregate import (clock_label, epilogue_ratios, gflops_spread, load,
+                       parse_shape, peak_gflops, ratio_spread, secs_spread,
+                       trim_count)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKERS = REPO_ROOT / "benchmarks" / "workers"
@@ -394,39 +394,28 @@ def fmt_time(seconds: float) -> str:
     return f"{seconds:.2f}s"
 
 
-def ratio_cell(per_round: list, width: int) -> str:
-    """Median of per-round ratios, with half their min-max range relative
-    to the median when there is more than one round."""
-    if not per_round:
-        return f"{'-':>{width}}"
-    med = statistics.median(per_round)
-    if len(per_round) == 1:
-        return f"{med:{width - 1}.2f}x"
-    half = (max(per_round) - min(per_round)) / 2 / med
-    return f"{med:{width - 8}.2f}x ±{half:5.1%}"
-
-
 def report(path: Path) -> None:
-    """Print GFLOPS and time tables per (op, shape), dense/matmul time
-    ratios when both ops ran, and geomean ratios to the baseline, paired
-    per round."""
+    """Print GFLOPS and time tables per (op, shape), and dense/matmul time
+    ratios, paired per round, when both ops ran."""
     res = load(path)
     meta = res.meta
     for r in res.failed:
         print(f"FAILED: {progress(r)}")
 
-    gf_spread = {key: spread(p.gflops) for key, p in res.points.items()}
-    gf = {key: s.median for key, s in gf_spread.items()}
-    secs = {key: spread(p.secs).median for key, p in res.points.items()}
-    # Half the min-max range over rounds, relative to the median.
-    half_range = {key: (s.hi - s.lo) / 2 / s.median
-                  for key, s in gf_spread.items()
-                  if len(res.points[key].gflops) > 1}
+    gf_spread = {key: gflops_spread(p.gflops)
+                 for key, p in res.points.items()}
+    gf = {key: s.mean for key, s in gf_spread.items()}
+    secs = {key: secs_spread(p.secs).mean for key, p in res.points.items()}
+    half_ci = {key: s.half_ci for key, s in gf_spread.items()
+               if len(res.points[key].gflops) > 1}
 
     print(f"preset: {meta.get('preset') or 'custom'}, {meta['rounds']} "
           f"round(s), min_time {meta['min_time']} s")
-    if half_range:
-        print("±: half the min-max range over rounds")
+    g = trim_count(meta["rounds"])
+    print(f"trimmed mean over rounds ({g} lowest and {g} highest dropped) "
+          "of each round's median call time")
+    if half_ci:
+        print("±: half the 95% confidence interval (Yuen)")
     edsl = meta.get("edsl")
     if edsl:
         print(f"edsl: {edsl['branch']}@{edsl['commit']}"
@@ -443,16 +432,16 @@ def report(path: Path) -> None:
     speedup = f"{f'{threads[-1]}T/{threads[0]}T':>9}" if len(threads) > 1 else ""
 
     # Wider GFLOPS cells when there is a spread to show.
-    width = 16 if half_range else 10
+    width = 16 if half_ci else 10
     gf_cols = "".join(f"{f'{t}T':>{width}}" for t in threads)
 
     def gf_cell(key: tuple) -> str:
-        """Median GFLOPS, with its spread over rounds when there is one."""
+        """Mean GFLOPS, with its CI over rounds when there is one."""
         if key not in gf:
             return f"{'-':>{width}}"
-        if key not in half_range:
+        if key not in half_ci:
             return f"{gf[key]:{width}.1f}"
-        return f"{gf[key]:{width - 7}.1f} ±{half_range[key]:5.1%}"
+        return f"{gf[key]:{width - 7}.1f} ±{half_ci[key]:5.1%}"
 
     for op in meta["ops"]:
         for shape in shapes:
@@ -472,26 +461,17 @@ def report(path: Path) -> None:
                     for v in vals))
 
     if {"matmul", "dense"} <= set(meta["ops"]):
-        print("\n=== dense / matmul time (1.00 = epilogue is free) ===")
+        print("\n=== dense / matmul time, paired per round "
+              "(1.00 = epilogue is free) ===")
         print(f"{'shape':16}{'backend':9}{thread_cols}")
         for shape in shapes:
             for b in backends:
                 cells = []
                 for t in threads:
-                    d = secs.get(("dense", shape, b, t))
-                    m = secs.get(("matmul", shape, b, t))
-                    cells.append(f"{d / m:10.2f}" if d and m else f"{'-':>10}")
+                    ratios = epilogue_ratios(res, shape, b, t)
+                    cells.append(f"{ratio_spread(ratios).mean:10.2f}"
+                                 if ratios else f"{'-':>10}")
                 print(f"{'x'.join(map(str, shape)):16}{b:9}" + "".join(cells))
-
-    if BASELINE in backends:
-        print(f"\n=== geometric mean of GFLOPS / {BASELINE} over all ops "
-              "and shapes, paired per round ===")
-        print(f"{'':9}{gf_cols}")
-        for b in backends:
-            cells = [ratio_cell(list(geomean_ratios(res, b, t).values()),
-                                width)
-                     for t in threads]
-            print(f"{b:9}" + "".join(cells))
 
 
 def main() -> int:

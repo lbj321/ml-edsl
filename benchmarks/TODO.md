@@ -75,17 +75,30 @@ variance.
 
 ## Presentation
 
-- [x] **P0** Error bands on line plots come from between-round spread, not
-      within-process p10–p90: min–max of the round medians, labelled in
-      the subtitle. Not a confidence interval. Bar charts show the median
-      only (whiskers looked cluttered).
+- [x] **P0** Error bars come from between-round spread, not within-process
+      p10–p90: each round is its median call time, summarised over rounds
+      by the 20% trimmed mean (10 rounds: 2 lowest and 2 highest dropped)
+      with Yuen's 95% CI; harmonic for GFLOPS, geometric for ratios;
+      labelled in the subtitle. Size and shapes charts are bars with CI
+      whiskers; scaling keeps lines with CI bands. Why trimmed: in the
+      20261123 report 21 of 3100 rounds hit a machine disturbance
+      (0.05–0.7×, e.g. every backend in ml round 7 at 8T), and one moved
+      a plain 10-round mean by up to 47% (MKL 512³ 8T). One point (EDSL
+      dense 64x4096x1024 8T) had two, so a 1-per-side trim left it 6% low.
+      Rejected alternatives: median + order-statistic CI (user wanted a
+      mean), a fixed in-process spread threshold (JAX ≤ 32³ 8T has spread
+      ~7 in every round), and dropping rounds < 0.7× the point's median
+      (worked here, but a threshold chosen after seeing the data). The
+      trimmed mean is within 0.13% of that rule at the typical point.
 - [x] **P1** GFLOP/s vs. size, evenly spaced N slots (log2 for powers of
       two, and keeps 1000/1023/1024 apart), one line per backend, dashed
       peak line; 1T and all-cores versions. No `size` preset: `scaling`
       already covers 256–2048 × 4 backends, `overhead` covers ≤ 128, and
       4096 at 1T alone is ~13 min over 4 backends × 4 rounds.
-- [x] **P2** Speedup vs. MKL, log y-axis, reference line at 1.0
-      (`speedup.png`, per-round paired, drawn with the size plot).
+- [x] **P2** ~~Speedup vs. MKL, log y-axis, reference line at 1.0
+      (`speedup.png`).~~ Removed, along with the report's geomean ratio
+      table: backends are shown side by side in absolute terms, with no
+      single library as the reference.
 - [ ] **P3** Small-size latency (µs/call, log-log) with an empty-call
       overhead floor.
 - [x] **P4** Thread scaling at one or two large sizes, with ideal-scaling
