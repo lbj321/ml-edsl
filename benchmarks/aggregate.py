@@ -5,8 +5,8 @@ its call times, which drops rare stalls (scheduler, interrupts) that a
 process mean would turn into a random bias. Rounds are the independent
 unit, each weighted equally whatever its sample count, and are summarised
 by their TRIM trimmed mean (10 rounds: the 2 lowest and 2 highest dropped,
-the middle 6 averaged) with Yuen's 95% confidence interval, built from the
-winsorized variance. The mean is taken where the quantity adds up: seconds
+the middle 6 averaged) with its 95% confidence interval by Tukey and
+McLaughlin, built from the winsorized variance. The mean is taken where the quantity adds up: seconds
 directly, GFLOPS through their reciprocal (flops / mean time) and ratios
 in log space (geometric).
 
@@ -102,9 +102,11 @@ def trim_count(n: int) -> int:
 
 
 def _trimmed_mean_ci(xs: list) -> tuple:
-    """(trimmed mean, CI half-width) of xs by Yuen's method: the standard
-    error comes from the winsorized sample (each trimmed value replaced by
-    the nearest kept one) over the h kept values, with h - 1 df."""
+    """(trimmed mean, CI half-width) of xs by Tukey and McLaughlin (1963),
+    as in Wilcox, Introduction to Robust Estimation and Hypothesis Testing,
+    ch. 4 (R: trimci): standard error s_w / ((1 - 2 TRIM) sqrt(n)), s_w the
+    standard deviation of the winsorized sample (each trimmed value
+    replaced by the nearest kept one), with h - 1 df for h kept values."""
     xs = sorted(xs)
     n, g = len(xs), trim_count(len(xs))
     h = n - 2 * g
@@ -114,14 +116,13 @@ def _trimmed_mean_ci(xs: list) -> tuple:
     if h - 1 not in T95:
         raise ValueError(f"no t value for {h} kept rounds")
     wins = [xs[g]] * g + xs[g:n - g] + [xs[n - g - 1]] * g
-    w_mean = statistics.fmean(wins)
-    ssd = sum((w - w_mean) ** 2 for w in wins)
-    return mean, T95[h - 1] * math.sqrt(ssd / (h * (h - 1)))
+    se = statistics.stdev(wins) / ((1 - 2 * TRIM) * math.sqrt(n))
+    return mean, T95[h - 1] * se
 
 
 def _spread(per_round: dict, to_linear: Callable, from_linear: Callable,
             positive: bool) -> Spread:
-    """Trimmed mean and Yuen interval of to_linear(values), mapped back by
+    """Trimmed mean and its interval of to_linear(values), mapped back by
     from_linear, a monotonic inverse; min and max stay in value units.
     `positive` clamps the interval at 0 in linear space, which a wide
     interval over few rounds can otherwise cross."""

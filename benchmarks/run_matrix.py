@@ -415,7 +415,7 @@ def report(path: Path) -> None:
     print(f"trimmed mean over rounds ({g} lowest and {g} highest dropped) "
           "of each round's median call time")
     if half_ci:
-        print("±: half the 95% confidence interval (Yuen)")
+        print("±: half the 95% confidence interval of the trimmed mean")
     edsl = meta.get("edsl")
     if edsl:
         print(f"edsl: {edsl['branch']}@{edsl['commit']}"

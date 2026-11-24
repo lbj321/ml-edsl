@@ -78,7 +78,10 @@ variance.
 - [x] **P0** Error bars come from between-round spread, not within-process
       p10–p90: each round is its median call time, summarised over rounds
       by the 20% trimmed mean (10 rounds: 2 lowest and 2 highest dropped)
-      with Yuen's 95% CI; harmonic for GFLOPS, geometric for ratios;
+      with its 95% CI (Tukey-McLaughlin, Wilcox's trimci; was Yuen's
+      two-sample standard error, ~4% wider at 10 rounds, switched so the
+      formula matches one textbook source); harmonic for GFLOPS,
+      geometric for ratios;
       labelled in the subtitle. Size and shapes charts are bars with CI
       whiskers; scaling keeps lines with CI bands. Why trimmed: in the
       20261123 report 21 of 3100 rounds hit a machine disturbance

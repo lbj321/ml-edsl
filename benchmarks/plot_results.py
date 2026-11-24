@@ -21,7 +21,7 @@ Backends are shown side by side, each in absolute terms, not as ratios to
 one of them. size and shapes draw grouped bars; scaling keeps lines,
 since its slope against the peak curve is the point. Each round counts as
 the median of its call times. Bars and lines show the 20% trimmed mean
-over rounds, whiskers and bands its 95% CI (Yuen); see aggregate.py.
+over rounds, whiskers and bands its 95% CI; see aggregate.py.
 """
 
 import argparse
@@ -167,16 +167,11 @@ def bar_panel(ax: plt.Axes, groups: list, series: dict) -> None:
 MARKS = {"bars": ("bars", "whiskers"), "lines": ("lines", "bands")}
 
 
-def figure(panels: int, title: str, meta: dict, kind: str) -> tuple:
-    """A row-wrapped grid of panels with the run described under the title,
-    including what the `kind` of chart ('bars' or 'lines') draws."""
+def run_description(meta: dict, kind: str) -> list:
+    """The run and what the `kind` of chart ('bars' or 'lines') draws, as
+    subtitle parts."""
     if kind not in MARKS:
         raise ValueError(f"unknown chart kind {kind!r}")
-    # Two columns keep panels legible when the PNG is scaled to page width.
-    cols = min(panels, 2)
-    rows = (panels + cols - 1) // cols
-    fig, axes = plt.subplots(rows, cols, figsize=(4.4 * cols, 3.2 * rows + 0.7),
-                             squeeze=False, facecolor=SURFACE)
     parts = [f"preset {meta.get('preset') or 'custom'}",
              f"{meta['rounds']} round(s)"]
     if meta["rounds"] > 1:
@@ -184,11 +179,27 @@ def figure(panels: int, title: str, meta: dict, kind: str) -> tuple:
         g = trim_count(meta["rounds"])
         parts.append(f"{mark}: mean over rounds of each round's median "
                      f"call time, {g} lowest and {g} highest rounds trimmed")
-        parts.append(f"{interval}: 95% CI (Yuen)")
-    fig.suptitle(title, color=INK, fontsize=12, x=0.01, ha="left",
-                 y=1 - 0.1 / fig.get_figheight(), va="top")
-    wrapped_text(fig, 0.01, 1 - 0.3 / fig.get_figheight(), parts,
-                 color=INK_MUTED, fontsize=8, va="top")
+        parts.append(f"{interval}: 95% CI of the trimmed mean")
+    return parts
+
+
+def figure(panels: int, title: str, meta: dict, kind: str,
+           header: bool = True) -> tuple:
+    """A row-wrapped grid of panels with the run described under the title;
+    header=False leaves both out, for a document that captions the figure
+    itself."""
+    parts = run_description(meta, kind)
+    # Two columns keep panels legible when the PNG is scaled to page width.
+    cols = min(panels, 2)
+    rows = (panels + cols - 1) // cols
+    top = 0.7 if header else 0.3
+    fig, axes = plt.subplots(rows, cols, figsize=(4.4 * cols, 3.2 * rows + top),
+                             squeeze=False, facecolor=SURFACE)
+    if header:
+        fig.suptitle(title, color=INK, fontsize=12, x=0.01, ha="left",
+                     y=1 - 0.1 / fig.get_figheight(), va="top")
+        wrapped_text(fig, 0.01, 1 - 0.3 / fig.get_figheight(), parts,
+                     color=INK_MUTED, fontsize=8, va="top")
     flat = [ax for row in axes for ax in row]
     for ax in flat[panels:]:
         ax.set_visible(False)
@@ -225,8 +236,9 @@ def wrapped_text(fig: plt.Figure, x: float, y: float, parts: list,
 
 
 def finish(fig: plt.Figure, axes: list, path: Path) -> None:
-    """Shared legend in one row, top right beside the title, or under the
-    header where the title leaves no room; then save."""
+    """Shared legend in one row, top right beside the title, under the
+    header where the title leaves no room, or top centre without a header;
+    then save in the format of `path`'s suffix."""
     handles, labels = [], []
     for ax in axes:
         for h, l in zip(*ax.get_legend_handles_labels()):
@@ -242,12 +254,16 @@ def finish(fig: plt.Figure, axes: list, path: Path) -> None:
     renderer = fig.canvas.get_renderer()
     height = fig.bbox.height
     texts = [t.get_window_extent(renderer) for t in fig.texts]
-    header_bottom = min(t.y0 for t in texts)
-    leg = legend("upper right", (1, 1 - 0.05 / fig.get_figheight()))
-    if any(leg.get_window_extent(renderer).overlaps(t) for t in texts):
-        leg.remove()
-        leg = legend("upper left", (0, header_bottom / height))
+    if not texts:
+        leg = legend("upper center", (0.5, 1))
         header_bottom = leg.get_window_extent(renderer).y0
+    else:
+        header_bottom = min(t.y0 for t in texts)
+        leg = legend("upper right", (1, 1 - 0.05 / fig.get_figheight()))
+        if any(leg.get_window_extent(renderer).overlaps(t) for t in texts):
+            leg.remove()
+            leg = legend("upper left", (0, header_bottom / height))
+            header_bottom = leg.get_window_extent(renderer).y0
     # Panels start below the header, however many rows it took.
     fig.tight_layout(rect=(0, 0, 1, (header_bottom - 0.04 * fig.dpi)
                            / height))
